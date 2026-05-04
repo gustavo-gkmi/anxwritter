@@ -1,0 +1,108 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "anxwritter"
+version = "1.0.0"
+description = "Write i2 Analyst's Notebook Exchange (.anx) files from Python, JSON, or YAML"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "gustavo-gkmi" },
+]
+keywords = [
+    "i2",
+    "analyst-notebook",
+    "anx",
+    "anb",
+    "link-analysis",
+    "intelligence",
+    "law-enforcement",
+    "chart",
+    "xml",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Other Audience",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = [
+    "loguru>=0.7",
+]
+
+[project.optional-dependencies]
+yaml = ["pyyaml>=6.0"]
+dev = [
+    "pytest>=8.0",
+    "pyyaml>=6.0",
+    "hypothesis>=6.0",
+]
+
+[project.scripts]
+anxwritter = "anxwritter.cli:main"
+
+[project.urls]
+Repository = "https://github.com/gustavo-gkmi/anxwritter"
+Issues = "https://github.com/gustavo-gkmi/anxwritter/issues"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "anxwritter/**",
+    "tests/**",
+    "docs/**",
+    "examples/**",
+    "LICENSE",
+    "NOTICE.md",
+    "README.md",
+    "pyproject.toml",
+    "uv.lock",
+    ".gitignore",
+]
+exclude = [
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/*.pyo",
+    "**/*.egg-info",
+    ".hypothesis/**",
+    ".pytest_cache/**",
+    ".ruff_cache/**",
+    ".mypy_cache/**",
+    ".coverage",
+    "htmlcov/**",
+    ".github/**",
+    ".claude/**",
+    ".sbx/**",
+    ".venv/**",
+    ".venv-*/**",
+    "output/**",
+    "*.log",
+    "*.orig",
+    "*.rej",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["anxwritter"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "perf: performance / scale tests - excluded from default runs; run with `pytest -m perf`",
+]
+# Note: tests/test_cli.py runs the CLI via subprocess.run, so coverage of
+# anxwritter/cli.py reports as 0% under the default `pytest --cov`. The CLI
+# is exercised by ~30 tests in test_cli.py — see tests_audit.md §1 for the
+# full picture and how to enable subprocess coverage tracking if needed.
+addopts = "-m 'not perf'"

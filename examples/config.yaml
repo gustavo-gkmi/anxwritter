@@ -1,0 +1,296 @@
+# config.yaml — Org-level investigation config.
+#
+# Defines entity types, link types, attribute classes, strengths, grades,
+# datetime formats, palettes, legend items, and chart-wide settings.
+# Pair with data.yaml (or data.json):
+#
+#   anxwritter --config config.yaml data.yaml -o investigation.anx
+#
+# Sections marked "(advanced)" are commented out — uncomment only if you
+# need to override ANB's defaults. All names and values are fictional.
+# US phone numbers use the (555) 0100–0199 range, which the NANP reserves
+# for fiction.
+
+settings:
+  chart:
+    bg_color: 16777215           # white
+    rigorous: true
+    # bg_filled: true              # whether the chart background is filled
+    # label_merge_rule: merge      # merge | append | discard
+    # icon_quality: HighQuality    # icon rendering quality
+    # id_reference_linking: true   # IdReferenceLinking flag
+
+  # Chart-level default font (applies to all items unless overridden). (advanced)
+  # font:
+  #   name: Segoe UI
+  #   size: 10
+  #   color: 0
+  #   bg_color: 16777215
+  #   bold: false
+  #   italic: false
+
+  view:
+    time_bar: true               # show timeline bar at the bottom
+    # show_all: false
+    # show_pages_boundaries: false
+    # hidden_items: hidden       # hidden | normal | grayed
+    # cover_sheet_on_open: false
+
+  grid:
+    snap: true
+    visible: false
+    # width: 0.3
+    # height: 0.3
+
+  # Theme/event wiring rendering. (advanced)
+  # wiring:
+  #   distance_far: 0.4
+  #   distance_near: 0.08
+  #   height: 0.12
+  #   spacing: 0.2
+  #   use_height_for_theme_icon: true
+
+  # Chart-level link defaults. (advanced)
+  # links_cfg:
+  #   spacing: 0.3
+  #   use_default_spacing_when_dragging: true
+  #   blank_labels: false
+  #   sum_numeric_labels: false
+
+  # Default date/time and timezone behaviour. (advanced)
+  # time:
+  #   default_date: '2026-01-01T00:00:00.000'
+  #   default_datetime: '2026-01-01T00:00:00.000'
+  #   tick_rate: 0.005
+  #   local_tz: false
+  #   hide_matching_tz_format: true
+
+  summary:
+    title: 'Operation Northstar — Network Analysis'
+    subject: 'Fictional fraud investigation example'
+    author: 'anxwritter examples'
+    keywords: 'example, fraud, link analysis'
+    category: 'Sample'
+    comments: 'Example chart for documentation purposes.'
+    # template: 'standard'
+    # created: '2026-01-15T10:30:00'
+    # revision: 1
+    # edit_time: 0
+    # last_print: '2026-01-14T09:00:00'
+    # last_save: '2026-01-15T11:00:00'
+    custom_properties:
+      - name: Case
+        value: 'EX-2026-001'
+      - name: Classification
+        value: 'PUBLIC SAMPLE'
+
+  legend_cfg:
+    show: true
+    x: 50
+    y: 50
+    arrange: wide                # wide | tall | square
+    # valign: free               # free | top | bottom
+    # halign: free               # free | left | right
+    font:
+      name: Segoe UI
+      size: 10
+      bold: true
+
+  extra_cfg:
+    entity_auto_color: true       # distribute HSV hues across entities
+    link_match_entity_color: true # link line colour follows target entity
+    arrange: grid                 # auto-layout: grid | circle | random
+    link_arc_offset: 25           # spacing between parallel links
+
+# ── Entity types ─────────────────────────────────────────────────────
+entity_types:
+  - name: Person
+    icon_file: adult
+    representation: Icon
+  - name: Company
+    icon_file: building
+    representation: Icon
+    # color: 8421504               # explicit line colour (COLORREF int or name)
+    # shade_color: Blue            # explicit icon shading colour
+  - name: Vehicle
+    icon_file: car
+    representation: Icon
+  - name: Phone
+    icon_file: phone
+    representation: Icon
+  - name: Bank Account
+    icon_file: cash
+    representation: Icon
+
+# ── Link types ───────────────────────────────────────────────────────
+link_types:
+  - name: Calls
+    color: 16711680     # blue
+  - name: Transfers Money
+    color: 32768        # green
+  - name: Owns
+    color: 128          # dark red
+  - name: Employs
+    color: 8388736      # purple
+  - name: Associated With
+    color: 8421504      # grey
+
+# ── Attribute classes ────────────────────────────────────────────────
+attribute_classes:
+  - name: Phone Number
+    type: text
+    prefix: 'Tel: '
+    # suffix: ' (mobile)'
+    icon_file: phone
+    show_value: true
+    show_symbol: true
+    # show_class_name: false
+    # visible: true
+    # is_user: true
+    # user_can_add: true
+    # user_can_remove: true
+    # merge_behaviour: add_space   # text: add | add_space | add_line_break
+    # paste_behaviour: assign      # any: assign | noop (+ type-specific)
+    # font:
+    #   name: Arial
+    #   size: 10
+    #   color: 0
+
+  - name: Balance
+    type: number
+    prefix: '$'
+    decimal_places: 2
+    icon_file: cash
+    show_value: true
+    # merge_behaviour: add         # number: add | max | min
+    # paste_behaviour: max
+
+  - name: Address
+    type: text
+    icon_file: house
+    show_value: true
+
+  - name: License Plate
+    type: text
+    prefix: 'Plate: '
+    icon_file: car
+    show_value: true
+
+  - name: Account ID
+    type: text
+    prefix: 'Acct: '
+    show_value: true
+
+  - name: Active
+    type: flag
+    show_if_set: true
+    show_class_name: true
+    # merge_behaviour: or          # flag: or | and | xor
+
+  # DateTime attribute example. (uncomment if your data has datetime values)
+  # - name: Event Time
+  #   type: datetime
+  #   show_date: true
+  #   show_time: true
+  #   show_seconds: false
+  #   show_class_name: true
+
+# ── DateTime formats ─────────────────────────────────────────────────
+# Named formats referenced from entities/links via the `datetime_format` field.
+datetime_formats:
+  - name: ISO
+    format: yyyy-MM-dd
+  - name: US
+    format: MM/dd/yyyy HH:mm
+  # - name: Time-Only
+  #   format: HH:mm:ss
+
+# ── Strengths (confidence levels for links and entities) ─────────────
+strengths:
+  default: Confirmed
+  items:
+    - name: Confirmed
+      dot_style: solid
+    - name: Probable
+      dot_style: dashed
+    - name: Possible
+      dot_style: dotted
+    # - name: Tentative
+    #   dot_style: dash_dot
+    # - name: Speculation
+    #   dot_style: dash_dot_dot
+
+# ── Grade collections (source / information reliability) ────────────
+grades_one:
+  default: Usually reliable
+  items:
+    - Always reliable
+    - Usually reliable
+    - Fairly reliable
+    - Not usually reliable
+    - Unreliable
+
+grades_two:
+  default: Probably true
+  items:
+    - Confirmed
+    - Probably true
+    - Possibly true
+    - Doubtful
+
+# Optional third grading dimension.
+# grades_three:
+#   items:
+#     - High
+#     - Medium
+#     - Low
+
+# ── Source types (free-text labels for SourceType field) ────────────
+source_types:
+  - Witness
+  - Informant
+  - Officer
+  - Intelligence
+  - Discovery
+
+# ── Palettes ─────────────────────────────────────────────────────────
+# Optional. When omitted, anxwritter auto-generates a single "anxwritter"
+# palette containing all entity types, link types, and attribute classes.
+# palettes:
+#   - name: Investigation
+#     locked: false
+#     entity_types: [Person, Company, Phone]
+#     link_types: [Calls, Transfers Money]
+#     attribute_classes: [Phone Number, Balance]
+#     attribute_entries:
+#       - name: Phone Number
+#         value: '(555) 0100-0000'
+
+# ── Legend items ─────────────────────────────────────────────────────
+# Custom rows shown in the legend panel (requires legend_cfg.show=true).
+legend_items:
+  - label: Person
+    item_type: Icon
+    image_name: adult
+  - label: Calls
+    item_type: Link
+    color: 16711680
+    line_width: 1
+    arrows: '->'
+  - label: Confirmed
+    item_type: Line
+    color: 0
+    line_width: 2
+    dash_style: solid
+  # - label: Section Header
+  #   item_type: Font
+  #   font:
+  #     bold: true
+  #     size: 11
+  # - label: Plain Text
+  #   item_type: Text
+  #   font:
+  #     size: 10
+  # - label: Red Frame
+  #   item_type: IconFrame
+  #   color: 255

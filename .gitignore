@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.hypothesis/
+
+# Build artifacts
+/dist/
+/build/
+/.build/
+
+# Environments
+.venv/
+.venv-*/
+
+# IDE / editor
+.idea/
+.vscode/
+.claude/
+.run/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sandbox
+.sbx/
+
+# Scratch / output
+/output/
+*.log
+*.orig
+*.rej

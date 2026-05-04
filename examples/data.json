@@ -1,0 +1,144 @@
+{
+  "entities": {
+    "icons": [
+      {
+        "id": "alex_carter",
+        "type": "Person",
+        "label": "Alex Carter",
+        "attributes": {
+          "Phone Number": "(555) 010-0123",
+          "Address": "142 Maple Ave, Springfield",
+          "Active": true
+        }
+      },
+      {
+        "id": "jamie_rivera",
+        "type": "Person",
+        "label": "Jamie Rivera",
+        "attributes": {
+          "Phone Number": "(555) 010-0145",
+          "Address": "88 Oak St, Springfield",
+          "Active": true
+        }
+      },
+      {
+        "id": "morgan_bennett",
+        "type": "Person",
+        "label": "Morgan Bennett",
+        "attributes": {
+          "Phone Number": "(555) 010-0167",
+          "Active": false
+        }
+      },
+      {
+        "id": "acme_holdings",
+        "type": "Company",
+        "label": "Acme Holdings LLC",
+        "attributes": {
+          "Address": "500 Industrial Blvd, Springfield"
+        }
+      },
+      {
+        "id": "pinecrest_logistics",
+        "type": "Company",
+        "label": "Pinecrest Logistics Inc"
+      },
+      {
+        "id": "vehicle_suv",
+        "type": "Vehicle",
+        "label": "Black SUV",
+        "attributes": {
+          "License Plate": "ABC-1234"
+        }
+      },
+      {
+        "id": "account_carter",
+        "type": "Bank Account",
+        "label": "Carter Personal",
+        "attributes": {
+          "Account ID": "XXXX-XXXX-1234",
+          "Balance": 12500.50
+        }
+      },
+      {
+        "id": "account_acme",
+        "type": "Bank Account",
+        "label": "Acme Operating",
+        "attributes": {
+          "Account ID": "XXXX-XXXX-5678",
+          "Balance": 350000.00
+        }
+      }
+    ]
+  },
+
+  "links": [
+    {
+      "from_id": "alex_carter",
+      "to_id": "jamie_rivera",
+      "type": "Calls",
+      "label": "4 calls",
+      "date": "2026-02-14",
+      "time": "09:30:00",
+      "strength": "Confirmed"
+    },
+    {
+      "from_id": "alex_carter",
+      "to_id": "morgan_bennett",
+      "type": "Calls",
+      "label": "1 call",
+      "date": "2026-02-15",
+      "strength": "Possible"
+    },
+    {
+      "from_id": "account_carter",
+      "to_id": "account_acme",
+      "type": "Transfers Money",
+      "label": "$50,000",
+      "arrow": "->",
+      "date": "2026-02-20",
+      "time": "14:00:00",
+      "strength": "Confirmed",
+      "grade_one": 0,
+      "grade_two": 0,
+      "source_ref": "BANK-001",
+      "source_type": "Discovery"
+    },
+    {
+      "from_id": "alex_carter",
+      "to_id": "vehicle_suv",
+      "type": "Owns",
+      "arrow": "->",
+      "strength": "Confirmed"
+    },
+    {
+      "from_id": "alex_carter",
+      "to_id": "account_carter",
+      "type": "Owns",
+      "arrow": "->",
+      "strength": "Confirmed"
+    },
+    {
+      "from_id": "acme_holdings",
+      "to_id": "account_acme",
+      "type": "Owns",
+      "arrow": "->",
+      "strength": "Confirmed"
+    },
+    {
+      "from_id": "pinecrest_logistics",
+      "to_id": "jamie_rivera",
+      "type": "Employs",
+      "arrow": "->",
+      "label": "since 2024",
+      "strength": "Confirmed"
+    },
+    {
+      "from_id": "acme_holdings",
+      "to_id": "pinecrest_logistics",
+      "type": "Associated With",
+      "label": "shared director",
+      "strength": "Probable"
+    }
+  ]
+}

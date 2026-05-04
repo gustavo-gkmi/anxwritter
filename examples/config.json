@@ -1,0 +1,149 @@
+{
+  "settings": {
+    "chart": {
+      "bg_color": 16777215,
+      "rigorous": true
+    },
+    "view": {
+      "time_bar": true
+    },
+    "grid": {
+      "snap": true,
+      "visible": false
+    },
+    "summary": {
+      "title": "Operation Northstar — Network Analysis",
+      "subject": "Fictional fraud investigation example",
+      "author": "anxwritter examples",
+      "keywords": "example, fraud, link analysis",
+      "category": "Sample",
+      "comments": "Example chart for documentation purposes.",
+      "custom_properties": [
+        { "name": "Case", "value": "EX-2026-001" },
+        { "name": "Classification", "value": "PUBLIC SAMPLE" }
+      ]
+    },
+    "legend_cfg": {
+      "show": true,
+      "x": 50,
+      "y": 50,
+      "arrange": "wide",
+      "font": { "name": "Segoe UI", "size": 10, "bold": true }
+    },
+    "extra_cfg": {
+      "entity_auto_color": true,
+      "link_match_entity_color": true,
+      "arrange": "grid",
+      "link_arc_offset": 25
+    }
+  },
+
+  "entity_types": [
+    { "name": "Person",       "icon_file": "adult",    "representation": "Icon" },
+    { "name": "Company",      "icon_file": "building", "representation": "Icon" },
+    { "name": "Vehicle",      "icon_file": "car",      "representation": "Icon" },
+    { "name": "Phone",        "icon_file": "phone",    "representation": "Icon" },
+    { "name": "Bank Account", "icon_file": "cash",     "representation": "Icon" }
+  ],
+
+  "link_types": [
+    { "name": "Calls",            "color": 16711680 },
+    { "name": "Transfers Money",  "color": 32768 },
+    { "name": "Owns",             "color": 128 },
+    { "name": "Employs",          "color": 8388736 },
+    { "name": "Associated With",  "color": 8421504 }
+  ],
+
+  "attribute_classes": [
+    {
+      "name": "Phone Number",
+      "type": "text",
+      "prefix": "Tel: ",
+      "icon_file": "phone",
+      "show_value": true,
+      "show_symbol": true
+    },
+    {
+      "name": "Balance",
+      "type": "number",
+      "prefix": "$",
+      "decimal_places": 2,
+      "icon_file": "cash",
+      "show_value": true
+    },
+    {
+      "name": "Address",
+      "type": "text",
+      "icon_file": "house",
+      "show_value": true
+    },
+    {
+      "name": "License Plate",
+      "type": "text",
+      "prefix": "Plate: ",
+      "icon_file": "car",
+      "show_value": true
+    },
+    {
+      "name": "Account ID",
+      "type": "text",
+      "prefix": "Acct: ",
+      "show_value": true
+    },
+    {
+      "name": "Active",
+      "type": "flag",
+      "show_if_set": true,
+      "show_class_name": true
+    }
+  ],
+
+  "datetime_formats": [
+    { "name": "ISO", "format": "yyyy-MM-dd" },
+    { "name": "US",  "format": "MM/dd/yyyy HH:mm" }
+  ],
+
+  "strengths": {
+    "default": "Confirmed",
+    "items": [
+      { "name": "Confirmed", "dot_style": "solid" },
+      { "name": "Probable",  "dot_style": "dashed" },
+      { "name": "Possible",  "dot_style": "dotted" }
+    ]
+  },
+
+  "grades_one": {
+    "default": "Usually reliable",
+    "items": [
+      "Always reliable",
+      "Usually reliable",
+      "Fairly reliable",
+      "Not usually reliable",
+      "Unreliable"
+    ]
+  },
+
+  "grades_two": {
+    "default": "Probably true",
+    "items": [
+      "Confirmed",
+      "Probably true",
+      "Possibly true",
+      "Doubtful"
+    ]
+  },
+
+  "source_types": [
+    "Witness",
+    "Informant",
+    "Officer",
+    "Intelligence",
+    "Discovery"
+  ],
+
+  "legend_items": [
+    { "label": "Person",    "item_type": "Icon", "image_name": "adult" },
+    { "label": "Calls",     "item_type": "Link", "color": 16711680, "line_width": 1, "arrows": "->" },
+    { "label": "Confirmed", "item_type": "Line", "color": 0, "line_width": 2, "dash_style": "solid" }
+  ]
+}
