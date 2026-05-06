@@ -251,6 +251,53 @@ def apply_grade_defaults(
                     setattr(card, attr, default_idx)
 
 
+def resolve_grade_names(
+    items: List[Any],
+    grade_specs: List[Tuple[str, List[str]]],
+) -> None:
+    """Resolve string grade names on resolved items (and their cards) to int indices.
+
+    Grade fields on entities/links/cards may be either:
+    - ``None`` — left alone
+    - an ``int`` (or digit-string) — coerced to ``int``
+    - a string name — looked up in the corresponding grade items list
+
+    Validation has already run, so any unknown name encountered here means the
+    chart was built without calling ``validate()``; we silently fall back to
+    ``None`` so the build still produces XML and downstream defaults can apply.
+
+    Modifies items in place.
+
+    Args:
+        items: List of ``ResolvedEntity`` or ``ResolvedLink``.
+        grade_specs: List of ``(attr_name, items_list)`` tuples — e.g.
+            ``[('grade_one', ['Reliable', 'Unreliable']), ...]``.
+    """
+    def _resolve_one(val: Any, names: List[str]) -> Optional[int]:
+        if val is None:
+            return None
+        if isinstance(val, bool):
+            return None
+        if isinstance(val, int):
+            return val
+        try:
+            return int(val)  # digit string
+        except (TypeError, ValueError):
+            pass
+        s = str(val).strip()
+        if not s:
+            return None
+        if names and s in names:
+            return names.index(s)
+        return None
+
+    for item in items:
+        for attr, names in grade_specs:
+            setattr(item, attr, _resolve_one(getattr(item, attr), names))
+            for card in (item.cards or []):
+                setattr(card, attr, _resolve_one(getattr(card, attr), names))
+
+
 # ── Geo-map transforms ──────────────────────────────────────────────────────
 
 

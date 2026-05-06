@@ -462,9 +462,9 @@ class Card:
     description: Optional[str] = None
     source_ref: Optional[str] = None
     source_type: Optional[str] = None
-    grade_one: Optional[int] = None
-    grade_two: Optional[int] = None
-    grade_three: Optional[int] = None
+    grade_one: Optional[Union[int, str]] = None  # 0-based index OR grade name string (resolved at build time)
+    grade_two: Optional[Union[int, str]] = None
+    grade_three: Optional[Union[int, str]] = None
     datetime_description: Optional[str] = None  # Free-text date/time description (e.g. 'About 3pm')
     timezone: Optional[TimeZone] = None     # ANB timezone (id + name)
     entity_id: Optional[str] = None         # INTERNAL ONLY — routes card to entity at build time. NOT written to XML.
@@ -515,9 +515,9 @@ class Link:
     line_width: Optional[int] = None
     offset: Optional[int] = None
     ordered: Optional[bool] = None
-    grade_one: Optional[int] = None
-    grade_two: Optional[int] = None
-    grade_three: Optional[int] = None
+    grade_one: Optional[Union[int, str]] = None  # 0-based index OR grade name string (resolved at build time)
+    grade_two: Optional[Union[int, str]] = None
+    grade_three: Optional[Union[int, str]] = None
     attributes: dict = field(default_factory=dict)
     cards: List[Card] = field(default_factory=list)
     label_font: Font = field(default_factory=Font)

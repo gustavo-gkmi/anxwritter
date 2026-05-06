@@ -62,6 +62,7 @@ from .transforms import (
     apply_link_auto_offsets,
     compute_theme_line_y_offsets,
     apply_grade_defaults,
+    resolve_grade_names,
     resolve_geo_data,
     match_geo_entities,
     compute_geo_positions,
@@ -1195,22 +1196,22 @@ class ANXChart:
 
         # Shared state for cross-validation
         strength_names = {st.name for st in self.strengths.items if st.name}
-        gc1_len = len(self.grades_one)
-        gc2_len = len(self.grades_two)
-        gc3_len = len(self.grades_three)
+        gc1_items = list(self.grades_one.items)
+        gc2_items = list(self.grades_two.items)
+        gc3_items = list(self.grades_three.items)
         attr_types: Dict[str, str] = {}
 
         # Validate entities (returns entity_ids and entity_classes for cross-refs)
         entity_errors, all_entity_ids, entity_classes = validate_entities(
             self._entities, strength_names, dtf_names,
-            gc1_len, gc2_len, gc3_len, attr_types
+            gc1_items, gc2_items, gc3_items, attr_types
         )
         errors.extend(entity_errors)
 
         # Validate links
         errors.extend(validate_links(
             self._links, all_entity_ids, entity_classes, strength_names, dtf_names,
-            gc1_len, gc2_len, gc3_len, attr_types
+            gc1_items, gc2_items, gc3_items, attr_types
         ))
 
         # Validate connection style conflicts
@@ -1520,6 +1521,11 @@ class ANXChart:
                 ('grade_two', _gc2_default_idx),
                 ('grade_three', _gc3_default_idx),
             ]
+            _grade_resolve_specs = [
+                ('grade_one', gc1_config),
+                ('grade_two', gc2_config),
+                ('grade_three', gc3_config),
+            ]
 
             # ── Strength fallback resolution ────────────────────────────
             _user_defined_strengths = any(
@@ -1626,6 +1632,7 @@ class ANXChart:
 
         # ── Apply grade defaults to resolved entities ──────────────────
         with timer.phase("Grade defaults (entities)"):
+            resolve_grade_names(resolved_entities, _grade_resolve_specs)
             apply_grade_defaults(resolved_entities, _grade_params)
 
         # ── Inject Latitude/Longitude attributes (geo_map latlon/both) ──
@@ -1685,6 +1692,7 @@ class ANXChart:
 
         # ── Apply grade defaults to resolved links ─────────────────────
         with timer.phase("Grade defaults (links)"):
+            resolve_grade_names(resolved_links, _grade_resolve_specs)
             apply_grade_defaults(resolved_links, _grade_params)
 
         # ── Store resolved links for lazy emit in build() ───────────────

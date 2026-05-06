@@ -1,6 +1,9 @@
 """Tests for Chart → XML structure via xpath assertions."""
 
 import xml.etree.ElementTree as ET
+
+import pytest
+
 from anxwritter import (
     ANXChart, Card, DotStyle, AttributeClass, AttributeType, Strength, LegendItem,
     Icon, Link, ThemeLine, EventFrame, TimeZone,
@@ -490,6 +493,50 @@ class TestGradesInXML:
         assert entries == ['Reliable', 'Unreliable']  # no sentinel
         ci = root.find('.//ChartItem')
         assert ci.get('GradeOneIndex') == '1'
+
+    def test_grade_name_on_entity(self):
+        """grade_one accepts a name string and resolves to its index."""
+        c = ANXChart()
+        c.grades_one = GradeCollection(items=['Reliable', 'Unreliable'])
+        c.add_icon(id='A', type='T', grade_one='Unreliable')
+        root = _parse_xml(c)
+        ci = root.find('.//ChartItem')
+        assert ci.get('GradeOneIndex') == '1'
+
+    def test_grade_name_on_link(self):
+        """grade_one on a link accepts a name string."""
+        c = ANXChart()
+        c.grades_one = GradeCollection(items=['Reliable', 'Unreliable'])
+        c.add_icon(id='A', type='T')
+        c.add_icon(id='B', type='T')
+        c.add_link(from_id='A', to_id='B', type='Call', grade_one='Reliable')
+        root = _parse_xml(c)
+        for ci in root.findall('.//ChartItem'):
+            if ci.find('Link') is not None:
+                assert ci.get('GradeOneIndex') == '0'
+                break
+
+    def test_grade_name_on_card(self):
+        """grade_one on an inline Card accepts a name string."""
+        c = ANXChart()
+        c.grades_one = GradeCollection(items=['Reliable', 'Unreliable'])
+        c.add_icon(id='A', type='T',
+                   cards=[Card(summary='s', grade_one='Unreliable')])
+        root = _parse_xml(c)
+        card = root.find('.//Card')
+        assert card is not None
+        assert card.get('GradeOneIndex') == '1'
+
+    def test_unknown_grade_name_raises(self):
+        """A grade name that's not in the collection is a validation error."""
+        from anxwritter.errors import ANXValidationError, ErrorType
+        c = ANXChart()
+        c.grades_one = GradeCollection(items=['Reliable', 'Unreliable'])
+        c.add_icon(id='A', type='T', grade_one='Bogus')
+        with pytest.raises(ANXValidationError) as exc_info:
+            c.to_xml()
+        assert any(e['type'] == ErrorType.UNKNOWN_GRADE.value
+                   for e in exc_info.value.errors)
 
     def test_explicit_grade_preserved(self):
         """Explicit grade index is not overwritten by default."""
