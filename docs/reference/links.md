@@ -32,9 +32,9 @@ All fields except `from_id` and `to_id` are optional.
 | `offset` | `Optional[int]` | no | `None` | Pixel offset for parallel link arc separation. Explicit value always wins over auto-spacing from `extra_cfg.link_arc_offset`. Omit to use the auto-computed value. |
 | `line_color` | `Optional[Union[int, str, Color]]` | no | `None` | Line color. Accepts the `Color` enum, named color (case-insensitive), `#RRGGBB`, or COLORREF integer. Default `0` (black). Overrides `extra_cfg.link_match_entity_color` when explicitly set. |
 | `line_width` | `Optional[int]` | no | `None` | Line thickness in pixels (integer). Default `1`. Only emitted when not `1`. |
-| `grade_one` | `Optional[int]` | no | `None` | Source reliability grade index (0-based into `chart.grades_one`). When `None`, `GradeOneIndex` is not emitted. |
-| `grade_two` | `Optional[int]` | no | `None` | Information reliability grade index (0-based into `chart.grades_two`). |
-| `grade_three` | `Optional[int]` | no | `None` | Third grading dimension index (0-based into `chart.grades_three`). |
+| `grade_one` | `Optional[Union[int, str]]` | no | `None` | Source reliability grade. Accepts a 0-based index into `chart.grades_one` or the grade name string (e.g. `'Reliable'`); the name is resolved at validate/build time. Unknown names raise `unknown_grade`. When `None`, `GradeOneIndex` is not emitted. |
+| `grade_two` | `Optional[Union[int, str]]` | no | `None` | Information reliability grade. Accepts a 0-based index into `chart.grades_two` or the grade name string. |
+| `grade_three` | `Optional[Union[int, str]]` | no | `None` | Third grading dimension. Accepts a 0-based index into `chart.grades_three` or the grade name string. |
 | `label_font` | `Font` | no | `Font()` | Font styling for the link's display label. Uses the shared `Font` dataclass -- see [Settings](settings.md) for `Font` fields. Only explicitly-set fields are emitted. |
 | `timezone` | `Optional[TimeZone]` | no | `None` | TimeZone for the ChartItem. Uses the `TimeZone` dataclass with `id` (int, ANB UniqueID 1-122) and `name` (str). Example: `TimeZone(id=1, name='UTC')`. The link must have both `date` and `time` set -- ANB silently ignores the timezone otherwise. |
 | `source_ref` | `Optional[str]` | no | `None` | Source reference string. |

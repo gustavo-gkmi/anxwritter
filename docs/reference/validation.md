@@ -57,6 +57,7 @@ Every error dict has a `type`, a `message`, and (almost always) a `location` str
 | `invalid_arrow` | Invalid arrow style. | Link `arrow` value is not `'head'`/`'->'`, `'tail'`/`'<-'`, `'both'`/`'<->'`, or a full ANB name. |
 | `invalid_grade_default` | Unknown default grade. | `GradeCollection.default` references a name not present in `items`. |
 | `grade_out_of_range` | Grade index exceeds collection bounds. | Grade index is negative or >= the length of the corresponding grade collection (`grades_one`, `grades_two`, or `grades_three`). |
+| `unknown_grade` | Grade name not found in collection. | A `grade_one`/`grade_two`/`grade_three` value is given as a name string but does not match any entry in the corresponding `GradeCollection.items`. No auto-create -- register the name first. |
 | `self_loop` | Link endpoints are the same entity. | `from_id` equals `to_id`. |
 | `invalid_ordered` | Invalid `ordered=True` usage on a link. | `ordered=True` on a link whose endpoints are not both ThemeLine entities. ANB rejects this combination at import time and reports it as an "Ordered link must connect themes" error in the import log. |
 | `invalid_legend_type` | Unrecognized legend item type. | `item_type` on a `LegendItem` is not a `LegendItemType` enum value, lowercase string (`'icon'`), or legacy Title Case (`'Icon'`). See [visual-styling.md](visual-styling.md#legenditemtype-enum). |

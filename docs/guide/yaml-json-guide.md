@@ -280,7 +280,7 @@ entities:
           source_ref: 'REP-001'
           source_type: Witness
           grade_one: 0                # 0-based index into grades_one.items
-          grade_two: 1
+          grade_two: 'Probably true'  # ...or the registered grade name string
           timezone:
             id: 1                     # ANB UniqueID; 1 = UTC
             name: UTC
@@ -428,7 +428,7 @@ type: [attributes.md](../reference/attributes.md).
 ## Grades, source types, strengths
 
 These sections set up dropdown options that entities/links/cards reference
-by index (grades) or by name (source types, strengths).
+by index or name (grades) or by name (source types, strengths).
 
 ### Grades
 
@@ -452,9 +452,11 @@ grades_three:                         # third dimension
   items: [High, Medium, Low]
 ```
 
-The list index (0-based) is the value used in `grade_one`/`grade_two`/
-`grade_three` on entities, links, and cards. So `grade_one: 0` →
-`'Always reliable'`.
+`grade_one`/`grade_two`/`grade_three` on entities, links, and cards
+accept **either** the 0-based index into `items` **or** the registered
+grade name string. So `grade_one: 0` and `grade_one: 'Always reliable'`
+produce the same XML. Unknown names raise `unknown_grade`; there is no
+auto-create.
 
 > **Important shape note.** Grades take a dict with `items` (and optional
 > `default`) — **not** a bare list. `grades_one: ['A', 'B']` is silently

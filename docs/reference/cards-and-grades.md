@@ -21,9 +21,9 @@ All fields are optional.
 | `datetime_description` | `str` | Free-text description of the date/time (e.g. `'About 3pm'`). Written as `DateTimeDescription` attribute on `<Card>`. |
 | `source_ref` | `str` | Source document reference string. |
 | `source_type` | `str` | Source type label (e.g. `'Witness'`). Should match an entry in `chart.source_types`. |
-| `grade_one` | `int` | Source reliability grade index (0-based into `chart.grades_one`). |
-| `grade_two` | `int` | Information reliability grade index (0-based into `chart.grades_two`). |
-| `grade_three` | `int` | Third grading dimension index (0-based into `chart.grades_three`). |
+| `grade_one` | `Union[int, str]` | Source reliability grade. Accepts a 0-based index into `chart.grades_one` or the grade name string (e.g. `'Reliable'`); the name is resolved at validate/build time. |
+| `grade_two` | `Union[int, str]` | Information reliability grade. Accepts a 0-based index into `chart.grades_two` or the grade name string. |
+| `grade_three` | `Union[int, str]` | Third grading dimension. Accepts a 0-based index into `chart.grades_three` or the grade name string. |
 | `timezone` | `TimeZone` | TimeZone for the card. Uses the `TimeZone` dataclass with `id` (int, ANB UniqueID 1--122) and `name` (str). Example: `TimeZone(id=1, name='UTC')`. Requires both `date` and `time` to be set. See [datetime-and-timezones.md](datetime-and-timezones.md). |
 | `entity_id` | `str` | **INTERNAL ONLY** -- routes loose card to an entity at build time. NOT written to XML. |
 | `link_id` | `str` | **INTERNAL ONLY** -- routes loose card to a link at build time. NOT written to XML. |
@@ -124,9 +124,9 @@ Three separate grade collection attributes on `ANXChart`, each a plain `List[str
 | `chart.grades_two` | Information reliability | `<GradeTwo>` |
 | `chart.grades_three` | Third dimension | `<GradeThree>` |
 
-### Indexing
+### Reference by index or by name
 
-The list index (0-based) is the value used for `grade_one`, `grade_two`, and `grade_three` fields on entities, links, and cards.
+`grade_one`, `grade_two`, and `grade_three` on entities, links, and cards accept **either** a 0-based index into the corresponding `GradeCollection.items` list **or** the grade name string. Names are resolved to indices at validate/build time. Unknown names raise `unknown_grade` -- there is no auto-create.
 
 ```python
 from anxwritter import GradeCollection
@@ -142,6 +142,10 @@ chart.grades_three = GradeCollection(items=['High', 'Medium', 'Low'])
 chart.add_icon(id='Alice', type='Person', grade_one=0, grade_two=1)
 # grade_one=0 -> 'Always reliable'
 # grade_two=1 -> 'Probably true'
+
+# Or reference by name -- equivalent to the above:
+chart.add_icon(id='Bob', type='Person',
+               grade_one='Always reliable', grade_two='Probably true')
 
 # With a default — ungraded items get 'Confirmed' instead of a '-' sentinel:
 chart.grades_two = GradeCollection(
@@ -166,6 +170,7 @@ chart.grades_two = GradeCollection(
 ### Validation
 
 - `grade_out_of_range`: grade index is negative or exceeds the size of the corresponding grade collection.
+- `unknown_grade`: grade is given as a name string but does not match any entry in the corresponding `GradeCollection.items`. No auto-create -- the name must be registered first.
 - `invalid_grade_default`: `default` references a name not present in the `items` list of the same `GradeCollection`.
 - When a grade field is omitted (set to `None`), the `GradeOneIndex`/`GradeTwoIndex`/`GradeThreeIndex` XML attribute is not emitted and ANB treats the grade as unset.
 
