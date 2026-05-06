@@ -2024,7 +2024,7 @@ class ANXBuilder:
         with _timer.phase("Apply layout"):
             # Apply auto-layout to all registered entities
             self._apply_layout(
-                _resolve_path(s, 'extra_cfg.arrange') or 'circle',
+                _resolve_path(s, 'extra_cfg.arrange') or 'radial',
                 center=layout_center,
             )
 
@@ -2355,7 +2355,8 @@ class ANXBuilder:
         via ``chart.e`` x/y columns or geo_map) are skipped.
 
         Args:
-            mode: Layout algorithm — ``'circle'``, ``'grid'``, or ``'random'``.
+            mode: Layout algorithm — ``'radial'``, ``'circle'``, ``'grid'``,
+                or ``'random'``.
             center: ``(cx, cy)`` offset for the layout origin. Used by geo_map
                 to place unmatched entities below the geo-positioned area.
         """
@@ -2383,12 +2384,125 @@ class ANXBuilder:
                 y = cy + int(radius * math.sin(angle))
                 self._positions[key] = (x, y)
 
-        else:  # random / default
+        elif mode == 'radial':
+            self._apply_radial_layout(auto_keys, cx, cy)
+
+        else:  # random
             import random
             rng = random.Random(42)
             for key in auto_keys:
                 x = cx + rng.randint(-400, 400)
                 y = cy + rng.randint(-400, 400)
+                self._positions[key] = (x, y)
+
+    def _apply_radial_layout(self, auto_keys: List[str], cx: int, cy: int) -> None:
+        """Hub-and-spokes layout with compaction.
+
+        Builds the entity adjacency graph from resolved links, identifies
+        hubs (degree >= 2), attaches each non-hub leaf to its highest-degree
+        hub neighbour, then places hubs on a ring with leaves arranged on an
+        outward-facing arc around each hub. Isolated entities (degree 0 or
+        no hub neighbour in ``auto_keys``) are placed in a grid below the
+        layout.
+        """
+        # int_id -> identity key, for translating ResolvedLink endpoints
+        int_to_key = {int_id: k for k, (_ci, int_id) in self._entity_registry.items()}
+
+        # Adjacency over all entities (manual + auto), so a leaf attached to a
+        # manually-positioned entity still counts as having a neighbour
+        adj: Dict[str, set] = {k: set() for k in self._entity_registry}
+        for item in self._resolved_items:
+            if not hasattr(item, 'from_int_id'):
+                continue  # ResolvedEntity, not ResolvedLink
+            a = int_to_key.get(item.from_int_id)
+            b = int_to_key.get(item.to_int_id)
+            if a and b and a != b:
+                adj[a].add(b)
+                adj[b].add(a)
+
+        auto_set = set(auto_keys)
+        degrees = {k: len(adj[k]) for k in auto_keys}
+
+        # Hubs: auto-placed entities with degree >= 2
+        hubs = [k for k in auto_keys if degrees[k] >= 2]
+        hubs.sort(key=lambda k: (-degrees[k], k))
+        hub_set = set(hubs)
+
+        # Non-hub auto entities: attach to highest-degree hub neighbour, else isolate
+        leaf_to_hub: Dict[str, str] = {}
+        isolated: List[str] = []
+        for k in auto_keys:
+            if k in hub_set:
+                continue
+            hub_neighbours = [n for n in adj[k] if n in hub_set]
+            if hub_neighbours:
+                leaf_to_hub[k] = max(hub_neighbours, key=lambda h: (degrees[h], h))
+            else:
+                isolated.append(k)
+
+        hub_leaves: Dict[str, List[str]] = {h: [] for h in hubs}
+        for leaf, hub in leaf_to_hub.items():
+            hub_leaves[hub].append(leaf)
+
+        # ── Place hubs ────────────────────────────────────────────────────
+        n_hubs = len(hubs)
+        hub_ring_radius = 0 if n_hubs <= 1 else max(260, n_hubs * 70)
+        hub_pos: Dict[str, Tuple[int, int]] = {}
+
+        if n_hubs == 1:
+            h = hubs[0]
+            hub_pos[h] = (cx, cy)
+            self._positions[h] = (cx, cy)
+        else:
+            for i, h in enumerate(hubs):
+                a = 2 * math.pi * i / n_hubs
+                hx = cx + int(hub_ring_radius * math.cos(a))
+                hy = cy + int(hub_ring_radius * math.sin(a))
+                hub_pos[h] = (hx, hy)
+                self._positions[h] = (hx, hy)
+
+        # ── Place leaves on outward-facing arc per hub ────────────────────
+        # Compact: tight base radius, modest growth with leaf count
+        for h, leaves in hub_leaves.items():
+            if not leaves:
+                continue
+            hx, hy = hub_pos[h]
+            n_leaves = len(leaves)
+            leaf_radius = max(110, 25 + 14 * n_leaves)
+
+            if n_hubs == 1:
+                # Full circle around lone hub
+                for j, leaf in enumerate(leaves):
+                    a = 2 * math.pi * j / n_leaves
+                    lx = hx + int(leaf_radius * math.cos(a))
+                    ly = hy + int(leaf_radius * math.sin(a))
+                    self._positions[leaf] = (lx, ly)
+            else:
+                # Outward direction = vector from chart center to hub
+                base_angle = math.atan2(hy - cy, hx - cx)
+                arc_span = math.pi  # 180° fan facing outward
+                if n_leaves == 1:
+                    angles = [base_angle]
+                else:
+                    angles = [
+                        base_angle - arc_span / 2 + arc_span * j / (n_leaves - 1)
+                        for j in range(n_leaves)
+                    ]
+                for j, leaf in enumerate(leaves):
+                    a = angles[j]
+                    lx = hx + int(leaf_radius * math.cos(a))
+                    ly = hy + int(leaf_radius * math.sin(a))
+                    self._positions[leaf] = (lx, ly)
+
+        # ── Place isolated entities in a grid below the layout ────────────
+        if isolated:
+            cols = math.ceil(math.sqrt(len(isolated)))
+            spacing = 160
+            y_offset = hub_ring_radius + 320
+            for i, key in enumerate(isolated):
+                row_i, col_i = divmod(i, cols)
+                x = cx + col_i * spacing - (cols - 1) * spacing // 2
+                y = cy + y_offset + row_i * spacing
                 self._positions[key] = (x, y)
 
     # ── Helper utilities ──────────────────────────────────────────────────────

@@ -1286,3 +1286,93 @@ class TestIdempotency:
         summaries = {card.get('Summary') for card in cards}
         assert 'Entity evidence' in summaries
         assert 'Link evidence' in summaries
+
+
+# ── Radial layout ────────────────────────────────────────────────────────────
+
+class TestRadialLayout:
+    """Hub-and-spokes layout with compaction."""
+
+    @staticmethod
+    def _positions(chart: ANXChart):
+        """Return {label -> (x, y)} from the emitted XML."""
+        root = _parse_xml(chart)
+        out = {}
+        for ci in root.findall('.//ChartItem'):
+            label = ci.get('Label')
+            x = int(ci.get('XPosition', '0'))
+            end = ci.find('.//End')
+            y = int(end.get('Y', '0')) if end is not None else 0
+            out[label] = (x, y)
+        return out
+
+    def test_default_arrange_is_radial(self):
+        """Unset arrange must use radial — chart still builds and places entities."""
+        c = ANXChart()
+        c.add_icon(id='hub', type='T')
+        c.add_icon(id='a', type='T')
+        c.add_icon(id='b', type='T')
+        c.add_link(from_id='hub', to_id='a', type='X')
+        c.add_link(from_id='hub', to_id='b', type='X')
+        pos = self._positions(c)
+        assert {'hub', 'a', 'b'} <= set(pos)
+
+    def test_single_hub_at_center_leaves_around(self):
+        c = ANXChart(settings={'extra_cfg': {'arrange': 'radial'}})
+        c.add_icon(id='hub', type='T')
+        for n in ('l1', 'l2', 'l3', 'l4'):
+            c.add_icon(id=n, type='T')
+            c.add_link(from_id='hub', to_id=n, type='X')
+        pos = self._positions(c)
+        # Lone hub sits at origin
+        assert pos['hub'] == (0, 0)
+        # Every leaf is some non-zero distance from origin
+        for n in ('l1', 'l2', 'l3', 'l4'):
+            dx, dy = pos[n]
+            assert dx * dx + dy * dy > 0
+
+    def test_two_hubs_separated_with_their_leaves_nearby(self):
+        c = ANXChart(settings={'extra_cfg': {'arrange': 'radial'}})
+        for h in ('H1', 'H2'):
+            c.add_icon(id=h, type='T')
+        for h, leaves in (('H1', ('a', 'b', 'c')), ('H2', ('x', 'y', 'z'))):
+            for leaf in leaves:
+                c.add_icon(id=leaf, type='T')
+                c.add_link(from_id=h, to_id=leaf, type='X')
+        pos = self._positions(c)
+        # Hubs are placed apart from each other
+        h1x, h1y = pos['H1']
+        h2x, h2y = pos['H2']
+        hub_dist_sq = (h1x - h2x) ** 2 + (h1y - h2y) ** 2
+        assert hub_dist_sq > 0
+        # Each leaf is closer to its own hub than to the other hub
+        for leaf, owner, other in (
+            ('a', 'H1', 'H2'), ('b', 'H1', 'H2'), ('c', 'H1', 'H2'),
+            ('x', 'H2', 'H1'), ('y', 'H2', 'H1'), ('z', 'H2', 'H1'),
+        ):
+            lx, ly = pos[leaf]
+            ox, oy = pos[owner]
+            otx, oty = pos[other]
+            d_own = (lx - ox) ** 2 + (ly - oy) ** 2
+            d_other = (lx - otx) ** 2 + (ly - oty) ** 2
+            assert d_own < d_other, f"{leaf} closer to {other} than {owner}"
+
+    def test_isolated_entities_placed_below_layout(self):
+        c = ANXChart(settings={'extra_cfg': {'arrange': 'radial'}})
+        c.add_icon(id='hub', type='T')
+        c.add_icon(id='a', type='T')
+        c.add_link(from_id='hub', to_id='a', type='X')
+        c.add_icon(id='loner1', type='T')
+        c.add_icon(id='loner2', type='T')
+        pos = self._positions(c)
+        # Isolated entities sit below the hub (positive Y in ANB's coord system)
+        for k in ('loner1', 'loner2'):
+            assert pos[k][1] > pos['hub'][1]
+
+    def test_manual_position_wins_over_radial(self):
+        c = ANXChart(settings={'extra_cfg': {'arrange': 'radial'}})
+        c.add_icon(id='pinned', type='T', x=999, y=888)
+        c.add_icon(id='free', type='T')
+        c.add_link(from_id='pinned', to_id='free', type='X')
+        pos = self._positions(c)
+        assert pos['pinned'] == (999, 888)
