@@ -43,9 +43,9 @@ All fields except `id` and `type` are optional and default to `None` unless othe
 | `x` | `Optional[int]` | no | `None` | Manual canvas X position (integer). When set, auto-layout is skipped for this entity. |
 | `y` | `Optional[int]` | no | `None` | Manual canvas Y position (integer). When set, auto-layout is skipped for this entity. |
 | `strength` | `Optional[str]` | no | `None` | Named strength for the entity border, e.g. `'Default'`, `'Confirmed'`. Must match a name registered via `add_strength()`. The chart is pre-populated with `Default=solid`. |
-| `grade_one` | `Optional[int]` | no | `None` | Source reliability grade index (0-based into `chart.grades_one`). When `None`, the `GradeOneIndex` XML attribute is not emitted and ANB shows it as unset. |
-| `grade_two` | `Optional[int]` | no | `None` | Information reliability grade index (0-based into `chart.grades_two`). |
-| `grade_three` | `Optional[int]` | no | `None` | Third grading dimension index (0-based into `chart.grades_three`). |
+| `grade_one` | `Optional[Union[int, str]]` | no | `None` | Source reliability grade. Accepts a 0-based index into `chart.grades_one` or the grade name string (e.g. `'Reliable'`); the name is resolved to its index at validate/build time. Unknown names raise `unknown_grade`. When `None`, `GradeOneIndex` is not emitted and ANB shows it as unset. |
+| `grade_two` | `Optional[Union[int, str]]` | no | `None` | Information reliability grade. Accepts a 0-based index into `chart.grades_two` or the grade name string. |
+| `grade_three` | `Optional[Union[int, str]]` | no | `None` | Third grading dimension. Accepts a 0-based index into `chart.grades_three` or the grade name string. |
 | `label_font` | `Font` | no | `Font()` | Font styling for the entity's display label. Uses the shared `Font` dataclass -- see [Settings](settings.md) for `Font` fields. Only explicitly-set fields are emitted in the XML. |
 | `timezone` | `Optional[TimeZone]` | no | `None` | TimeZone for the ChartItem. Uses the `TimeZone` dataclass with `id` (int, ANB UniqueID 1-122) and `name` (str, cosmetic display string). Both fields are required by ANB 9. Example: `TimeZone(id=1, name='UTC')`. The entity must have both `date` and `time` set -- ANB silently ignores `<TimeZone>` when `TimeSet="false"`. Generates `<TimeZone UniqueID="..." Name="..."/>` inside `<ChartItem>` after `<CIStyle>`. |
 | `source_ref` | `Optional[str]` | no | `None` | Source reference string. |
@@ -179,9 +179,9 @@ Cards provide source/grading metadata visible in ANB's card panel. Attach them i
 | `datetime_description` | `Optional[str]` | Free-text description of the date/time (e.g. `'About 3pm'`). Written as `DateTimeDescription` attribute on `<Card>`. |
 | `source_ref` | `Optional[str]` | Source document reference string. |
 | `source_type` | `Optional[str]` | Source type label string (e.g. `'Witness'`). |
-| `grade_one` | `Optional[int]` | Source reliability grade index (0-based into `chart.grades_one`). |
-| `grade_two` | `Optional[int]` | Information reliability grade index (0-based into `chart.grades_two`). |
-| `grade_three` | `Optional[int]` | Third grading dimension index (0-based into `chart.grades_three`). |
+| `grade_one` | `Optional[Union[int, str]]` | Source reliability grade -- 0-based index into `chart.grades_one` or the grade name string. |
+| `grade_two` | `Optional[Union[int, str]]` | Information reliability grade -- 0-based index into `chart.grades_two` or the grade name string. |
+| `grade_three` | `Optional[Union[int, str]]` | Third grading dimension -- 0-based index into `chart.grades_three` or the grade name string. |
 | `timezone` | `Optional[TimeZone]` | TimeZone for the card. Uses the `TimeZone` dataclass with `id` (int, ANB UniqueID 1-122) and `name` (str). Example: `TimeZone(id=1, name='UTC')`. The card must have both `date` and `time` set -- ANB logs a warning and ignores the timezone otherwise. |
 | `entity_id` | `Optional[str]` | **INTERNAL ONLY** -- routes a loose card to an entity at build time. NOT written to XML. |
 | `link_id` | `Optional[str]` | **INTERNAL ONLY** -- routes a loose card to a link by `Link.link_id` at build time. NOT written to XML. |

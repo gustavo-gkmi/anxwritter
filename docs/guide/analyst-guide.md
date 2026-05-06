@@ -194,7 +194,8 @@ chart.add_icon(
 ```
 
 Other shared fields include `strength` (line style name), `grade_one`/`grade_two`/
-`grade_three` (evidence grading indices), `source_ref`, `source_type`, `timezone`,
+`grade_three` (evidence gradings -- accept either the 0-based index or the
+registered grade name string), `source_ref`, `source_type`, `timezone`,
 and `show` (sub-item visibility).
 
 The `ordered` field enables ANB's "Controladores" mode (ordered with date and time)
@@ -389,8 +390,8 @@ chart.add_icon(
             description='Identified from CCTV footage at the scene.',
             source_ref='REP-001',
             source_type='Witness',
-            grade_one=0,     # index into chart.grades_one
-            grade_two=1,     # index into chart.grades_two
+            grade_one=0,                  # 0-based index into chart.grades_one
+            grade_two='Probably true',    # ...or the registered grade name string
         ),
         Card(summary='Second sighting', date='2024-02-01'),
     ],
@@ -430,14 +431,14 @@ chart.add_card(link_id='call_001', summary='Transcript available')
 | `description` | Longer card body text |
 | `source_ref` | Source document reference |
 | `source_type` | Source type label (should match `chart.source_types`) |
-| `grade_one` | Source reliability index (0-based) |
-| `grade_two` | Information reliability index (0-based) |
-| `grade_three` | Third grading dimension index (0-based) |
+| `grade_one` | Source reliability -- 0-based index OR the registered grade name string |
+| `grade_two` | Information reliability -- 0-based index OR the registered grade name string |
+| `grade_three` | Third grading dimension -- 0-based index OR the registered grade name string |
 | `timezone` | `TimeZone` dataclass with `id` (int 1-122) and `name` (str) |
 
 ### Grade collections
 
-Grade indices reference the chart-level grade label lists. Define them as
+Grade fields reference the chart-level grade label lists. Define them as
 `GradeCollection` objects:
 
 ```python
@@ -454,11 +455,19 @@ chart.grades_two = GradeCollection(items=[
 chart.grades_three = GradeCollection(items=['High', 'Medium', 'Low'])
 ```
 
-Then use indices on entities, links, and cards:
+Then reference them on entities, links, and cards using **either** the 0-based
+index **or** the grade name string -- both forms are equivalent and resolve to
+the same XML output. Unknown names raise `unknown_grade`; there is no
+auto-create.
 
 ```python
+# By index:
 chart.add_icon(id='Alice', type='Person', grade_one=0, grade_two=1)
 # grade_one=0 --> 'Always reliable', grade_two=1 --> 'Probably true'
+
+# By name (equivalent):
+chart.add_icon(id='Bob', type='Person',
+               grade_one='Always reliable', grade_two='Probably true')
 ```
 
 ### Source types
