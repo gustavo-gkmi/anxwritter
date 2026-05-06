@@ -903,7 +903,7 @@ dataclass) to the `ANXChart` constructor.
 ```python
 chart = ANXChart(settings={
     'extra_cfg': {
-        'arrange': 'grid',            # layout: 'circle', 'grid', or 'random'
+        'arrange': 'grid',            # layout: 'radial' (default), 'circle', 'grid', or 'random'
         'entity_auto_color': True,    # auto-assign colours to entities
         'link_match_entity_color': True,
         'link_arc_offset': 20,        # parallel link spacing in pixels
@@ -941,7 +941,7 @@ chart.settings.view.time_bar = True
 
 | Setting | What it does |
 |---------|-------------|
-| `extra_cfg.arrange` | Layout algorithm: `'circle'` (default), `'grid'`, `'random'` |
+| `extra_cfg.arrange` | Layout algorithm: `'radial'` (default), `'circle'`, `'grid'`, `'random'` |
 | `extra_cfg.entity_auto_color` | Auto-assign colours to uncoloured entities |
 | `extra_cfg.link_match_entity_color` | Colour link lines to match the destination entity |
 | `extra_cfg.link_arc_offset` | Pixel spacing between parallel links (default 20) |

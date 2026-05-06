@@ -99,7 +99,7 @@ settings:
   extra_cfg:
     entity_auto_color: true       # distribute HSV hues across entities
     link_match_entity_color: true # link line colour follows target entity
-    arrange: grid                 # auto-layout: grid | circle | random
+    arrange: grid                 # auto-layout: radial (default) | circle | grid | random
     link_arc_offset: 25           # spacing between parallel links
 
 # ── Entity types ─────────────────────────────────────────────────────

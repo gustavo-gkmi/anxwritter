@@ -314,7 +314,7 @@ class ExtraCfg:
     """ANXWritter-only knobs (not written to ANX XML)."""
     entity_auto_color: Optional[bool] = None       # Distribute HSV hues
     link_match_entity_color: Optional[bool] = None # Set link line to to_id entity color
-    arrange: Optional[str] = None                  # Auto-layout: 'circle'/'grid'/'random'
+    arrange: Optional[str] = None                  # Auto-layout: 'radial' (default) / 'circle' / 'grid' / 'random'
     link_arc_offset: Optional[int] = None          # Parallel-link arc offset
     geo_map: Optional[GeoMapCfg] = None            # Geographic positioning
 
