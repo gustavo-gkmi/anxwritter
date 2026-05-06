@@ -63,6 +63,18 @@ INVALID_SPECS: List[tuple] = [
         {ErrorType.GRADE_OUT_OF_RANGE.value},
     ),
 
+    # ── Unknown grade name ──────────────────────────────────────────────────
+    (
+        "unknown_grade_name",
+        {
+            "entities": {
+                "icons": [{"id": "A", "type": "Person", "grade_one": "Bogus"}]
+            },
+            "grades_one": {"items": ["Reliable", "Unreliable"]},
+        },
+        {ErrorType.UNKNOWN_GRADE.value},
+    ),
+
     # ── Unknown color string ────────────────────────────────────────────────
     (
         "unknown_color_name",

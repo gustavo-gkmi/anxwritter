@@ -38,6 +38,7 @@ class ErrorType(str, Enum):
     # Grade errors
     INVALID_GRADE_DEFAULT = 'invalid_grade_default'
     GRADE_OUT_OF_RANGE = 'grade_out_of_range'
+    UNKNOWN_GRADE = 'unknown_grade'
 
     # Ordered link errors
     INVALID_ORDERED = 'invalid_ordered'

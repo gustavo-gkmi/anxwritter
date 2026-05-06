@@ -140,26 +140,71 @@ def check_strength(
 def check_grade(
     val: Any,
     grade_name: str,
-    max_len: int,
+    items: List[str],
     loc: str,
     errors: List[Dict[str, Any]],
 ) -> None:
-    """Validate a grade index and append error if out of range."""
-    idx = val if isinstance(val, int) else _int_or_none(val)
-    if idx is not None:
-        if idx < 0:
-            errors.append({
-                'type': ErrorType.GRADE_OUT_OF_RANGE.value,
-                'message': f"'{grade_name}' index {idx} is negative",
-                'location': loc,
-            })
-        elif max_len > 0 and idx >= max_len:
-            errors.append({
-                'type': ErrorType.GRADE_OUT_OF_RANGE.value,
-                'message': f"'{grade_name}' index {idx} out of range "
-                           f"(collection has {max_len} entries)",
-                'location': loc,
-            })
+    """Validate a grade reference and append error if invalid.
+
+    Accepts either:
+    - an integer (or digit string) — checked against ``items`` length, like before
+    - a non-digit string — looked up in ``items``; emits ``unknown_grade`` if absent
+
+    ``items`` is the ``GradeCollection.items`` list (used for both range checks and
+    name resolution). Empty/None list disables both checks.
+    """
+    if val is None:
+        return
+    if isinstance(val, bool):
+        # bool is a subclass of int in Python, but treating True/False as grade
+        # indices is almost always a user mistake.
+        errors.append({
+            'type': ErrorType.UNKNOWN_GRADE.value,
+            'message': f"'{grade_name}' got bool {val!r}; expected an integer "
+                       f"index or a grade name",
+            'location': loc,
+        })
+        return
+
+    max_len = len(items) if items else 0
+
+    # Integer (or digit string) → range check
+    if isinstance(val, int) or _int_or_none(val) is not None:
+        idx = val if isinstance(val, int) else _int_or_none(val)
+        if idx is not None:
+            if idx < 0:
+                errors.append({
+                    'type': ErrorType.GRADE_OUT_OF_RANGE.value,
+                    'message': f"'{grade_name}' index {idx} is negative",
+                    'location': loc,
+                })
+            elif max_len > 0 and idx >= max_len:
+                errors.append({
+                    'type': ErrorType.GRADE_OUT_OF_RANGE.value,
+                    'message': f"'{grade_name}' index {idx} out of range "
+                               f"(collection has {max_len} entries)",
+                    'location': loc,
+                })
+        return
+
+    # Non-digit string → name lookup against grade items
+    name = _str_or_none(val)
+    if name is None:
+        return
+    if not items:
+        errors.append({
+            'type': ErrorType.UNKNOWN_GRADE.value,
+            'message': f"'{grade_name}'={name!r} but no grades are defined on the chart",
+            'location': loc,
+        })
+        return
+    if name not in items:
+        errors.append({
+            'type': ErrorType.UNKNOWN_GRADE.value,
+            'message': f"'{grade_name}'={name!r} not found in chart.{grade_name}.items "
+                       f"({', '.join(repr(i) for i in items)})",
+            'location': loc,
+        })
 
 
 def check_timezone(
@@ -318,9 +363,9 @@ def validate_entities(
     entities: List['_BaseEntity'],
     strength_names: Set[str],
     dtf_names: Set[str],
-    gc1_len: int,
-    gc2_len: int,
-    gc3_len: int,
+    gc1_items: List[str],
+    gc2_items: List[str],
+    gc3_items: List[str],
     attr_types: Dict[str, str],
 ) -> tuple[List[Dict[str, Any]], Dict[str, str], Dict[str, type]]:
     """Validate entity list and return errors, entity_ids map, and entity_classes map."""
@@ -373,9 +418,9 @@ def validate_entities(
         check_date(entity.date, loc, errors)
         check_time(entity.time, loc, errors)
         check_strength(entity.strength, strength_names, loc, errors)
-        check_grade(entity.grade_one, 'grade_one', gc1_len, loc, errors)
-        check_grade(entity.grade_two, 'grade_two', gc2_len, loc, errors)
-        check_grade(entity.grade_three, 'grade_three', gc3_len, loc, errors)
+        check_grade(entity.grade_one, 'grade_one', gc1_items, loc, errors)
+        check_grade(entity.grade_two, 'grade_two', gc2_items, loc, errors)
+        check_grade(entity.grade_three, 'grade_three', gc3_items, loc, errors)
         check_attr_types(entity.attributes, loc, attr_types, errors)
         check_timezone(entity.timezone, bool(entity.date), bool(entity.time), loc, errors)
 
@@ -386,9 +431,9 @@ def validate_entities(
             cloc = f"{loc}.cards[{ci}]"
             check_date(card.date, cloc, errors)
             check_time(card.time, cloc, errors)
-            check_grade(card.grade_one, 'grade_one', gc1_len, cloc, errors)
-            check_grade(card.grade_two, 'grade_two', gc2_len, cloc, errors)
-            check_grade(card.grade_three, 'grade_three', gc3_len, cloc, errors)
+            check_grade(card.grade_one, 'grade_one', gc1_items, cloc, errors)
+            check_grade(card.grade_two, 'grade_two', gc2_items, cloc, errors)
+            check_grade(card.grade_three, 'grade_three', gc3_items, cloc, errors)
             check_timezone(card.timezone, bool(card.date), bool(card.time), cloc, errors)
 
         # Check datetime_format is registered
@@ -427,9 +472,9 @@ def validate_links(
     entity_classes: Dict[str, type],
     strength_names: Set[str],
     dtf_names: Set[str],
-    gc1_len: int,
-    gc2_len: int,
-    gc3_len: int,
+    gc1_items: List[str],
+    gc2_items: List[str],
+    gc3_items: List[str],
     attr_types: Dict[str, str],
 ) -> List[Dict[str, Any]]:
     """Validate links and return errors."""
@@ -490,9 +535,9 @@ def validate_links(
         check_date(link.date, loc, errors)
         check_time(link.time, loc, errors)
         check_strength(link.strength, strength_names, loc, errors)
-        check_grade(link.grade_one, 'grade_one', gc1_len, loc, errors)
-        check_grade(link.grade_two, 'grade_two', gc2_len, loc, errors)
-        check_grade(link.grade_three, 'grade_three', gc3_len, loc, errors)
+        check_grade(link.grade_one, 'grade_one', gc1_items, loc, errors)
+        check_grade(link.grade_two, 'grade_two', gc2_items, loc, errors)
+        check_grade(link.grade_three, 'grade_three', gc3_items, loc, errors)
         check_attr_types(link.attributes, loc, attr_types, errors)
         check_timezone(link.timezone, bool(link.date), bool(link.time), loc, errors)
 
@@ -501,9 +546,9 @@ def validate_links(
             cloc = f"{loc}.cards[{ci}]"
             check_date(card.date, cloc, errors)
             check_time(card.time, cloc, errors)
-            check_grade(card.grade_one, 'grade_one', gc1_len, cloc, errors)
-            check_grade(card.grade_two, 'grade_two', gc2_len, cloc, errors)
-            check_grade(card.grade_three, 'grade_three', gc3_len, cloc, errors)
+            check_grade(card.grade_one, 'grade_one', gc1_items, cloc, errors)
+            check_grade(card.grade_two, 'grade_two', gc2_items, cloc, errors)
+            check_grade(card.grade_three, 'grade_three', gc3_items, cloc, errors)
             check_timezone(card.timezone, bool(card.date), bool(card.time), cloc, errors)
 
         # Check datetime_format is registered

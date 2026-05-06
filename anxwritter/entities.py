@@ -48,14 +48,18 @@ class _BaseEntity:
     strength: Optional[str] = None
     """Named strength for the entity border, e.g. ``'Default'`` or ``'Confirmed'``."""
 
-    grade_one: Optional[int] = None
-    """Source reliability grade index (0-based into ``chart.grades_one``)."""
+    grade_one: Optional[Union[int, str]] = None
+    """Source reliability grade. Accepts a 0-based index into ``chart.grades_one``
+    or the grade name string (e.g. ``'Reliable'``) — the name is resolved to its
+    index at validate/build time."""
 
-    grade_two: Optional[int] = None
-    """Information reliability grade index (0-based into ``chart.grades_two``)."""
+    grade_two: Optional[Union[int, str]] = None
+    """Information reliability grade. Accepts a 0-based index into
+    ``chart.grades_two`` or the grade name string."""
 
-    grade_three: Optional[int] = None
-    """Third grading dimension index (0-based into ``chart.grades_three``)."""
+    grade_three: Optional[Union[int, str]] = None
+    """Third grading dimension. Accepts a 0-based index into ``chart.grades_three``
+    or the grade name string."""
 
     x: Optional[int] = None
     """Manual canvas X position. When set, auto-layout is skipped for this entity."""
