@@ -521,7 +521,7 @@ settings:
     visible: false
 
   extra_cfg:                          # anxwritter-only knobs (NOT in ANX XML)
-    arrange: grid                     # radial (default) | circle | grid | random
+    arrange: grid                     # radial (default) | circle | grid | random | fr | forceatlas2 | tree
     entity_auto_color: true
     link_match_entity_color: true
     link_arc_offset: 25

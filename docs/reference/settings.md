@@ -83,7 +83,7 @@ These fields control anxwritter behavior only. They are NOT written to the ANX X
 |---|---|---|---|
 | `entity_auto_color` | `Optional[bool]` | `None` | Distribute evenly-spaced HSV hues across entities with no explicit `color`. Also derives `label_font.color` and `label_font.bg_color` for contrast. Explicit field values on individual entities always win. |
 | `link_match_entity_color` | `Optional[bool]` | `None` | Set `LineColour` on each link to match its `to_id` entity's resolved color. Only affects the line color, not the label font. An explicit `line_color` on a `Link` overrides this. |
-| `arrange` | `Optional[str]` | `None` (= `'radial'`) | Auto-layout algorithm applied to entities without explicit `x`/`y`: `'radial'` (default), `'circle'`, `'grid'`, `'random'`. |
+| `arrange` | `Optional[str]` | `None` (= `'radial'`) | Auto-layout algorithm applied to entities without explicit `x`/`y`. Geometric: `'radial'` (default), `'circle'`, `'grid'`, `'random'`. Topology-aware: `'fr'` (Fruchterman-Reingold), `'forceatlas2'` (recommended for community/cluster reveal), `'tree'` (tidy tree). Aliases like `'fa2'`, `'fruchterman_reingold'`, `'reingold_tilford'` are accepted. Pinned entities (explicit `x`/`y`) act as fixed anchors for force-directed modes; tree mode keeps them at their pinned coordinates. |
 | `link_arc_offset` | `Optional[int]` | `None` (= `20`) | Default pixel offset between parallel links sharing the same entity pair. Set to `0` to disable auto-spacing. An explicit `offset` on a `Link` always wins. |
 | `geo_map` | `Optional[GeoMapCfg]` | `None` | Geographic positioning configuration. Maps entity attribute values to lat/lon coordinates for canvas positioning and/or ANB Esri Maps integration. See `GeoMapCfg` fields below. |
 
