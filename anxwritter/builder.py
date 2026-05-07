@@ -2352,14 +2352,22 @@ class ANXBuilder:
         """Calculate (X, Y) positions for all registered entities.
 
         Entities that already have a position in ``_positions`` (set manually
-        via ``chart.e`` x/y columns or geo_map) are skipped.
+        via ``chart.e`` x/y columns or geo_map) are skipped by the geometric
+        modes. The topology-aware modes treat them as fixed anchors during
+        simulation.
 
         Args:
-            mode: Layout algorithm — ``'radial'``, ``'circle'``, ``'grid'``,
-                or ``'random'``.
+            mode: Layout algorithm — ``'radial'`` (default), ``'circle'``,
+                ``'grid'``, ``'random'``, ``'fr'`` (Fruchterman-Reingold),
+                ``'forceatlas2'`` (or ``'fa2'``), or ``'tree'`` (tidy tree).
+                Aliases like ``'fruchterman_reingold'``, ``'reingold_tilford'``
+                are also accepted.
             center: ``(cx, cy)`` offset for the layout origin. Used by geo_map
                 to place unmatched entities below the geo-positioned area.
         """
+        from .layouts import normalize_arrange
+
+        mode = normalize_arrange(mode)
         cx, cy = center
         keys = list(self._entity_registry.keys())  # List[str] — identity strings
         auto_keys = [k for k in keys if k not in self._positions]
@@ -2387,6 +2395,9 @@ class ANXBuilder:
         elif mode == 'radial':
             self._apply_radial_layout(auto_keys, cx, cy)
 
+        elif mode in ('fr', 'forceatlas2', 'tree'):
+            self._apply_topology_layout(mode, keys, cx, cy)
+
         else:  # random
             import random
             rng = random.Random(42)
@@ -2394,6 +2405,52 @@ class ANXBuilder:
                 x = cx + rng.randint(-400, 400)
                 y = cy + rng.randint(-400, 400)
                 self._positions[key] = (x, y)
+
+    def _apply_topology_layout(
+        self,
+        mode: str,
+        all_keys: List[str],
+        cx: int,
+        cy: int,
+    ) -> None:
+        """Run a topology-aware layout (``fr`` / ``forceatlas2`` / ``tree``).
+
+        Pinned positions in ``self._positions`` are passed as fixed anchors
+        and preserved unchanged; only non-pinned entities receive new
+        positions.
+        """
+        from .layouts import apply_forceatlas2, apply_fr, apply_tree
+
+        # Translate ResolvedLink endpoints back to identity keys.
+        int_to_key = {
+            int_id: k for k, (_ci, int_id) in self._entity_registry.items()
+        }
+        edges: List[Tuple[str, str]] = []
+        for item in self._resolved_items:
+            if not hasattr(item, 'from_int_id'):
+                continue
+            a = int_to_key.get(item.from_int_id)
+            b = int_to_key.get(item.to_int_id)
+            if a and b and a != b:
+                edges.append((a, b))
+
+        pinned = {
+            k: (float(self._positions[k][0]), float(self._positions[k][1]))
+            for k in all_keys
+            if k in self._positions
+        }
+
+        if mode == 'fr':
+            placed = apply_fr(all_keys, edges, pinned=pinned, center=(cx, cy))
+        elif mode == 'forceatlas2':
+            placed = apply_forceatlas2(
+                all_keys, edges, pinned=pinned, center=(cx, cy)
+            )
+        else:  # 'tree'
+            placed = apply_tree(all_keys, edges, pinned=pinned, center=(cx, cy))
+
+        for k, (x, y) in placed.items():
+            self._positions[k] = (x, y)
 
     def _apply_radial_layout(self, auto_keys: List[str], cx: int, cy: int) -> None:
         """Hub-and-spokes layout with compaction.

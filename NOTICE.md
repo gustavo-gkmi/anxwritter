@@ -30,6 +30,23 @@ compiled binaries, DLLs, `.ant` files, help text, or error messages.
 All such content must be supplied by the user via their own `entity_types`,
 `link_types`, `attribute_classes`, and `semantic_*` declarations.
 
+## Layout algorithms
+
+`anxwritter/layouts/` contains clean-room implementations of three
+published algorithms. No third-party implementation code was consulted.
+
+- **Fruchterman-Reingold** — Fruchterman & Reingold (1991), "Graph
+  drawing by force-directed placement", *Software: Practice and
+  Experience* 21(11), 1129-1164.
+- **ForceAtlas2** — Jacomy, Venturini, Heymann & Bastian (2014),
+  "ForceAtlas2, a Continuous Graph Layout Algorithm for Handy
+  Network Visualization", *PLOS ONE* 9(6): e98679 (CC-BY 4.0).
+- **Tidy tree** (n-ary generalization) — Reingold & Tilford (1981),
+  "Tidier drawings of trees", *IEEE TSE* SE-7(2), 223-228.
+
+Algorithm names are used nominatively; no endorsement by the authors
+or their institutions is implied.
+
 ## Trademarks
 
 "i2", "i2 Analyst's Notebook", "ANB", "Esri", "Esri Maps",

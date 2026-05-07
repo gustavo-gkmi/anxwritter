@@ -903,7 +903,7 @@ dataclass) to the `ANXChart` constructor.
 ```python
 chart = ANXChart(settings={
     'extra_cfg': {
-        'arrange': 'grid',            # layout: 'radial' (default), 'circle', 'grid', or 'random'
+        'arrange': 'grid',            # layout: 'radial' (default), 'circle', 'grid', 'random', 'fr', 'forceatlas2', or 'tree'
         'entity_auto_color': True,    # auto-assign colours to entities
         'link_match_entity_color': True,
         'link_arc_offset': 20,        # parallel link spacing in pixels
@@ -941,7 +941,7 @@ chart.settings.view.time_bar = True
 
 | Setting | What it does |
 |---------|-------------|
-| `extra_cfg.arrange` | Layout algorithm: `'radial'` (default), `'circle'`, `'grid'`, `'random'` |
+| `extra_cfg.arrange` | Layout algorithm. Geometric: `'radial'` (default), `'circle'`, `'grid'`, `'random'`. Topology-aware: `'fr'`, `'forceatlas2'` (recommended for community reveal), `'tree'`. Aliases `'fa2'`, `'fruchterman_reingold'`, `'reingold_tilford'` accepted. |
 | `extra_cfg.entity_auto_color` | Auto-assign colours to uncoloured entities |
 | `extra_cfg.link_match_entity_color` | Colour link lines to match the destination entity |
 | `extra_cfg.link_arc_offset` | Pixel spacing between parallel links (default 20) |
@@ -953,6 +953,59 @@ chart.settings.view.time_bar = True
 | `legend_cfg.show` | Show the legend panel |
 
 For all available settings fields, see the [settings reference](../reference/settings.md).
+
+### Layout algorithms
+
+`extra_cfg.arrange` chooses how entities without explicit `x`/`y`
+positions are placed on the canvas. Two families are available.
+
+**Geometric** layouts ignore link structure and place entities by
+order:
+
+- `'radial'` (default) — hub-and-spokes; fastest, best for charts you
+  intend to re-arrange manually in ANB anyway.
+- `'circle'` — every entity on a single ring.
+- `'grid'` — square grid, row-major.
+- `'random'` — random placement (useful as a baseline).
+
+**Topology-aware** layouts use the link structure to reveal
+clusters, hubs, and hierarchy:
+
+- `'forceatlas2'` (alias `'fa2'`) — **recommended** for general
+  link-analysis charts. Reveals communities clearly. Has tunables for
+  cluster separation (`lin_log`), hub treatment (`dissuade_hubs`), and
+  centripetal pull (`gravity`, `strong_gravity`).
+- `'fr'` (alias `'fruchterman_reingold'`) — the classic force-directed
+  algorithm. A good default when you want a balanced, symmetric
+  layout.
+- `'tree'` (alias `'reingold_tilford'`) — tidy tree drawing for
+  hierarchical data (org charts, transaction flows, command
+  structures). Builds a BFS spanning forest internally; non-tree
+  edges are still drawn but not used for positioning.
+
+Pinned entities (those with explicit `x`/`y` set) act as fixed
+anchors for `'fr'` and `'forceatlas2'`. For `'tree'`, pinned
+positions are kept exactly as set; the rest of the tree is laid out
+around them.
+
+```python
+# Default — geometric, fast
+chart = ANXChart()
+
+# Recommended for community reveal
+chart = ANXChart(settings={'extra_cfg': {'arrange': 'forceatlas2'}})
+
+# Classic force-directed
+chart = ANXChart(settings={'extra_cfg': {'arrange': 'fr'}})
+
+# Hierarchical
+chart = ANXChart(settings={'extra_cfg': {'arrange': 'tree'}})
+```
+
+The topology-aware layouts are clean-room implementations from the
+following published papers — Fruchterman & Reingold (1991) for `'fr'`,
+Jacomy et al. (2014, PLOS ONE, CC-BY) for `'forceatlas2'`, and
+Reingold & Tilford (1981) for `'tree'`.
 
 ---
 
