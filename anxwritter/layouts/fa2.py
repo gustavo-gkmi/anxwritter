@@ -155,9 +155,3 @@ def apply_forceatlas2(
             int(round(pos[i, 1] * scale + cy)),
         )
     return out
-= idx[nm]
-        out[nm] = (
-            int(round(pos[i, 0] * scale + cx)),
-            int(round(pos[i, 1] * scale + cy)),
-        )
-    return out

@@ -2470,7 +2470,7 @@ class ANXBuilder:
         elif mode == 'forceatlas2':
             placed = apply_forceatlas2(
                 all_keys, edges, pinned=pinned, center=(cx, cy),
-                scale=200.0 * scale_factor,
+                scale=60.0 * scale_factor,
             )
         else:  # 'tree'
             placed = apply_tree(
@@ -2699,89 +2699,6 @@ _NS_MAP: Dict[str, str] = {}
 _TAG_CACHE: Dict[str, str] = {}
 
 def _init_ns_map() -> None:
-    """Build URI→prefix map from ET's registered namespaces."""
-    # ET._namespace_map stores uri→prefix (set by register_namespace)
-    for uri, prefix in ET._namespace_map.items():
-        _NS_MAP[uri] = prefix
-    _TAG_CACHE.clear()  # namespace map changed — invalidate resolved tag cache
-
-_ESC_TABLE = str.maketrans({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-})
-
-# Pre-built indent strings for depths 0–19 (avoids '  ' * depth on every _walk call)
-_INDENT = tuple('  ' * i for i in range(20))
-
-def _esc(s: str) -> str:
-    return s.translate(_ESC_TABLE)
-
-def _resolve_tag(tag: str) -> str:
-    """Convert {uri}local to prefix:local using registered namespaces."""
-    resolved = _TAG_CACHE.get(tag)
-    if resolved is not None:
-        return resolved
-    if tag[0] == '{':
-        uri, local = tag[1:].split('}', 1)
-        prefix = _NS_MAP.get(uri)
-        resolved = f'{prefix}:{local}' if prefix else local
-    else:
-        resolved = tag
-    _TAG_CACHE[tag] = resolved
-    return resolved
-
-def _fast_serialize(root: ET.Element) -> str:
-    """Serialize an ElementTree to a pretty-printed UTF-16 XML string."""
-    _init_ns_map()
-    parts: list[str] = []
-    from anxwritter import __version__, __repo_url__
-    parts.append('<?xml version=\'1.0\' encoding=\'utf-16\'?>\n')
-    comment = f'Built with anxwritter {__version__}'
-    if __repo_url__:
-        comment += f' \u2014 {__repo_url__}'
-    parts.append(f'<!-- {comment} -->\n')
-    _walk(root, parts, 0)
-    return ''.join(parts)
-
-def _walk(el: ET.Element, parts: list[str], depth: int) -> None:
-    indent = _INDENT[depth] if depth < 20 else '  ' * depth
-    tag = _resolve_tag(el.tag)
-
-    # Opening tag — build as a single string to minimise append calls
-    if el.attrib:
-        attrs = ''.join(
-            f' {_resolve_tag(k) if "{" in k else k}="{_esc(str(v))}"'
-            for k, v in el.attrib.items()
-        )
-        open_tag = f'{indent}<{tag}{attrs}'
-    else:
-        open_tag = f'{indent}<{tag}'
-
-    has_children = len(el) > 0
-    text = el.text
-
-    if not has_children and not text:
-        parts.append(f'{open_tag}/>\n')
-        return
-
-    if text:
-        if has_children:
-            # Mixed content — rare in ANX
-            parts.append(f'{open_tag}>\n{_INDENT[depth + 1] if depth + 1 < 20 else "  " * (depth + 1)}{text.translate(_ESC_TABLE)}\n')
-        else:
-            # Text-only element — inline
-            parts.append(f'{open_tag}>{text.translate(_ESC_TABLE)}</{tag}>\n')
-            return
-    else:
-        parts.append(f'{open_tag}>\n')
-
-    for child in el:
-        _walk(child, parts, depth + 1)
-
-    parts.append(f'{indent}</{tag}>\n')
-> None:
     """Build URI→prefix map from ET's registered namespaces."""
     # ET._namespace_map stores uri→prefix (set by register_namespace)
     for uri, prefix in ET._namespace_map.items():
