@@ -942,6 +942,7 @@ chart.settings.view.time_bar = True
 | Setting | What it does |
 |---------|-------------|
 | `extra_cfg.arrange` | Layout algorithm. Geometric: `'radial'` (default), `'circle'`, `'grid'`, `'random'`. Topology-aware: `'fr'`, `'forceatlas2'` (recommended for community reveal), `'tree'`. Aliases `'fa2'`, `'fruchterman_reingold'`, `'reingold_tilford'` accepted. |
+| `extra_cfg.layout_scale` | Uniform spread multiplier across all `arrange` modes (default `1.0`). Use `1.5` or `2.0` if entities feel cramped, `0.5` if the layout feels too sparse. Pinned entities ignore this. |
 | `extra_cfg.entity_auto_color` | Auto-assign colours to uncoloured entities |
 | `extra_cfg.link_match_entity_color` | Colour link lines to match the destination entity |
 | `extra_cfg.link_arc_offset` | Pixel spacing between parallel links (default 20) |
@@ -1000,6 +1001,12 @@ chart = ANXChart(settings={'extra_cfg': {'arrange': 'fr'}})
 
 # Hierarchical
 chart = ANXChart(settings={'extra_cfg': {'arrange': 'tree'}})
+
+# Spread the layout out 50% — works on every arrange mode
+chart = ANXChart(settings={'extra_cfg': {
+    'arrange': 'forceatlas2',
+    'layout_scale': 1.5,
+}})
 ```
 
 The topology-aware layouts are clean-room implementations from the
@@ -1171,6 +1178,47 @@ chart.add_attribute_class(name='Balance', type='number', prefix='R$ ', decimal_p
 chart.add_attribute_class(name='Phone',  type='text',   prefix='Tel: ')
 chart.add_attribute_class(name='Active', type='flag',   show_if_set=True)
 chart.add_attribute_class(name='Weight', type='number', suffix=' kg', decimal_places=1)
+
+# Strengths
+chart.add_strength(name='Confirmed', dot_style=DotStyle.SOLID)
+chart.add_strength(name='Tentative', dot_style=DotStyle.DASHED)
+
+# Legend
+chart.add_legend_item(name='Person', item_type='Icon')
+chart.add_legend_item(name='Confirmed', item_type='Line',
+                      color=0, line_width=2, dash_style='solid')
+chart.add_legend_item(name='Tentative', item_type='Line',
+                      color=0, line_width=1, dash_style='dashed')
+
+# Entities with attributes
+chart.add_icon(
+    id='Alice', type='Person', color='Blue',
+    strength='Confirmed',
+    attributes={
+        'Phone': '555-0001',
+        'Balance': 12500.75,
+        'Active': True,
+        'Weight': 68.5,
+    },
+)
+chart.add_icon(
+    id='Bob', type='Person', color='Red',
+    strength='Tentative',
+    attributes={
+        'Phone': '555-0002',
+        'Balance': 340.00,
+        'Active': False,
+        'Weight': 82.3,
+    },
+)
+
+chart.add_link(from_id='Alice', to_id='Bob', type='Associate',
+               strength='Tentative')
+
+path = chart.to_anx('output/configured_attributes')
+print(f'Written: {path}')
+```
+dd_attribute_class(name='Weight', type='number', suffix=' kg', decimal_places=1)
 
 # Strengths
 chart.add_strength(name='Confirmed', dot_style=DotStyle.SOLID)

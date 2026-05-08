@@ -2023,9 +2023,17 @@ class ANXBuilder:
 
         with _timer.phase("Apply layout"):
             # Apply auto-layout to all registered entities
+            try:
+                _ls_raw = _resolve_path(s, 'extra_cfg.layout_scale')
+                _layout_scale = float(_ls_raw) if _ls_raw is not None else 1.0
+            except (TypeError, ValueError):
+                _layout_scale = 1.0
+            if _layout_scale <= 0:
+                _layout_scale = 1.0
             self._apply_layout(
                 _resolve_path(s, 'extra_cfg.arrange') or 'radial',
                 center=layout_center,
+                scale_factor=_layout_scale,
             )
 
         with _timer.phase("Root element"):
@@ -2348,7 +2356,13 @@ class ANXBuilder:
 
     # ── Layout ───────────────────────────────────────────────────────────────
 
-    def _apply_layout(self, mode: str, center: tuple = (0, 0)) -> None:
+    def _apply_layout(
+        self,
+        mode: str,
+        center: tuple = (0, 0),
+        *,
+        scale_factor: float = 1.0,
+    ) -> None:
         """Calculate (X, Y) positions for all registered entities.
 
         Entities that already have a position in ``_positions`` (set manually
@@ -2364,6 +2378,11 @@ class ANXBuilder:
                 are also accepted.
             center: ``(cx, cy)`` offset for the layout origin. Used by geo_map
                 to place unmatched entities below the geo-positioned area.
+            scale_factor: Uniform spread multiplier (default ``1.0``). Applied
+                across all algorithms — multiplies hub/leaf radii (radial),
+                ring radius (circle), grid spacing, random extent, the
+                force-directed simulation scales (FR / FA2), and the tree
+                ``x_spacing`` / ``y_spacing``.
         """
         from .layouts import normalize_arrange
 
@@ -2377,7 +2396,7 @@ class ANXBuilder:
 
         if mode == 'grid':
             cols = math.ceil(math.sqrt(n))
-            spacing = 200
+            spacing = int(round(200 * scale_factor))
             for i, key in enumerate(auto_keys):
                 row_i, col_i = divmod(i, cols)
                 x = cx + col_i * spacing - (cols - 1) * spacing // 2
@@ -2385,7 +2404,7 @@ class ANXBuilder:
                 self._positions[key] = (x, y)
 
         elif mode == 'circle':
-            radius = max(150, n * 35)
+            radius = max(150, n * 35) * scale_factor
             for i, key in enumerate(auto_keys):
                 angle = 2 * math.pi * i / n
                 x = cx + int(radius * math.cos(angle))
@@ -2393,17 +2412,18 @@ class ANXBuilder:
                 self._positions[key] = (x, y)
 
         elif mode == 'radial':
-            self._apply_radial_layout(auto_keys, cx, cy)
+            self._apply_radial_layout(auto_keys, cx, cy, scale_factor=scale_factor)
 
         elif mode in ('fr', 'forceatlas2', 'tree'):
-            self._apply_topology_layout(mode, keys, cx, cy)
+            self._apply_topology_layout(mode, keys, cx, cy, scale_factor=scale_factor)
 
         else:  # random
             import random
             rng = random.Random(42)
+            extent = int(round(400 * scale_factor))
             for key in auto_keys:
-                x = cx + rng.randint(-400, 400)
-                y = cy + rng.randint(-400, 400)
+                x = cx + rng.randint(-extent, extent)
+                y = cy + rng.randint(-extent, extent)
                 self._positions[key] = (x, y)
 
     def _apply_topology_layout(
@@ -2412,6 +2432,8 @@ class ANXBuilder:
         all_keys: List[str],
         cx: int,
         cy: int,
+        *,
+        scale_factor: float = 1.0,
     ) -> None:
         """Run a topology-aware layout (``fr`` / ``forceatlas2`` / ``tree``).
 
@@ -2441,18 +2463,33 @@ class ANXBuilder:
         }
 
         if mode == 'fr':
-            placed = apply_fr(all_keys, edges, pinned=pinned, center=(cx, cy))
+            placed = apply_fr(
+                all_keys, edges, pinned=pinned, center=(cx, cy),
+                scale=800.0 * scale_factor,
+            )
         elif mode == 'forceatlas2':
             placed = apply_forceatlas2(
-                all_keys, edges, pinned=pinned, center=(cx, cy)
+                all_keys, edges, pinned=pinned, center=(cx, cy),
+                scale=200.0 * scale_factor,
             )
         else:  # 'tree'
-            placed = apply_tree(all_keys, edges, pinned=pinned, center=(cx, cy))
+            placed = apply_tree(
+                all_keys, edges, pinned=pinned, center=(cx, cy),
+                x_spacing=160.0 * scale_factor,
+                y_spacing=200.0 * scale_factor,
+            )
 
         for k, (x, y) in placed.items():
             self._positions[k] = (x, y)
 
-    def _apply_radial_layout(self, auto_keys: List[str], cx: int, cy: int) -> None:
+    def _apply_radial_layout(
+        self,
+        auto_keys: List[str],
+        cx: int,
+        cy: int,
+        *,
+        scale_factor: float = 1.0,
+    ) -> None:
         """Hub-and-spokes layout with compaction.
 
         Builds the entity adjacency graph from resolved links, identifies
@@ -2503,7 +2540,9 @@ class ANXBuilder:
 
         # ── Place hubs ────────────────────────────────────────────────────
         n_hubs = len(hubs)
-        hub_ring_radius = 0 if n_hubs <= 1 else max(260, n_hubs * 70)
+        hub_ring_radius = (
+            0 if n_hubs <= 1 else max(260, n_hubs * 70) * scale_factor
+        )
         hub_pos: Dict[str, Tuple[int, int]] = {}
 
         if n_hubs == 1:
@@ -2525,7 +2564,7 @@ class ANXBuilder:
                 continue
             hx, hy = hub_pos[h]
             n_leaves = len(leaves)
-            leaf_radius = max(110, 25 + 14 * n_leaves)
+            leaf_radius = max(110, 25 + 14 * n_leaves) * scale_factor
 
             if n_hubs == 1:
                 # Full circle around lone hub
@@ -2554,8 +2593,8 @@ class ANXBuilder:
         # ── Place isolated entities in a grid below the layout ────────────
         if isolated:
             cols = math.ceil(math.sqrt(len(isolated)))
-            spacing = 160
-            y_offset = hub_ring_radius + 320
+            spacing = int(round(160 * scale_factor))
+            y_offset = int(round(hub_ring_radius + 320 * scale_factor))
             for i, key in enumerate(isolated):
                 row_i, col_i = divmod(i, cols)
                 x = cx + col_i * spacing - (cols - 1) * spacing // 2
@@ -2660,6 +2699,89 @@ _NS_MAP: Dict[str, str] = {}
 _TAG_CACHE: Dict[str, str] = {}
 
 def _init_ns_map() -> None:
+    """Build URI→prefix map from ET's registered namespaces."""
+    # ET._namespace_map stores uri→prefix (set by register_namespace)
+    for uri, prefix in ET._namespace_map.items():
+        _NS_MAP[uri] = prefix
+    _TAG_CACHE.clear()  # namespace map changed — invalidate resolved tag cache
+
+_ESC_TABLE = str.maketrans({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+})
+
+# Pre-built indent strings for depths 0–19 (avoids '  ' * depth on every _walk call)
+_INDENT = tuple('  ' * i for i in range(20))
+
+def _esc(s: str) -> str:
+    return s.translate(_ESC_TABLE)
+
+def _resolve_tag(tag: str) -> str:
+    """Convert {uri}local to prefix:local using registered namespaces."""
+    resolved = _TAG_CACHE.get(tag)
+    if resolved is not None:
+        return resolved
+    if tag[0] == '{':
+        uri, local = tag[1:].split('}', 1)
+        prefix = _NS_MAP.get(uri)
+        resolved = f'{prefix}:{local}' if prefix else local
+    else:
+        resolved = tag
+    _TAG_CACHE[tag] = resolved
+    return resolved
+
+def _fast_serialize(root: ET.Element) -> str:
+    """Serialize an ElementTree to a pretty-printed UTF-16 XML string."""
+    _init_ns_map()
+    parts: list[str] = []
+    from anxwritter import __version__, __repo_url__
+    parts.append('<?xml version=\'1.0\' encoding=\'utf-16\'?>\n')
+    comment = f'Built with anxwritter {__version__}'
+    if __repo_url__:
+        comment += f' \u2014 {__repo_url__}'
+    parts.append(f'<!-- {comment} -->\n')
+    _walk(root, parts, 0)
+    return ''.join(parts)
+
+def _walk(el: ET.Element, parts: list[str], depth: int) -> None:
+    indent = _INDENT[depth] if depth < 20 else '  ' * depth
+    tag = _resolve_tag(el.tag)
+
+    # Opening tag — build as a single string to minimise append calls
+    if el.attrib:
+        attrs = ''.join(
+            f' {_resolve_tag(k) if "{" in k else k}="{_esc(str(v))}"'
+            for k, v in el.attrib.items()
+        )
+        open_tag = f'{indent}<{tag}{attrs}'
+    else:
+        open_tag = f'{indent}<{tag}'
+
+    has_children = len(el) > 0
+    text = el.text
+
+    if not has_children and not text:
+        parts.append(f'{open_tag}/>\n')
+        return
+
+    if text:
+        if has_children:
+            # Mixed content — rare in ANX
+            parts.append(f'{open_tag}>\n{_INDENT[depth + 1] if depth + 1 < 20 else "  " * (depth + 1)}{text.translate(_ESC_TABLE)}\n')
+        else:
+            # Text-only element — inline
+            parts.append(f'{open_tag}>{text.translate(_ESC_TABLE)}</{tag}>\n')
+            return
+    else:
+        parts.append(f'{open_tag}>\n')
+
+    for child in el:
+        _walk(child, parts, depth + 1)
+
+    parts.append(f'{indent}</{tag}>\n')
+> None:
     """Build URI→prefix map from ET's registered namespaces."""
     # ET._namespace_map stores uri→prefix (set by register_namespace)
     for uri, prefix in ET._namespace_map.items():

@@ -343,6 +343,95 @@ def test_default_arrange_still_radial():
     assert pos['hub'] == (0, 0)
 
 
+# ── layout_scale ───────────────────────────────────────────────────────────
+
+
+def _hub_spoke_span(mode: str, layout_scale=None) -> tuple:
+    """Build a 7-node hub-spoke chart and return (x_span, y_span)."""
+    settings = {'extra_cfg': {'arrange': mode}}
+    if layout_scale is not None:
+        settings['extra_cfg']['layout_scale'] = layout_scale
+    c = ANXChart(settings=settings)
+    c.add_icon(id='hub', type='T')
+    for i in range(6):
+        nm = f'leaf{i}'
+        c.add_icon(id=nm, type='T')
+        c.add_link(from_id='hub', to_id=nm, type='X')
+    pos = _positions(c)
+    xs = [v[0] for v in pos.values()]
+    ys = [v[1] for v in pos.values()]
+    return (max(xs) - min(xs), max(ys) - min(ys))
+
+
+@pytest.mark.parametrize("mode",
+    ['radial', 'circle', 'grid', 'random', 'fr', 'forceatlas2', 'tree'])
+def test_layout_scale_default_unchanged(mode):
+    """layout_scale unset must produce the same layout as layout_scale=1.0."""
+    no_arg = _hub_spoke_span(mode)
+    one = _hub_spoke_span(mode, layout_scale=1.0)
+    assert no_arg == one
+
+
+@pytest.mark.parametrize("mode",
+    ['radial', 'circle', 'grid', 'fr', 'forceatlas2', 'tree'])
+def test_layout_scale_doubles_spread(mode):
+    """layout_scale=2.0 produces ~2x the spread of layout_scale=1.0.
+
+    Random is excluded — seeded RNG on different extents gives a span that
+    correlates with the multiplier but is not strictly proportional.
+    """
+    span_1 = _hub_spoke_span(mode, layout_scale=1.0)
+    span_2 = _hub_spoke_span(mode, layout_scale=2.0)
+    for d in (0, 1):
+        if span_1[d] == 0:
+            continue
+        ratio = span_2[d] / span_1[d]
+        assert 1.9 <= ratio <= 2.1, (
+            f"{mode} dim {d}: 2x scale gave ratio {ratio:.3f} "
+            f"(span_1={span_1}, span_2={span_2})"
+        )
+
+
+def test_layout_scale_random_extent_grows():
+    """Random layout extent grows with layout_scale (proportional in expectation)."""
+    span_1 = _hub_spoke_span('random', layout_scale=1.0)
+    span_2 = _hub_spoke_span('random', layout_scale=2.0)
+    assert max(span_2) > max(span_1) * 1.4
+
+
+@pytest.mark.parametrize("mode",
+    ['radial', 'circle', 'grid', 'random', 'fr', 'forceatlas2', 'tree'])
+def test_layout_scale_invalid_falls_back_to_1(mode):
+    """Non-positive or non-numeric layout_scale falls back to 1.0."""
+    span_default = _hub_spoke_span(mode)
+    for bad in (0, -1.5, 'oops', None):
+        c = ANXChart(settings={'extra_cfg': {
+            'arrange': mode, 'layout_scale': bad,
+        }})
+        c.add_icon(id='hub', type='T')
+        for i in range(6):
+            nm = f'leaf{i}'
+            c.add_icon(id=nm, type='T')
+            c.add_link(from_id='hub', to_id=nm, type='X')
+        pos = _positions(c)
+        xs = [v[0] for v in pos.values()]
+        ys = [v[1] for v in pos.values()]
+        span = (max(xs) - min(xs), max(ys) - min(ys))
+        assert span == span_default, f"{mode} with {bad!r}: {span} != {span_default}"
+
+
+def test_layout_scale_pinned_unchanged():
+    """Pinned positions are absolute and ignore layout_scale."""
+    for mode in ('fr', 'forceatlas2', 'tree'):
+        c = ANXChart(settings={'extra_cfg': {
+            'arrange': mode, 'layout_scale': 3.0,
+        }})
+        c.add_icon(id='pinned', type='T', x=100, y=200)
+        c.add_icon(id='other', type='T')
+        c.add_link(from_id='pinned', to_id='other', type='X')
+        assert _positions(c)['pinned'] == (100, 200)
+
+
 # ── Perf marker (excluded from default runs) ───────────────────────────────
 
 

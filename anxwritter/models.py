@@ -315,6 +315,7 @@ class ExtraCfg:
     entity_auto_color: Optional[bool] = None       # Distribute HSV hues
     link_match_entity_color: Optional[bool] = None # Set link line to to_id entity color
     arrange: Optional[str] = None                  # Auto-layout: 'radial' (default) / 'circle' / 'grid' / 'random' / 'fr' / 'forceatlas2' / 'tree'
+    layout_scale: Optional[float] = None           # Uniform spread multiplier across all arrange modes (default 1.0)
     link_arc_offset: Optional[int] = None          # Parallel-link arc offset
     geo_map: Optional[GeoMapCfg] = None            # Geographic positioning
 
@@ -713,6 +714,22 @@ class SemanticLink:
     synonyms: Optional[List[str]] = None
     description: Optional[str] = None
 
+
+@dataclass
+class SemanticProperty:
+    """Custom property semantic type (``lcx:Property``).
+
+    Property semantic types have four abstract roots: Abstract Text, Abstract Number,
+    Abstract Date & Time, Abstract Flag. ``base_property`` must reference an existing
+    property name from the standard catalogue or another SemanticProperty.
+    """
+
+    name: str = ''                                   # PropertyName (required)
+    base_property: str = ''                          # Parent property name (required)
+    guid: Optional[str] = None                       # Override GUID (auto-generated if None)
+    abstract: bool = False
+    synonyms: Optional[List[str]] = None
+    description: Optional[str] = None
 
 @dataclass
 class SemanticProperty:

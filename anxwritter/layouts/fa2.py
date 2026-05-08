@@ -39,7 +39,7 @@ def apply_forceatlas2(
     strong_gravity: bool = False,
     lin_log: bool = False,
     dissuade_hubs: bool = False,
-    scale: float = 100.0,
+    scale: float = 60.0,
     center: Tuple[float, float] = (0.0, 0.0),
 ) -> Dict[str, Tuple[int, int]]:
     """ForceAtlas2 layout.
@@ -150,6 +150,12 @@ def apply_forceatlas2(
         if nm in pinned:
             continue
         i = idx[nm]
+        out[nm] = (
+            int(round(pos[i, 0] * scale + cx)),
+            int(round(pos[i, 1] * scale + cy)),
+        )
+    return out
+= idx[nm]
         out[nm] = (
             int(round(pos[i, 0] * scale + cx)),
             int(round(pos[i, 1] * scale + cy)),
