@@ -522,6 +522,7 @@ settings:
 
   extra_cfg:                          # anxwritter-only knobs (NOT in ANX XML)
     arrange: grid                     # radial (default) | circle | grid | random | fr | forceatlas2 | tree
+    layout_scale: 1.5                 # uniform spread multiplier across all arrange modes (default 1.0)
     entity_auto_color: true
     link_match_entity_color: true
     link_arc_offset: 25

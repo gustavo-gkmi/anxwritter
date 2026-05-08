@@ -315,6 +315,7 @@ class ExtraCfg:
     entity_auto_color: Optional[bool] = None       # Distribute HSV hues
     link_match_entity_color: Optional[bool] = None # Set link line to to_id entity color
     arrange: Optional[str] = None                  # Auto-layout: 'radial' (default) / 'circle' / 'grid' / 'random' / 'fr' / 'forceatlas2' / 'tree'
+    layout_scale: Optional[float] = None           # Uniform spread multiplier across all arrange modes (default 1.0)
     link_arc_offset: Optional[int] = None          # Parallel-link arc offset
     geo_map: Optional[GeoMapCfg] = None            # Geographic positioning
 

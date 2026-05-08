@@ -942,6 +942,7 @@ chart.settings.view.time_bar = True
 | Setting | What it does |
 |---------|-------------|
 | `extra_cfg.arrange` | Layout algorithm. Geometric: `'radial'` (default), `'circle'`, `'grid'`, `'random'`. Topology-aware: `'fr'`, `'forceatlas2'` (recommended for community reveal), `'tree'`. Aliases `'fa2'`, `'fruchterman_reingold'`, `'reingold_tilford'` accepted. |
+| `extra_cfg.layout_scale` | Uniform spread multiplier across all `arrange` modes (default `1.0`). Use `1.5` or `2.0` if entities feel cramped, `0.5` if the layout feels too sparse. Pinned entities ignore this. |
 | `extra_cfg.entity_auto_color` | Auto-assign colours to uncoloured entities |
 | `extra_cfg.link_match_entity_color` | Colour link lines to match the destination entity |
 | `extra_cfg.link_arc_offset` | Pixel spacing between parallel links (default 20) |
@@ -1000,6 +1001,12 @@ chart = ANXChart(settings={'extra_cfg': {'arrange': 'fr'}})
 
 # Hierarchical
 chart = ANXChart(settings={'extra_cfg': {'arrange': 'tree'}})
+
+# Spread the layout out 50% — works on every arrange mode
+chart = ANXChart(settings={'extra_cfg': {
+    'arrange': 'forceatlas2',
+    'layout_scale': 1.5,
+}})
 ```
 
 The topology-aware layouts are clean-room implementations from the
