@@ -1547,8 +1547,10 @@ class ANXChart:
                 _geo_mode = gm.mode or 'both'
                 _geo_data = resolve_geo_data(gm)
                 if _geo_data:
+                    _geo_fold = gm.accent_insensitive if gm.accent_insensitive is not None else True
                     _geo_matched = match_geo_entities(
                         self._entities, _geo_data, gm.attribute_name,
+                        accent_insensitive=_geo_fold,
                     )
                     # Set positions for 'position' and 'both' modes
                     if _geo_mode in ('position', 'both') and _geo_matched:
