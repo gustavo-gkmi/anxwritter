@@ -593,6 +593,28 @@ settings:
       data_file: city_coords.json     # JSON or YAML, key -> [lat, lon]
 ```
 
+The external file is a flat top-level mapping of key → `[lat, lon]` — same
+shape as the inline `data:` block above. Both formats are accepted; pick by
+file extension.
+
+`city_coords.json`:
+
+```json
+{
+  "New York": [40.7128, -74.0060],
+  "London": [51.5074, -0.1278],
+  "Tokyo": [35.6762, 139.6503]
+}
+```
+
+`city_coords.yaml`:
+
+```yaml
+New York: [40.7128, -74.0060]
+London: [51.5074, -0.1278]
+Tokyo: [35.6762, 139.6503]
+```
+
 The CLI's `--geo-data` flag does the same thing on the command line:
 
 ```bash

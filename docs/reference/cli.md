@@ -99,6 +99,27 @@ Exits `0` without building or writing an `.anx`. Stdin is not read when no input
 anxwritter --config org.yaml --geo-data coords.json data.json -o output/chart.anx
 ```
 
+The file is a flat top-level mapping of key → `[lat, lon]`. JSON and YAML are
+both accepted; pick by file extension.
+
+`coords.json`:
+
+```json
+{
+  "New York": [40.7128, -74.0060],
+  "London": [51.5074, -0.1278],
+  "Tokyo": [35.6762, 139.6503]
+}
+```
+
+`coords.yaml`:
+
+```yaml
+New York: [40.7128, -74.0060]
+London: [51.5074, -0.1278]
+Tokyo: [35.6762, 139.6503]
+```
+
 ---
 
 ## Exit codes
