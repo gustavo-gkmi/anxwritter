@@ -730,19 +730,3 @@ class SemanticProperty:
     abstract: bool = False
     synonyms: Optional[List[str]] = None
     description: Optional[str] = None
-
-@dataclass
-class SemanticProperty:
-    """Custom property semantic type (``lcx:Property``).
-
-    Property semantic types have four abstract roots: Abstract Text, Abstract Number,
-    Abstract Date & Time, Abstract Flag. ``base_property`` must reference an existing
-    property name from the standard catalogue or another SemanticProperty.
-    """
-
-    name: str = ''                                   # PropertyName (required)
-    base_property: str = ''                          # Parent property name (required)
-    guid: Optional[str] = None                       # Override GUID (auto-generated if None)
-    abstract: bool = False
-    synonyms: Optional[List[str]] = None
-    description: Optional[str] = None
