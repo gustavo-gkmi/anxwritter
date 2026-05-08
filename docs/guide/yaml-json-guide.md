@@ -621,6 +621,12 @@ The CLI's `--geo-data` flag does the same thing on the command line:
 anxwritter --config org.yaml --geo-data city_coords.json data.yaml -o out.anx
 ```
 
+Matching is **case- and accent-insensitive by default**: `São Paulo/SP`,
+`SAO PAULO/SP`, and `sao paulo/sp` all match the same key. Set
+`accent_insensitive: false` under `geo_map` if you need strict matching
+(e.g. when accented and unaccented forms intentionally point at different
+coordinates).
+
 Full GeoMapCfg field details:
 [settings.md § GeoMapCfg](../reference/settings.md#geomapcfg-fields).
 

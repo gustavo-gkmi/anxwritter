@@ -101,6 +101,7 @@ These fields control anxwritter behavior only. They are NOT written to the ANX X
 | `spread_radius` | `Optional[int]` | `None` (= `0`) | Circle radius for separating multiple entities sharing the same geo key. |
 | `data` | `Optional[Dict[str, List[float]]]` | `None` | Inline lookup: `{key: [lat, lon]}`. |
 | `data_file` | `Optional[str]` | `None` | Path to an external JSON or YAML file with the same shape as `data`. Inline `data` takes precedence on key conflicts. |
+| `accent_insensitive` | `Optional[bool]` | `None` (= `True`) | Fold Unicode diacritics during matching, so `São Paulo`, `SAO PAULO`, and `sao paulo` all match the same key. Applied symmetrically to lookup keys and entity attribute values. Set to `False` for strict matching when your keys intentionally distinguish accented and unaccented forms. |
 
 ---
 

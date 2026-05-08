@@ -292,6 +292,83 @@ class TestCaseInsensitive:
         assert 'A' in pos
 
 
+# ── Tests: Accent-insensitive matching ─────────────────────────────────────
+
+
+class TestAccentInsensitive:
+    """Folds Unicode diacritics during matching when accent_insensitive (default).
+
+    Symmetric: any combination of accented/unaccented on the lookup-key side and
+    the entity-attribute-value side should match. Disabling the flag restores
+    strict (lowercase-exact) matching.
+    """
+
+    @pytest.mark.parametrize("attr_value", [
+        'São Paulo/SP',     # full accents
+        'SÃO PAULO/SP',     # accents + uppercase
+        'SAO PAULO/SP',     # uppercased, no accents
+        'sao paulo/sp',     # lowercase, no accents
+        'Sao Paulo/SP',     # title case, no accents (matches the key verbatim)
+        '  São Paulo/SP  ', # leading/trailing whitespace
+    ])
+    def test_accented_and_unaccented_variants_all_match(self, attr_value):
+        """Any case+accent combination on the entity side hits a plain-ASCII key."""
+        chart = ANXChart(settings=Settings(extra_cfg=ExtraCfg(geo_map=GeoMapCfg(
+            attribute_name='City', mode='position',
+            data={'Sao Paulo/SP': [-23.55, -46.63]},
+        ))))
+        chart.add_icon(id='A', type='Person', attributes={'City': attr_value})
+        xml = chart.to_xml()
+        pos = _parse_positions(xml)
+        assert 'A' in pos
+
+    @pytest.mark.parametrize("key", [
+        'São Paulo/SP',
+        'SÃO PAULO/SP',
+        'sao paulo/sp',
+        'Sao Paulo/SP',
+    ])
+    def test_accented_and_unaccented_keys_all_match(self, key):
+        """Any case+accent combination on the lookup-key side hits a plain-ASCII value."""
+        chart = ANXChart(settings=Settings(extra_cfg=ExtraCfg(geo_map=GeoMapCfg(
+            attribute_name='City', mode='position',
+            data={key: [-23.55, -46.63]},
+        ))))
+        chart.add_icon(id='A', type='Person', attributes={'City': 'sao paulo/sp'})
+        xml = chart.to_xml()
+        pos = _parse_positions(xml)
+        assert 'A' in pos
+
+    def test_strict_mode_rejects_accent_mismatch(self):
+        """With accent_insensitive=False, accented and unaccented forms diverge."""
+        chart = ANXChart(settings=Settings(extra_cfg=ExtraCfg(geo_map=GeoMapCfg(
+            attribute_name='City', mode='position',
+            data={'Sao Paulo/SP': [-23.55, -46.63]},
+            accent_insensitive=False,
+        ))))
+        chart.add_icon(id='A', type='Person', attributes={'City': 'São Paulo/SP'})
+        # E4-style fallback: unmatched entities are placed below the geo bbox.
+        # Add a matched anchor so we can prove the accented entity *didn't* land
+        # on the same projected position.
+        chart.add_icon(id='B', type='Person', attributes={'City': 'sao paulo/sp'})
+        xml = chart.to_xml()
+        pos = _parse_positions(xml)
+        # B matched (lowercase ASCII == lowercase key), A fell through to fallback.
+        assert pos['A'] != pos['B']
+
+    def test_strict_mode_keeps_case_insensitive(self):
+        """accent_insensitive=False does NOT disable case-insensitive matching."""
+        chart = ANXChart(settings=Settings(extra_cfg=ExtraCfg(geo_map=GeoMapCfg(
+            attribute_name='City', mode='position',
+            data={'sao paulo/sp': [-23.55, -46.63]},
+            accent_insensitive=False,
+        ))))
+        chart.add_icon(id='A', type='Person', attributes={'City': 'SAO PAULO/SP'})
+        xml = chart.to_xml()
+        pos = _parse_positions(xml)
+        assert 'A' in pos
+
+
 # ── Tests: Validation ──────────────────────────────────────────────────────
 
 

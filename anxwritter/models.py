@@ -307,6 +307,7 @@ class GeoMapCfg:
     spread_radius: Optional[int] = None      # Same-key entity circle spread (default 0)
     data: Optional[Dict[str, List[float]]] = None       # Inline key -> [lat, lon]
     data_file: Optional[str] = None          # External file path for data
+    accent_insensitive: Optional[bool] = None  # Fold diacritics during matching (default True)
 
 
 @dataclass

@@ -9,6 +9,7 @@ from __future__ import annotations
 import colorsys
 import json
 import math
+import unicodedata
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
@@ -301,17 +302,35 @@ def resolve_grade_names(
 # ── Geo-map transforms ──────────────────────────────────────────────────────
 
 
+def _norm_geo_key(s: Any, fold_accents: bool) -> str:
+    """Canonical form for geo lookup keys and entity attribute values.
+
+    Always lowercases and strips. When ``fold_accents`` is true, also folds
+    diacritics via Unicode NFKD so ``São Paulo`` matches ``Sao Paulo``.
+    """
+    out = str(s).strip().lower()
+    if fold_accents:
+        out = ''.join(
+            c for c in unicodedata.normalize('NFKD', out)
+            if not unicodedata.combining(c)
+        )
+    return out
+
+
 def resolve_geo_data(
     geo_map: 'GeoMapCfg',
     data_dir: Optional[Path] = None,
 ) -> Dict[str, Tuple[float, float]]:
     """Merge inline ``data`` and ``data_file`` into a normalised lookup.
 
-    Keys are lowercased and stripped for case-insensitive matching.
+    Keys are lowercased and stripped for case-insensitive matching. When
+    ``geo_map.accent_insensitive`` is true (the default), diacritics are
+    folded as well so ``São Paulo`` matches ``Sao Paulo``.
 
     Returns:
         Dict mapping normalised key to (latitude, longitude).
     """
+    fold = geo_map.accent_insensitive if geo_map.accent_insensitive is not None else True
     merged: Dict[str, Tuple[float, float]] = {}
 
     # Load external file first (inline data wins on conflict)
@@ -333,12 +352,12 @@ def resolve_geo_data(
         else:
             raw = json.loads(text)
         for k, v in raw.items():
-            merged[str(k).strip().lower()] = (float(v[0]), float(v[1]))
+            merged[_norm_geo_key(k, fold)] = (float(v[0]), float(v[1]))
 
     # Inline data overrides file data
     if geo_map.data:
         for k, v in geo_map.data.items():
-            merged[str(k).strip().lower()] = (float(v[0]), float(v[1]))
+            merged[_norm_geo_key(k, fold)] = (float(v[0]), float(v[1]))
 
     return merged
 
@@ -347,31 +366,34 @@ def match_geo_entities(
     entities: List[Any],
     geo_data: Dict[str, Tuple[float, float]],
     attribute_name: str,
+    accent_insensitive: bool = True,
 ) -> Dict[str, List[Tuple[str, float, float]]]:
     """Match entities to geo data by attribute value.
 
     Looks up ``attribute_name`` in each entity's ``attributes`` dict,
-    normalises the value (str, lowercase, stripped), and checks against
-    the geo_data keys.
+    normalises the value (str, lowercase, stripped, optionally NFKD-folded),
+    and checks against the geo_data keys. The caller is responsible for
+    passing the same ``accent_insensitive`` value used to build ``geo_data``.
 
     Returns:
         Dict mapping normalised geo key to list of
         ``(entity_id, latitude, longitude)`` tuples.
     """
-    attr_lower = attribute_name.strip().lower()
+    # Attribute *name* lookup is always accent- and case-insensitive — the
+    # field name is part of the schema, not user data, so folding it is safe.
+    attr_norm = _norm_geo_key(attribute_name, fold_accents=True)
     matched: Dict[str, List[Tuple[str, float, float]]] = defaultdict(list)
 
     for entity in entities:
         attrs = getattr(entity, 'attributes', None) or {}
-        # Case-insensitive attribute name lookup
         val = None
         for k, v in attrs.items():
-            if str(k).strip().lower() == attr_lower:
+            if _norm_geo_key(k, fold_accents=True) == attr_norm:
                 val = v
                 break
         if val is None:
             continue
-        norm_val = str(val).strip().lower()
+        norm_val = _norm_geo_key(val, fold_accents=accent_insensitive)
         if norm_val in geo_data:
             lat, lon = geo_data[norm_val]
             eid = getattr(entity, 'id', str(entity))
