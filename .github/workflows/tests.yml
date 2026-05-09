@@ -6,6 +6,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv python install 3.12
+      - run: uv sync --all-extras
+      - run: uv run ruff check anxwritter/
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10

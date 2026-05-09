@@ -124,7 +124,6 @@ def apply_tree(
     raw_pos: Dict[str, Tuple[float, float]] = {}
     cursor = 0
     for r in roots:
-        stack2: List[Tuple[str, int]] = [(r, cursor)]
         # Place children left-to-right; we need post-order to centre
         # parents after children placed. Use explicit two-phase walk.
         order_lr: List[Tuple[str, int]] = []

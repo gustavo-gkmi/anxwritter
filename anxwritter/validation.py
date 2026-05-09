@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import math
 import re
-from datetime import datetime as _datetime, date as _date
-from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
+from datetime import date as _date
+from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 
 from .errors import ErrorType
 from .utils import _enum_val, _is_valid_color, _validate_date, _validate_time
@@ -17,9 +17,9 @@ from .utils import _enum_val, _is_valid_color, _validate_date, _validate_time
 from .models import TimeZone
 
 if TYPE_CHECKING:
-    from .entities import _BaseEntity, ThemeLine
+    from .entities import _BaseEntity
     from .models import (
-        Card, Link, AttributeClass, Strength, LegendItem, EntityType, LinkType,
+        Card, Link, AttributeClass, LegendItem, EntityType, LinkType,
         Palette, DateTimeFormat, GradeCollection, StrengthCollection,
         SemanticEntity, SemanticLink, SemanticProperty,
     )

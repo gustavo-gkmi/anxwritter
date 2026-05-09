@@ -18,7 +18,7 @@ from .colors import rgb_to_colorref
 from .enums import Representation
 
 if TYPE_CHECKING:
-    from .resolved import ResolvedEntity, ResolvedLink, ResolvedAttr
+    from .resolved import ResolvedEntity, ResolvedLink
     from .models import Link, GeoMapCfg
 
 
@@ -141,8 +141,12 @@ def compute_link_offsets(
 
     # Compute symmetric offsets for each group
     auto_offsets: Dict[int, int] = {}
-    for pair, indices in pair_link_indices.items():
-        for idx, off in zip(indices, _compute_symmetric_offsets(len(indices), spacing)):
+    for indices in pair_link_indices.values():
+        for idx, off in zip(
+            indices,
+            _compute_symmetric_offsets(len(indices), spacing),
+            strict=True,
+        ):
             auto_offsets[idx] = off
 
     return auto_offsets
@@ -188,7 +192,7 @@ def apply_link_entity_colors(
         links: Original Link objects to check for explicit line_color.
         entity_color_map: Dict mapping entity id to color (from build_entity_color_map).
     """
-    for rl, link in zip(resolved_links, links):
+    for rl, link in zip(resolved_links, links, strict=True):
         if link.line_color is None and link.to_id in entity_color_map:
             rl.line_color = entity_color_map[link.to_id]
 
@@ -205,7 +209,7 @@ def apply_link_auto_offsets(
         links: Original Link objects to check for explicit offset.
         auto_offsets: Dict from compute_link_offsets().
     """
-    for i, (rl, link) in enumerate(zip(resolved_links, links)):
+    for i, (rl, link) in enumerate(zip(resolved_links, links, strict=True)):
         if link.offset is None:
             rl.offset = auto_offsets.get(i, 0)
 
@@ -343,11 +347,11 @@ def resolve_geo_data(
         if ext in ('.yaml', '.yml'):
             try:
                 import yaml
-            except ImportError:
+            except ImportError as exc:
                 raise ImportError(
                     "pyyaml is required for YAML geo_map data_file. "
                     "Install with: pip install anxwritter[yaml]"
-                )
+                ) from exc
             raw = yaml.safe_load(text) or {}
         else:
             raw = json.loads(text)
@@ -455,7 +459,7 @@ def compute_geo_positions(
     bbox_min_x, bbox_min_y = float('inf'), float('inf')
     bbox_max_x, bbox_max_y = float('-inf'), float('-inf')
 
-    for norm_key, entries in matched.items():
+    for entries in matched.values():
         # All entries for this key share the same lat/lon
         lat, lon = entries[0][1], entries[0][2]
         # Equirectangular projection

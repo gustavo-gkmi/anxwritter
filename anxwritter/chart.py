@@ -31,7 +31,6 @@ import json
 import math
 import os
 import time
-from collections import defaultdict
 from datetime import datetime as _datetime, date as _date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -39,7 +38,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from loguru import logger
 
 from .builder import ANXBuilder
-from .colors import color_to_colorref, NAMED_COLORS
+from .colors import color_to_colorref
 from .entities import _BaseEntity, Icon, Box, Circle, ThemeLine, EventFrame, TextBlock, Label
 from .enums import DotStyle, Representation
 from .errors import ANXValidationError
@@ -52,14 +51,12 @@ from .models import (
     Settings, Font, Frame, Show, TimeZone, CustomProperty,
 )
 from .timing import PhaseTimer
-from .utils import _enum_val, _is_valid_color, _validate_date, _validate_time
+from .utils import _enum_val
 from .transforms import (
     compute_auto_colors,
     apply_auto_colors,
     build_entity_color_map,
     compute_link_offsets,
-    apply_link_entity_colors,
-    apply_link_auto_offsets,
     compute_theme_line_y_offsets,
     apply_grade_defaults,
     resolve_grade_names,
@@ -1155,11 +1152,11 @@ class ANXChart:
         """
         try:
             import yaml
-        except ImportError:
+        except ImportError as exc:
             raise ImportError(
                 "pyyaml is required for YAML support. "
                 "Install with: pip install anxwritter[yaml]"
-            )
+            ) from exc
         data = yaml.safe_load(source)
         return cls.from_dict(data)
 
@@ -1174,11 +1171,11 @@ class ANXChart:
         """
         try:
             import yaml
-        except ImportError:
+        except ImportError as exc:
             raise ImportError(
                 "pyyaml is required for YAML support. "
                 "Install with: pip install anxwritter[yaml]"
-            )
+            ) from exc
         p = Path(path)
         with open(p, encoding="utf-8") as f:
             data = yaml.safe_load(f)
