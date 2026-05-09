@@ -1,6 +1,8 @@
 """Tests for entity and link typed API."""
 
-from anxwritter import ANXChart, EntityType, LinkType, GradeCollection
+import pytest
+
+from anxwritter import ANXChart, Card, EntityType, LinkType, GradeCollection, TimeZone
 from anxwritter.entities import Icon, Box, Circle, ThemeLine, EventFrame, TextBlock, Label
 from anxwritter.models import Link, AttributeClass, Strength, LegendItem
 from anxwritter.enums import DotStyle, AttributeType
@@ -257,3 +259,84 @@ class TestPaletteAdd:
         xml = c.to_xml()
         assert 'PaletteCollection' in xml
         assert 'Name="MyPalette"' in xml
+
+
+class TestCardsCoercion:
+    """``cards=`` on entities and links accepts dicts (parity with YAML loader)
+    and rejects non-Card/non-dict items with a clear TypeError pointing at
+    ``anxwritter.Card``. Direct dataclass construction is also covered, since
+    coercion lives in ``__post_init__``."""
+
+    def test_link_cards_accepts_dict(self):
+        c = ANXChart()
+        c.add_icon(id='A', type='T')
+        c.add_icon(id='B', type='T')
+        c.add_link(
+            from_id='A', to_id='B', type='Call',
+            cards=[{'summary': 'intercept', 'date': '2024-01-15'}],
+        )
+        link_card = c._links[0].cards[0]
+        assert isinstance(link_card, Card)
+        assert link_card.summary == 'intercept'
+        xml = c.to_xml()
+        assert 'Summary="intercept"' in xml
+
+    def test_entity_cards_accepts_dict(self):
+        c = ANXChart()
+        c.add_icon(
+            id='A', type='Person',
+            cards=[{'summary': 'main suspect', 'date': '2024-01-15'}],
+        )
+        entity_card = c._entities[0].cards[0]
+        assert isinstance(entity_card, Card)
+        assert entity_card.summary == 'main suspect'
+        xml = c.to_xml()
+        assert 'Summary="main suspect"' in xml
+
+    def test_card_dict_with_dict_timezone(self):
+        c = ANXChart()
+        c.add_icon(
+            id='A', type='Person',
+            cards=[{
+                'summary': 'tz card',
+                'date': '2024-01-15',
+                'time': '14:30:00',
+                'timezone': {'id': 1, 'name': 'UTC'},
+            }],
+        )
+        card = c._entities[0].cards[0]
+        assert isinstance(card.timezone, TimeZone)
+        assert card.timezone.id == 1
+        # End-to-end: builds without raising
+        c.to_xml()
+
+    def test_link_cards_rejects_non_card_non_dict(self):
+        with pytest.raises(TypeError, match=r'anxwritter\.Card'):
+            Link(from_id='A', to_id='B', cards=['not a card'])
+
+    def test_entity_cards_rejects_non_card_non_dict(self):
+        with pytest.raises(TypeError, match=r'anxwritter\.Card'):
+            Icon(id='A', type='T', cards=[42])
+
+    def test_add_link_cards_rejects_non_card_non_dict(self):
+        c = ANXChart()
+        c.add_icon(id='A', type='T')
+        c.add_icon(id='B', type='T')
+        with pytest.raises(TypeError, match=r'anxwritter\.Card'):
+            c.add_link(from_id='A', to_id='B', cards=[None])
+
+    def test_card_instances_pass_through_unchanged(self):
+        original = Card(summary='kept', date='2024-01-15')
+        link = Link(from_id='A', to_id='B', cards=[original])
+        assert link.cards[0] is original
+
+    def test_mixed_card_and_dict(self):
+        link = Link(
+            from_id='A', to_id='B',
+            cards=[
+                Card(summary='one'),
+                {'summary': 'two'},
+            ],
+        )
+        assert all(isinstance(c, Card) for c in link.cards)
+        assert [c.summary for c in link.cards] == ['one', 'two']

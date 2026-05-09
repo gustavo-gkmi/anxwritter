@@ -111,9 +111,11 @@ Connection fields control how ANB groups and renders links between the same enti
 
 How multiple links between the same entity pair are displayed. Use the `Multiplicity` enum or short strings.
 
+The Python default for `Link.multiplicity` is `None` — **not** `'multiple'`. Leaving the field unset emits each `<Link>` independently (no `<ConnectionCollection>` / `ConnectionReference`), so manual edits in ANB stay local to the edited link. Setting any value below — including `'multiple'` — groups every link between the same entity pair into a shared `<Connection>` element, and ANB then treats them as a connection group where edits can affect the whole group. If you just want parallel arcs that behave independently, leave it unset.
+
 | Short value | Full ANB name | Description |
 |---|---|---|
-| `'multiple'` | `MultiplicityMultiple` | Each ChartItem rendered as a separate parallel arc (default) |
+| `'multiple'` | `MultiplicityMultiple` | Each ChartItem rendered as a separate parallel arc, all sharing one `<Connection>` |
 | `'single'` | `MultiplicitySingle` | All ChartItems for the connection collapse into one link with a card stack |
 | `'directed'` | `MultiplicityDirected` | Directional grouping (schema-valid) |
 

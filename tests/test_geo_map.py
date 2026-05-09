@@ -519,6 +519,159 @@ class TestDataFile:
         assert 'E1' in pos
 
 
+# ── Tests: Relative data_file path resolution ───────────────────────────
+
+
+class TestDataFileRelativePathResolution:
+    """``geo_map.data_file`` written as a relative path inside a YAML/JSON
+    config or data file should resolve against the file's own directory,
+    not CWD — matching Compose, Cargo, GitLab CI etc.
+
+    Each test uses ``monkeypatch.chdir`` to a directory that does NOT
+    contain the geo data file; if path resolution incorrectly used CWD,
+    the load would raise ``FileNotFoundError``.
+    """
+
+    GEO_TEXT_YAML = (
+        'Palmas/TO: [-10.18, -48.33]\n'
+        'Rio de Janeiro/RJ: [-22.90, -43.17]\n'
+    )
+    GEO_TEXT_JSON = json.dumps({
+        'Palmas/TO': [-10.18, -48.33],
+        'Rio de Janeiro/RJ': [-22.90, -43.17],
+    })
+
+    def _write_pair(self, tmp_path: Path, chart_name: str, geo_name: str,
+                    chart_text: str, geo_text: str) -> Path:
+        """Write a chart file and a geo data file in a sibling directory.
+        CWD-relative resolution would fail; file-relative would succeed."""
+        sub = tmp_path / 'cfg'
+        sub.mkdir()
+        chart_path = sub / chart_name
+        chart_path.write_text(chart_text)
+        (sub / geo_name).write_text(geo_text)
+        return chart_path
+
+    def test_from_yaml_file_relative_data_file(self, tmp_path, monkeypatch):
+        pytest.importorskip('yaml')
+        chart_text = (
+            "settings:\n"
+            "  extra_cfg:\n"
+            "    geo_map:\n"
+            "      attribute_name: City\n"
+            "      mode: position\n"
+            "      data_file: coords.yaml\n"
+            "entities:\n"
+            "  icons:\n"
+            "    - {id: E1, type: Person, attributes: {City: Palmas/TO}}\n"
+            "    - {id: E2, type: Person, attributes: {City: Rio de Janeiro/RJ}}\n"
+        )
+        chart_path = self._write_pair(
+            tmp_path, 'chart.yaml', 'coords.yaml',
+            chart_text, self.GEO_TEXT_YAML,
+        )
+        # CWD is somewhere that does NOT contain coords.yaml.
+        monkeypatch.chdir(tmp_path)
+        chart = ANXChart.from_yaml_file(chart_path)
+        xml = chart.to_xml()
+        pos = _parse_positions(xml)
+        assert pos['E1'] != pos['E2']
+
+    def test_from_json_file_relative_data_file(self, tmp_path, monkeypatch):
+        chart_text = json.dumps({
+            'settings': {'extra_cfg': {'geo_map': {
+                'attribute_name': 'City', 'mode': 'position',
+                'data_file': 'coords.json',
+            }}},
+            'entities': {'icons': [
+                {'id': 'E1', 'type': 'Person', 'attributes': {'City': 'Palmas/TO'}},
+                {'id': 'E2', 'type': 'Person', 'attributes': {'City': 'Rio de Janeiro/RJ'}},
+            ]},
+        })
+        chart_path = self._write_pair(
+            tmp_path, 'chart.json', 'coords.json',
+            chart_text, self.GEO_TEXT_JSON,
+        )
+        monkeypatch.chdir(tmp_path)
+        chart = ANXChart.from_json_file(chart_path)
+        xml = chart.to_xml()
+        pos = _parse_positions(xml)
+        assert pos['E1'] != pos['E2']
+
+    def test_apply_config_file_relative_data_file(self, tmp_path, monkeypatch):
+        """Config-file path: geo_map declared in a config file (not data file)."""
+        pytest.importorskip('yaml')
+        cfg_text = (
+            "settings:\n"
+            "  extra_cfg:\n"
+            "    geo_map:\n"
+            "      attribute_name: City\n"
+            "      mode: position\n"
+            "      data_file: coords.yaml\n"
+        )
+        cfg_path = self._write_pair(
+            tmp_path, 'config.yaml', 'coords.yaml',
+            cfg_text, self.GEO_TEXT_YAML,
+        )
+        monkeypatch.chdir(tmp_path)
+        chart = ANXChart.from_config_file(cfg_path)
+        chart.add_icon(id='E1', type='Person', attributes={'City': 'Palmas/TO'})
+        chart.add_icon(id='E2', type='Person', attributes={'City': 'Rio de Janeiro/RJ'})
+        xml = chart.to_xml()
+        pos = _parse_positions(xml)
+        assert pos['E1'] != pos['E2']
+
+    def test_absolute_path_in_yaml_unchanged(self, tmp_path, monkeypatch):
+        """Absolute paths must be left alone, not re-anchored against the file's dir."""
+        pytest.importorskip('yaml')
+        # Geo file lives somewhere unrelated to the chart file
+        geo_dir = tmp_path / 'geo'
+        geo_dir.mkdir()
+        geo_path = geo_dir / 'coords.yaml'
+        geo_path.write_text(self.GEO_TEXT_YAML)
+
+        chart_text = (
+            "settings:\n"
+            "  extra_cfg:\n"
+            "    geo_map:\n"
+            "      attribute_name: City\n"
+            "      mode: position\n"
+            f"      data_file: {geo_path}\n"
+            "entities:\n"
+            "  icons:\n"
+            "    - {id: E1, type: Person, attributes: {City: Palmas/TO}}\n"
+            "    - {id: E2, type: Person, attributes: {City: Rio de Janeiro/RJ}}\n"
+        )
+        sub = tmp_path / 'cfg'
+        sub.mkdir()
+        chart_path = sub / 'chart.yaml'
+        chart_path.write_text(chart_text)
+        monkeypatch.chdir(tmp_path)
+        chart = ANXChart.from_yaml_file(chart_path)
+        # Absolute path should be preserved as-is on the loaded GeoMapCfg
+        assert chart.settings.extra_cfg.geo_map.data_file == str(geo_path)
+
+    def test_inline_python_geomapcfg_stays_cwd_relative(self, tmp_path, monkeypatch):
+        """Inline Python ``GeoMapCfg(data_file=...)`` is not file-loaded, so it
+        keeps standard ``open()`` semantics (CWD-relative). Only file-loaded
+        configs get the rewrite."""
+        # Geo file lives in tmp_path; CWD set there so a bare 'coords.yaml'
+        # works, mirroring how a Python user would treat it.
+        pytest.importorskip('yaml')
+        (tmp_path / 'coords.yaml').write_text(self.GEO_TEXT_YAML)
+        monkeypatch.chdir(tmp_path)
+        chart = ANXChart(settings=Settings(extra_cfg=ExtraCfg(geo_map=GeoMapCfg(
+            attribute_name='City', mode='position',
+            data_file='coords.yaml',  # bare relative — resolves to CWD
+        ))))
+        chart.add_icon(id='E1', type='Person', attributes={'City': 'Palmas/TO'})
+        chart.add_icon(id='E2', type='Person', attributes={'City': 'Rio de Janeiro/RJ'})
+        # Should not raise: CWD has coords.yaml.
+        chart.to_xml()
+        # And the stored value is unchanged.
+        assert chart.settings.extra_cfg.geo_map.data_file == 'coords.yaml'
+
+
 # ── Tests: Transform functions (unit) ────────────────────────────────────
 
 

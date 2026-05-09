@@ -597,6 +597,13 @@ The external file is a flat top-level mapping of key → `[lat, lon]` — same
 shape as the inline `data:` block above. Both formats are accepted; pick by
 file extension.
 
+> **Path resolution.** A relative `data_file` is resolved **against the
+> directory of the config (or data) file it appears in**, not the current
+> working directory. So `data_file: city_coords.yaml` next to `chart.yaml`
+> works regardless of where you run `anxwritter` from — same convention as
+> Docker Compose, Cargo, GitLab CI. Absolute paths are used as-is. The CLI
+> `--geo-data` flag is a regular CLI argument, so it stays CWD-relative.
+
 `city_coords.json`:
 
 ```json

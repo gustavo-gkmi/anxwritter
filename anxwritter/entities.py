@@ -7,13 +7,10 @@ These classes form the public entity API for the redesigned anxwritter package.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List, Optional, Union
-
-if TYPE_CHECKING:
-    from .models import Card
+from typing import List, Optional, Union
 
 from .enums import Color
-from .models import Font, Frame, Show, TimeZone
+from .models import Card, Font, Frame, Show, TimeZone
 
 
 @dataclass
@@ -124,6 +121,9 @@ class _BaseEntity:
     """Per-instance ``SemanticTypeGuid`` on ``<Entity>`` element. Overrides the
     type-level semantic type set on ``EntityType``. Resolved to a GUID at build
     time from the catalogue or custom semantic entity definitions."""
+
+    def __post_init__(self):
+        self.cards = Card.coerce_list(self.cards)
 
 
 @dataclass

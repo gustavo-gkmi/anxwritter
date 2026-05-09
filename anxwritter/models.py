@@ -472,6 +472,34 @@ class Card:
     entity_id: Optional[str] = None         # INTERNAL ONLY — routes card to entity at build time. NOT written to XML.
     link_id: Optional[str] = None           # INTERNAL ONLY — routes card to link by Link.link_id at build time. NOT written to XML.
 
+    def __post_init__(self):
+        if isinstance(self.timezone, dict):
+            self.timezone = TimeZone(**self.timezone)
+
+    @staticmethod
+    def coerce_list(items):
+        """Normalize a list of cards: ``Card`` instances pass through, dicts are
+        constructed via ``Card(**d)``, anything else raises ``TypeError`` pointing
+        at ``anxwritter.Card``.
+
+        Used by ``_BaseEntity.__post_init__`` and ``Link.__post_init__`` so
+        ``add_link(cards=[{...}])`` and ``add_icon(cards=[{...}])`` behave the
+        same as the YAML/JSON loader.
+        """
+        out = []
+        for c in items or []:
+            if isinstance(c, Card):
+                out.append(c)
+            elif isinstance(c, dict):
+                out.append(Card(**c))
+            else:
+                raise TypeError(
+                    f"cards items must be anxwritter.Card or dict; got "
+                    f"{type(c).__name__}. Use Card(summary=..., date=...) or "
+                    f"pass a dict with the same keys."
+                )
+        return out
+
 
 @dataclass
 class AttributeClass:
@@ -533,11 +561,14 @@ class Link:
     datetime_format: Optional[str] = None     # Name of a DateTimeFormat or inline format string
     sub_text_width: Optional[float] = None
     use_sub_text_width: Optional[bool] = None
-    multiplicity: Optional[Union[str, Multiplicity]] = None        # 'MultiplicityMultiple', 'MultiplicitySingle', 'MultiplicityDirected' — use Multiplicity enum
+    multiplicity: Optional[Union[str, Multiplicity]] = None        # 'multiple', 'single', 'directed' — use Multiplicity enum. Leave unset (None) to emit each <Link> as fully independent: no <ConnectionCollection> / ConnectionReference is generated, so manual edits in ANB stay local to the edited link. Setting any value — including 'multiple' — groups every link between the same entity pair into a shared <Connection>; edits in ANB can then affect the whole group.
     fan_out: Optional[int] = None            # arc spread for parallel links (integer, world coords)
     theme_wiring: Optional[Union[str, ThemeWiring]] = None       # 'KeepsAtEventHeight', 'ReturnsToThemeHeight', etc. — use ThemeWiring enum
     link_id: Optional[str] = None           # INTERNAL ONLY — used to target loose Card attachment. NOT written to XML.
     semantic_type: Optional[str] = None     # Per-instance SemanticTypeGuid override on <Link> element. Overrides LinkType-level semantic type.
+
+    def __post_init__(self):
+        self.cards = Card.coerce_list(self.cards)
 
 
 @dataclass

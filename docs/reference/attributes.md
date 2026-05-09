@@ -189,21 +189,30 @@ chart.add_attribute_class(
 ## ANB built-in / reserved attribute names
 
 > **Warning.** ANB 9 pre-registers some `AttributeClass` names internally. Declaring one
-> of these names again in your config causes ANB to reject the entire import with a
-> CreateAttributeClass failure entry in the import log.
+> of these names again in your config causes ANB to reject the entire import with this
+> entry in the import log:
 >
-> anxwritter cannot detect the collision up front — the library happily emits whatever
-> you declare, and the error only surfaces when ANB opens the file.
+> ```
+> CreateAttributeClass: failed to create attribute class
+> ```
 >
-> **If you see this error:** bisect your `attribute_classes` section (remove half, retry,
-> repeat) until you find the offending name, then delete that declaration from your
-> config. ANB will supply it automatically with its built-in defaults — you don't need to
-> redeclare it.
+> Real-world example: `Peso` (Portuguese for "weight") is one such name in localized ANB
+> builds and is rejected on re-declaration. Treat any error matching the line above as
+> a reserved-name collision regardless of locale.
 >
-> The full list of reserved names isn't yet enumerated. Common candidates observed in the
-> wild include names that ship with i2's default type library; when in doubt, try opening
-> a blank chart in ANB and checking which attribute classes already exist in the
-> Attribute Class collection dialog.
+> anxwritter cannot detect the collision up front — the error only surfaces when ANB
+> opens the file.
+>
+> **If you see the error above:**
+>
+> 1. Bisect your `attribute_classes:` section — comment out half, rebuild, open in ANB.
+> 2. Repeat on whichever half still fails until you isolate the offending name.
+> 3. Delete that declaration from your config. ANB supplies the class automatically with
+>    its built-in defaults — you don't need (and aren't allowed) to redeclare it.
+>
+> When in doubt about whether a name is reserved, open a blank chart in ANB and check
+> the **Attribute Class collection** dialog: anything already listed there is reserved
+> for your ANB version + locale.
 
 ---
 

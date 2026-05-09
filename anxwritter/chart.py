@@ -560,16 +560,12 @@ class ANXChart:
             return tz
 
         def _norm_cards(raw: list) -> list:
-            result = []
-            for c in raw:
-                if isinstance(c, dict):
-                    cd = {k: v for k, v in c.items() if v is not None}
-                    if 'timezone' in cd:
-                        cd['timezone'] = _norm_timezone(cd['timezone'])
-                    result.append(Card(**cd))
-                else:
-                    result.append(c)
-            return result
+            # Card.coerce_list handles dict→Card conversion (Card.__post_init__
+            # normalizes nested timezone dicts), and rejects non-Card/non-dict
+            # items with a clear TypeError. Same coercion runs from the Python
+            # API path via _BaseEntity/Link __post_init__, so YAML and direct
+            # construction stay in lockstep.
+            return Card.coerce_list(raw)
 
         # Fields shared by entities and links that the YAML/JSON path needs to
         # convert from raw dicts back into typed dataclasses.  Keep this in sync
@@ -657,11 +653,22 @@ class ANXChart:
         Only config sections are applied (settings, entity_types, link_types,
         attribute_classes, strengths, legend_items, grades, source_types).
         ``entities`` and ``links`` keys are silently ignored.
+
+        No validation runs at load time. Call :meth:`validate` to lint the
+        config (bad colors, duplicate names, malformed timezones, palette
+        references to unknown attribute classes, etc.) without building XML —
+        ``validate()`` walks every declared entity type, link type, attribute
+        class, etc. regardless of whether any entity or link uses them.
         """
         self._apply_config(data, is_config=True)
 
     def apply_config_file(self, path: Union[str, Path]) -> None:
-        """Load a config file (JSON or YAML) and apply it to this chart."""
+        """Load a config file (JSON or YAML) and apply it to this chart.
+
+        See :meth:`apply_config` for a note on validation — call
+        :meth:`validate` after loading to catch schema errors before
+        feeding the chart any data.
+        """
         data = self._load_file(path)
         self.apply_config(data)
 
@@ -670,6 +677,8 @@ class ANXChart:
         """Create an ANXChart pre-loaded with config from a JSON or YAML string.
 
         Tries JSON first; falls back to YAML if JSON parsing fails.
+
+        See :meth:`apply_config` for a note on validation.
         """
         try:
             data = json.loads(source)
@@ -685,6 +694,8 @@ class ANXChart:
         """Create an ANXChart pre-loaded with config from a JSON or YAML file.
 
         Format detected by extension (.yaml/.yml -> YAML, else JSON).
+
+        See :meth:`apply_config` for a note on validation.
         """
         chart = cls()
         chart.apply_config_file(path)
@@ -692,13 +703,55 @@ class ANXChart:
 
     @staticmethod
     def _load_file(path: Union[str, Path]) -> dict:
-        """Load a JSON or YAML file, auto-detecting format by extension."""
+        """Load a JSON or YAML file, auto-detecting format by extension.
+
+        Rewrites relative paths in the loaded dict (currently only
+        ``settings.extra_cfg.geo_map.data_file``) to be absolute, anchored
+        at the loaded file's directory — matches the convention used by
+        Compose, Cargo, GitLab CI, etc.
+        """
         p = Path(path)
         text = p.read_text(encoding='utf-8')
         if p.suffix.lower() in ('.yaml', '.yml'):
             import yaml
-            return yaml.safe_load(text)
-        return json.loads(text)
+            data = yaml.safe_load(text)
+        else:
+            data = json.loads(text)
+        ANXChart._resolve_relative_paths(data, p.parent)
+        return data
+
+    @staticmethod
+    def _resolve_relative_paths(data: Any, base_dir: Path) -> None:
+        """Rewrite filesystem paths in a loaded data dict to be absolute.
+
+        Anchors relative paths against ``base_dir`` (typically the directory
+        of the file ``data`` was loaded from). Currently covers
+        ``settings.extra_cfg.geo_map.data_file`` — the only path-valued
+        field in the schema. Inline-Python construction of ``GeoMapCfg``
+        keeps CWD-relative semantics (matches ``open()``); only file-loaded
+        configs get this rewrite.
+
+        Mutates ``data`` in place. Safe to call on any dict shape — non-dict
+        intermediates and absolute paths are left alone.
+        """
+        if not isinstance(data, dict):
+            return
+        settings = data.get('settings')
+        if not isinstance(settings, dict):
+            return
+        extra = settings.get('extra_cfg')
+        if not isinstance(extra, dict):
+            return
+        geo_map = extra.get('geo_map')
+        if not isinstance(geo_map, dict):
+            return
+        data_file = geo_map.get('data_file')
+        if not isinstance(data_file, str) or not data_file:
+            return
+        p = Path(data_file)
+        if p.is_absolute():
+            return
+        geo_map['data_file'] = str((base_dir / p).resolve())
 
     def to_config_dict(self) -> dict:
         """Export the current non-data configuration as a plain dict.
@@ -1083,9 +1136,15 @@ class ANXChart:
 
     @classmethod
     def from_json_file(cls, path: Union[str, Path]) -> "ANXChart":
-        """Create an ANXChart from a JSON file path."""
-        with open(path, encoding="utf-8") as f:
+        """Create an ANXChart from a JSON file path.
+
+        Relative paths inside the JSON (e.g. ``geo_map.data_file``) are
+        anchored at the JSON file's directory.
+        """
+        p = Path(path)
+        with open(p, encoding="utf-8") as f:
             data = json.load(f)
+        cls._resolve_relative_paths(data, p.parent)
         return cls.from_dict(data)
 
     @classmethod
@@ -1109,6 +1168,9 @@ class ANXChart:
         """Create an ANXChart from a YAML file path.
 
         Requires ``pyyaml``. Install with ``pip install anxwritter[yaml]``.
+
+        Relative paths inside the YAML (e.g. ``geo_map.data_file``) are
+        anchored at the YAML file's directory.
         """
         try:
             import yaml
@@ -1117,8 +1179,10 @@ class ANXChart:
                 "pyyaml is required for YAML support. "
                 "Install with: pip install anxwritter[yaml]"
             )
-        with open(path, encoding="utf-8") as f:
+        p = Path(path)
+        with open(p, encoding="utf-8") as f:
             data = yaml.safe_load(f)
+        cls._resolve_relative_paths(data, p.parent)
         return cls.from_dict(data)
 
     # ------------------------------------------------------------------
