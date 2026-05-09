@@ -97,3 +97,4 @@ Every error dict has a `type`, a `message`, and (almost always) a `location` str
 | `ordered=True` on non-ThemeLine link | Only valid when both link endpoints are ThemeLine entities. Other combinations raise `invalid_ordered`. |
 | Inline format string as `datetime_format` | ANB 9 rejects inline format strings. Register the format first with `add_datetime_format()` and reference by name. |
 | Palette with `is_user=False` class | Attribute classes with `is_user=False` or `user_can_add=False` cannot be included in palettes. |
+| ANB rejects file with `CreateAttributeClass: failed to create attribute class` | An `attribute_classes` entry collides with a name ANB 9 reserves internally (e.g. `Peso` in some locales). Bisect `attribute_classes` to isolate the offending name, then remove that declaration — ANB supplies the class automatically. See [attributes.md → ANB built-in / reserved attribute names](attributes.md#anb-built-in--reserved-attribute-names). |

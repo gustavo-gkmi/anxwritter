@@ -50,8 +50,15 @@ class Multiplicity(str, Enum):
 
     Set via the ``multiplicity`` field on ``Link``.
     All links between the same entity pair must use the same value.
+
+    The Python default for ``Link.multiplicity`` is ``None`` — **not**
+    ``MULTIPLE``. Leaving the field unset emits each ``<Link>`` independently
+    (no ``<ConnectionCollection>``/``ConnectionReference``), which keeps
+    edits in ANB local to a single link. Setting any value here — including
+    ``MULTIPLE`` — groups every link between the same pair into a shared
+    ``<Connection>``, so manual edits in ANB can affect the whole group.
     """
-    MULTIPLE = 'multiple'   # each link is a separate arc (default)
+    MULTIPLE = 'multiple'   # each link is a separate arc, all sharing one Connection
     SINGLE   = 'single'     # all links collapse into one with a card stack
     DIRECTED = 'directed'   # directional grouping (schema-valid, untested)
 

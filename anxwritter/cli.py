@@ -159,10 +159,13 @@ def _load_input(path: str | None) -> dict:
     """Load chart data from a file path or stdin.
 
     JSON is the default for stdin. File extension determines format
-    (.yaml/.yml → YAML, anything else → JSON).
+    (.yaml/.yml → YAML, anything else → JSON). Relative paths inside the
+    loaded data (currently ``geo_map.data_file``) are rewritten to absolute,
+    anchored at the input file's directory. Stdin input keeps CWD-relative
+    semantics since there's no source file to anchor against.
     """
     if path is None:
-        # stdin → JSON
+        # stdin → JSON; no source dir, leave paths CWD-relative
         raw = sys.stdin.read()
         return json.loads(raw)
 
@@ -181,9 +184,12 @@ def _load_input(path: str | None) -> dict:
             print("Error: pyyaml is required for YAML input. Install with: pip install pyyaml",
                   file=sys.stderr)
             sys.exit(1)
-        return yaml.safe_load(text)
+        data = yaml.safe_load(text)
+    else:
+        data = json.loads(text)
 
-    return json.loads(text)
+    ANXChart._resolve_relative_paths(data, p.parent)
+    return data
 
 
 def main(argv: list[str] | None = None) -> None:
