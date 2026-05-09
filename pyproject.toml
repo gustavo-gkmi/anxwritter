@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anxwritter"
-version = "1.4.0"
+version = "1.5.0"
 description = "Write i2 Analyst's Notebook Exchange (.anx) files from Python, JSON, or YAML"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -49,6 +49,7 @@ dev = [
     "pytest>=8.0",
     "pyyaml>=6.0",
     "hypothesis>=6.0",
+    "ruff>=0.5",
 ]
 
 [project.scripts]
@@ -95,6 +96,24 @@ exclude = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["anxwritter"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+extend-exclude = [".venv", "build", "dist", "output"]
+
+[tool.ruff.lint]
+# Conservative bug-only ruleset — no style/formatting opinions.
+# E9   syntax errors
+# F    pyflakes (unused / undefined / shadowed)
+# B    flake8-bugbear (likely bugs: B904 raise-from, B905 zip-strict, etc.)
+select = ["E9", "F", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests legitimately import fixtures via "from x import *" patterns and
+# define unused-but-imported helpers used reflectively by pytest.
+"tests/**" = ["F401", "F811", "F841", "B"]
+"tests/__init__.py" = ["F401"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

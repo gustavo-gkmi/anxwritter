@@ -12,7 +12,7 @@ import time as _time
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from functools import lru_cache
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple
 
 # Register LCX namespace for _fast_serialize tag resolution
 ET.register_namespace('lcx', 'http://www.i2group.com/Schemas/2001-12-07/LCXSchema')
@@ -22,6 +22,12 @@ from .enums import Representation, AttributeType
 from .models import Link  # for type hints in add_link
 from .timing import PhaseTimer
 from .utils import _enum_val
+
+if TYPE_CHECKING:
+    # Imports used only for forward-string type annotations on resolve/emit
+    # methods. Real runtime imports happen lazily inside the method bodies
+    # to avoid the resolved.py ↔ builder.py import cycle.
+    from .resolved import ResolvedCard, ResolvedEntity, ResolvedLink
 
 
 # ── Internal attribute tuple ─────────────────────────────────────────────────
@@ -1340,7 +1346,6 @@ class ANXBuilder:
             icon_style = ET.SubElement(icon, 'IconStyle', icon_style_attrs)
             _maybe_frame_style(icon_style, style)
         elif rep_val == Representation.BOX.value:
-            bc    = str(style.get('bg_color', 16777215))
             sname = str(style.get('strength', 'Default'))
             box_attrs: Dict[str, str] = {}
             if 'width' in style:
@@ -1786,9 +1791,9 @@ class ANXBuilder:
     def _build_catalogue(self, root: ET.Element, semantic_config: Dict[str, Any]) -> None:
         """Build and insert ``<lcx:LibraryCatalogue>`` after ``<ApplicationVersion>``."""
         from .semantic import (
-            LCX_NS, LCX_VERSION, ROOT_NAMES, ROOTS,
+            LCX_NS, LCX_VERSION, ROOT_NAMES,
             TYPE_ROOTS, PROPERTY_ROOTS,
-            ancestor_chain, generate_guid,
+            ancestor_chain,
         )
 
         def _lcx(tag: str) -> str:
@@ -1970,7 +1975,7 @@ class ANXBuilder:
             root.insert(0, lib)
 
         # Add xmlns:lcx declaration on root Chart element
-        root.set(f'xmlns:lcx', LCX_NS)
+        root.set('xmlns:lcx', LCX_NS)
 
     # ── Full document assembly ────────────────────────────────────────────────
 
@@ -2514,7 +2519,6 @@ class ANXBuilder:
                 adj[a].add(b)
                 adj[b].add(a)
 
-        auto_set = set(auto_keys)
         degrees = {k: len(adj[k]) for k in auto_keys}
 
         # Hubs: auto-placed entities with degree >= 2

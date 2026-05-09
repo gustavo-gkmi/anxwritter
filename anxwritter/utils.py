@@ -2,11 +2,10 @@
 Shared utility functions for anxwritter.
 """
 import math
-import re
 from datetime import datetime as _datetime, date as _date, time as _time
 from typing import Any
 
-from .colors import NAMED_COLORS, _NAMED_COLORS_NORM, color_to_colorref, _normalize_name
+from .colors import _NAMED_COLORS_NORM, color_to_colorref, _normalize_name
 
 
 def _enum_val(x: Any) -> str:

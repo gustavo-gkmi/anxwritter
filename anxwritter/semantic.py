@@ -15,7 +15,7 @@ that module for the full inventory and the interoperability rationale.
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 if TYPE_CHECKING:
     from .models import SemanticEntity, SemanticLink, SemanticProperty
@@ -34,7 +34,7 @@ LCX_VERSION = {
 
 # ── i2 GUIDs ─ re-exported from ._i2_interop (single source of truth) ───────
 
-from ._i2_interop import (
+from ._i2_interop import (  # noqa: F401  re-exports for public consumers
     ROOT_ENTITY, ROOT_LINK,
     ROOT_ABSTRACT_TEXT, ROOT_ABSTRACT_NUM,
     ROOT_ABSTRACT_DT, ROOT_ABSTRACT_FLAG,
