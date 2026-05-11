@@ -12,9 +12,6 @@ uv add anxwritter
 
 # Or with pip
 pip install anxwritter
-
-# Add YAML support (optional)
-pip install anxwritter[yaml]
 ```
 
 ---

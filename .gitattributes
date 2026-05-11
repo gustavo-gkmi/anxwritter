@@ -1,0 +1,15 @@
+# Normalize all text files to LF in the index and on checkout.
+* text=auto eol=lf
+
+# Lockfile: treat as text for line endings, never line-merge during conflicts.
+uv.lock text eol=lf merge=binary
+
+# Defensive binary exclusions — never normalize these.
+*.anx binary
+*.whl binary
+*.gz  binary
+*.pyc binary
+*.exe binary
+*.dll binary
+*.png binary
+*.ico binary

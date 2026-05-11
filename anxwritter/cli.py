@@ -6,6 +6,7 @@ import argparse
 import io
 import json
 import sys
+import yaml
 from pathlib import Path
 
 from anxwritter.chart import ANXChart
@@ -178,12 +179,6 @@ def _load_input(path: str | None) -> dict:
     text = p.read_text(encoding="utf-8")
 
     if ext in (".yaml", ".yml"):
-        try:
-            import yaml
-        except ImportError:
-            print("Error: pyyaml is required for YAML input. Install with: pip install pyyaml",
-                  file=sys.stderr)
-            sys.exit(1)
         data = yaml.safe_load(text)
     else:
         data = json.loads(text)
@@ -287,7 +282,6 @@ def main(argv: list[str] | None = None) -> None:
             try:
                 geo_text = geo_file.read_text(encoding="utf-8")
                 if geo_file.suffix.lower() in (".yaml", ".yml"):
-                    import yaml
                     geo_raw = yaml.safe_load(geo_text)
                 else:
                     geo_raw = json.loads(geo_text)
@@ -319,7 +313,6 @@ def main(argv: list[str] | None = None) -> None:
             try:
                 geo_text = geo_file.read_text(encoding="utf-8")
                 if geo_file.suffix.lower() in (".yaml", ".yml"):
-                    import yaml
                     geo_raw = yaml.safe_load(geo_text)
                 else:
                     geo_raw = json.loads(geo_text)

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anxwritter"
-version = "1.5.0"
+version = "1.6.0"
 description = "Write i2 Analyst's Notebook Exchange (.anx) files from Python, JSON, or YAML"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -41,13 +41,12 @@ classifiers = [
 dependencies = [
     "loguru>=0.7",
     "numpy>=1.24",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
-yaml = ["pyyaml>=6.0"]
 dev = [
     "pytest>=8.0",
-    "pyyaml>=6.0",
     "hypothesis>=6.0",
     "ruff>=0.5",
 ]

@@ -18,9 +18,6 @@ Output files open directly in i2 ANB 9+ via **File > Open** — no import wizard
 # As a library — import in your own code
 pip install anxwritter
 
-# With YAML support (optional)
-pip install anxwritter[yaml]
-
 # As a command-line tool only (isolated venv, no env conflicts)
 pipx install anxwritter
 ```
@@ -30,7 +27,6 @@ With [uv](https://docs.astral.sh/uv/):
 ```bash
 # Add to a uv-managed project
 uv add anxwritter
-uv add 'anxwritter[yaml]'           # with YAML support
 
 # Install globally as a CLI tool
 uv tool install anxwritter
