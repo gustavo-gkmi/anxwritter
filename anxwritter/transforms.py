@@ -9,6 +9,7 @@ from __future__ import annotations
 import colorsys
 import json
 import math
+import yaml
 import unicodedata
 from collections import defaultdict
 from pathlib import Path
@@ -345,13 +346,6 @@ def resolve_geo_data(
         text = fpath.read_text(encoding='utf-8')
         ext = fpath.suffix.lower()
         if ext in ('.yaml', '.yml'):
-            try:
-                import yaml
-            except ImportError as exc:
-                raise ImportError(
-                    "pyyaml is required for YAML geo_map data_file. "
-                    "Install with: pip install anxwritter[yaml]"
-                ) from exc
             raw = yaml.safe_load(text) or {}
         else:
             raw = json.loads(text)

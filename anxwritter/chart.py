@@ -29,6 +29,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
+import yaml
 import os
 import time
 from datetime import datetime as _datetime, date as _date
@@ -680,7 +681,6 @@ class ANXChart:
         try:
             data = json.loads(source)
         except (json.JSONDecodeError, ValueError):
-            import yaml
             data = yaml.safe_load(source)
         chart = cls()
         chart.apply_config(data)
@@ -710,7 +710,6 @@ class ANXChart:
         p = Path(path)
         text = p.read_text(encoding='utf-8')
         if p.suffix.lower() in ('.yaml', '.yml'):
-            import yaml
             data = yaml.safe_load(text)
         else:
             data = json.loads(text)
@@ -848,7 +847,6 @@ class ANXChart:
         data = self.to_config_dict()
 
         if p.suffix.lower() in ('.yaml', '.yml'):
-            import yaml
             text = yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
         else:
             text = json.dumps(data, indent=2, ensure_ascii=False)
@@ -1146,17 +1144,7 @@ class ANXChart:
 
     @classmethod
     def from_yaml(cls, source: str) -> "ANXChart":
-        """Create an ANXChart from a raw YAML string.
-
-        Requires ``pyyaml``. Install with ``pip install anxwritter[yaml]``.
-        """
-        try:
-            import yaml
-        except ImportError as exc:
-            raise ImportError(
-                "pyyaml is required for YAML support. "
-                "Install with: pip install anxwritter[yaml]"
-            ) from exc
+        """Create an ANXChart from a raw YAML string."""
         data = yaml.safe_load(source)
         return cls.from_dict(data)
 
@@ -1164,18 +1152,9 @@ class ANXChart:
     def from_yaml_file(cls, path: Union[str, Path]) -> "ANXChart":
         """Create an ANXChart from a YAML file path.
 
-        Requires ``pyyaml``. Install with ``pip install anxwritter[yaml]``.
-
         Relative paths inside the YAML (e.g. ``geo_map.data_file``) are
         anchored at the YAML file's directory.
         """
-        try:
-            import yaml
-        except ImportError as exc:
-            raise ImportError(
-                "pyyaml is required for YAML support. "
-                "Install with: pip install anxwritter[yaml]"
-            ) from exc
         p = Path(path)
         with open(p, encoding="utf-8") as f:
             data = yaml.safe_load(f)

@@ -103,8 +103,6 @@ chart = ANXChart.from_json_file('data/my_chart.json')
 
 ## `ANXChart.from_yaml(source)` / `ANXChart.from_yaml_file(path)`
 
-Requires `pyyaml` (install with `pip install anxwritter[yaml]`). Raises `ImportError` if not installed.
-
 ### `from_yaml(source: str) -> ANXChart`
 
 Creates a chart from a raw YAML string. Uses `yaml.safe_load` internally, then delegates to `from_dict`.

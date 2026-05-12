@@ -1069,7 +1069,6 @@ You don't have to use the CLI — you can load a YAML/JSON file from Python:
 ```python
 from anxwritter import ANXChart
 
-# YAML (requires pyyaml: pip install anxwritter[yaml])
 chart = ANXChart.from_yaml_file('chart.yaml')
 
 # JSON
