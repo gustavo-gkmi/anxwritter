@@ -39,7 +39,8 @@ anxwritter [OPTIONS] [INPUT_FILE]
 | Flag | Long form | Description |
 |------|-----------|-------------|
 | `-o` | `--output` | Output `.anx` file path. The `.anx` extension is added automatically if missing. Required unless `--validate-only` or `--show-config` is set. |
-| | `--config` | Path to a config file (YAML or JSON). Repeatable -- multiple `--config` flags are applied in order (layered). See [constructors.md](constructors.md) for config file shape and conflict detection. |
+| | `--config` | Path to a config file (YAML or JSON). Repeatable -- multiple flags are applied in order (layered, additive merge). See [constructors.md](constructors.md) for config file shape and conflict detection. |
+| | `--config-replace` | Like `--config`, but every section this layer mentions REPLACES the chart's current state for that section wholesale. Sections the layer does not mention survive untouched. Repeatable; freely interleaves with `--config` (cross-flag CLI order is preserved). |
 | | `--validate-only` | Validate the input data without writing an output file. Prints validation errors to stderr as JSON; exits `0` with `[]` on stdout when valid. |
 | | `--show-config` | Print the resolved merged config as YAML to stdout, with inline `# from: FILE` provenance comments on every leaf, then exit `0`. Does not validate or build. `-o` is not required. |
 | | `--geo-data` | Path to a JSON or YAML file with a `key -> [lat, lon]` mapping. Populates `settings.extra_cfg.geo_map.data` for geographic positioning. |
@@ -64,11 +65,28 @@ cat input.json | anxwritter -o output/chart.anx
 
 ## Config layering
 
-Multiple `--config` flags are applied in order. Each subsequent config is layered on top of the previous one. For same-name entries between configs, the last config wins.
+`--config` and `--config-replace` can both be repeated and freely interleaved. Order
+is preserved across the two flags, and the merge mode is decided per-layer at the
+moment that layer is processed.
 
 ```bash
-anxwritter --config config.yaml --config overrides.yaml data.json -o output/chart.anx
+# All layers merge in (additive)
+anxwritter --config base.yaml --config project.yaml data.json -o output/chart.anx
+
+# Mix merge and replace — base merges, narrow replaces sections it mentions
+anxwritter --config base.yaml --config-replace narrow.yaml data.json -o output/chart.anx
+
+# --config-replace alone (single replace layer)
+anxwritter --config-replace project.yaml data.json -o output/chart.anx
 ```
+
+The default (`--config`) is additive: same-name entries in named-registry sections
+upsert (later wins), `source_types` and `grades_*.items` append with case-sensitive
+exact-text dedup, `settings` deep-merges, `legend_items` / `palettes` always append.
+`--config-replace` makes a layer wipe each section it touches before applying its
+own entries — useful when an override needs to *narrow* a base catalog rather than
+extend it. See [constructors.md](constructors.md#layered-configs) for the full
+per-section rule table.
 
 When `--config` is provided without an `INPUT_FILE`, a config-only chart is created (no entities or links).
 
@@ -143,8 +161,11 @@ anxwritter input.yaml -o output/chart.anx
 # With config file
 anxwritter --config org_defaults.yaml data.json -o output/chart.anx
 
-# Multiple layered configs
+# Multiple layered configs (additive merge)
 anxwritter --config config.yaml --config overrides.yaml data.json -o output/chart.anx
+
+# Mix --config (merge) and --config-replace (wipe-and-set per section)
+anxwritter --config base.yaml --config-replace narrow.yaml data.json -o output/chart.anx
 
 # Config-only (no entity/link data)
 anxwritter --config org_defaults.yaml -o output/empty_chart.anx

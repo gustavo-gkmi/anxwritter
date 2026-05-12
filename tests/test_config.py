@@ -168,7 +168,7 @@ class TestMergeSemantics:
                 {'name': 'Person', 'color': 'Red'},  # overrides config1
                 {'name': 'Vehicle'},
             ],
-            'grades_one': {'items': ['X', 'Y', 'Z']},  # replaces config1
+            'grades_one': {'items': ['X', 'Y', 'Z']},  # appends + dedups
         }
         chart = ANXChart()
         chart.apply_config(config1)
@@ -178,8 +178,8 @@ class TestMergeSemantics:
         by_name = {et.name: et for et in chart._entity_types}
         assert 'Person' in by_name and 'Vehicle' in by_name
         assert by_name['Person'].color == 'Red'  # config2 wins
-        # Last config replaces grades wholesale (flat list, no natural key).
-        assert chart.grades_one.items == ['X', 'Y', 'Z']
+        # Grades append + dedup by default (no overlap here, full extension).
+        assert chart.grades_one.items == ['A', 'B', 'X', 'Y', 'Z']
 
     def test_apply_config_layered_deep_merges_nested_settings(self):
         """A second config layer with a partial nested settings dict must
@@ -553,3 +553,211 @@ class TestCLIConfig:
             os.unlink(data_path)
             if os.path.exists(out_path):
                 os.unlink(out_path)
+
+
+# ── Append + dedup defaults & replace=True opt-in (added with new layering model) ──
+
+class TestAppendDedupAndReplace:
+    """Default merge behavior is additive across all sections; replace=True
+    is a per-section opt-out for the rare 'narrow the list' case."""
+
+    # ── source_types: append + exact-text dedup ──
+
+    def test_source_types_appends_by_default(self):
+        chart = ANXChart()
+        chart.apply_config({'source_types': ['Witness', 'Informant']})
+        chart.apply_config({'source_types': ['Officer']})
+        assert chart.source_types == ['Witness', 'Informant', 'Officer']
+
+    def test_source_types_dedups_exact_text(self):
+        chart = ANXChart()
+        chart.apply_config({'source_types': ['Witness', 'Informant']})
+        chart.apply_config({'source_types': ['Witness', 'Officer']})  # 'Witness' duplicates
+        assert chart.source_types == ['Witness', 'Informant', 'Officer']
+
+    def test_source_types_dedup_is_case_sensitive(self):
+        # Documented foot-gun: 'Witness' and 'witness' are NOT deduped.
+        chart = ANXChart()
+        chart.apply_config({'source_types': ['Witness']})
+        chart.apply_config({'source_types': ['witness', 'WITNESS']})
+        assert chart.source_types == ['Witness', 'witness', 'WITNESS']
+
+    def test_source_types_replace_wipes_previous(self):
+        chart = ANXChart()
+        chart.apply_config({'source_types': ['Witness', 'Informant']})
+        chart.apply_config({'source_types': ['Officer']}, replace=True)
+        assert chart.source_types == ['Officer']
+
+    # ── grades: append + exact-text dedup ──
+
+    def test_grades_items_append_by_default(self):
+        chart = ANXChart()
+        chart.apply_config({'grades_one': {'items': ['A', 'B']}})
+        chart.apply_config({'grades_one': {'items': ['C', 'D']}})
+        assert chart.grades_one.items == ['A', 'B', 'C', 'D']
+
+    def test_grades_items_dedup_exact_text(self):
+        chart = ANXChart()
+        chart.apply_config({'grades_one': {'items': ['A', 'B']}})
+        chart.apply_config({'grades_one': {'items': ['B', 'C']}})  # 'B' duplicates
+        assert chart.grades_one.items == ['A', 'B', 'C']
+
+    def test_grades_default_later_wins_when_non_none(self):
+        chart = ANXChart()
+        chart.apply_config({'grades_one': {'default': 'A', 'items': ['A', 'B']}})
+        chart.apply_config({'grades_one': {'default': 'B', 'items': ['B']}})
+        assert chart.grades_one.default == 'B'
+
+    def test_grades_default_keeps_earlier_when_later_is_none(self):
+        chart = ANXChart()
+        chart.apply_config({'grades_one': {'default': 'A', 'items': ['A', 'B']}})
+        # Layer 2 extends items but doesn't set default — earlier default survives.
+        chart.apply_config({'grades_one': {'items': ['C']}})
+        assert chart.grades_one.default == 'A'
+        assert chart.grades_one.items == ['A', 'B', 'C']
+
+    def test_grades_replace_wipes_previous(self):
+        chart = ANXChart()
+        chart.apply_config({'grades_one': {'default': 'A', 'items': ['A', 'B']}})
+        chart.apply_config({'grades_one': {'items': ['X', 'Y']}}, replace=True)
+        assert chart.grades_one.items == ['X', 'Y']
+        assert chart.grades_one.default is None  # replaced wholesale
+
+    # ── replace=True is per-section, not per-config ──
+
+    def test_replace_only_touches_sections_the_layer_mentions(self):
+        chart = ANXChart()
+        chart.apply_config({
+            'entity_types': [{'name': 'Person', 'color': 'Blue'}],
+            'source_types': ['Witness', 'Informant'],
+            'grades_one': {'items': ['A', 'B']},
+        })
+        # Replace layer only mentions source_types — entity_types and
+        # grades_one must survive.
+        chart.apply_config({'source_types': ['Officer']}, replace=True)
+        assert chart.source_types == ['Officer']
+        assert [et.name for et in chart._entity_types] == ['Person']
+        assert chart.grades_one.items == ['A', 'B']
+
+    def test_replace_settings_replaces_section_wholesale(self):
+        chart = ANXChart()
+        chart.apply_config({
+            'settings': {
+                'extra_cfg': {'arrange': 'grid', 'entity_auto_color': True},
+                'grid': {'snap': True},
+            },
+        })
+        # replace=True swaps settings entirely with what the layer specifies.
+        chart.apply_config({
+            'settings': {'extra_cfg': {'arrange': 'circle'}},
+        }, replace=True)
+        assert chart.settings.extra_cfg.arrange == 'circle'
+        # entity_auto_color and grid.snap are gone (back to defaults)
+        assert chart.settings.extra_cfg.entity_auto_color is None
+        assert chart.settings.grid.snap is None
+
+    def test_replace_named_sections_wipes_earlier_entries(self):
+        chart = ANXChart()
+        chart.apply_config({'entity_types': [
+            {'name': 'Person', 'color': 'Blue'},
+            {'name': 'Vehicle', 'color': 'Red'},
+        ]})
+        chart.apply_config({'entity_types': [
+            {'name': 'Building', 'color': 'Green'},
+        ]}, replace=True)
+        names = [et.name for et in chart._entity_types]
+        assert names == ['Building']
+
+    def test_replace_legend_items_clears_earlier(self):
+        chart = ANXChart()
+        chart.apply_config({'legend_items': [
+            {'name': 'Person', 'item_type': 'Icon'},
+            {'name': 'Place', 'item_type': 'Icon'},
+        ]})
+        chart.apply_config({'legend_items': [
+            {'name': 'Org', 'item_type': 'Icon'},
+        ]}, replace=True)
+        names = [li.name for li in chart._legend_items]
+        assert names == ['Org']
+
+    def test_replace_strengths_wipes_pre_populated_default(self):
+        chart = ANXChart()
+        # Pre-populated 'Default' is gone after replace.
+        chart.apply_config({'strengths': {'items': [
+            {'name': 'Confirmed', 'dot_style': 'solid'},
+        ]}}, replace=True)
+        names = [s.name for s in chart.strengths.items]
+        assert names == ['Confirmed']
+
+    # ── Real-world scenario: extending a base catalog ──
+
+    def test_extending_base_catalog_no_relisting_required(self):
+        """The user's review motivating example: layered scrapers extend
+        a base catalog without needing to re-list base entries to keep them."""
+        base = {
+            'source_types': ['Outros'],
+            'grades_one': {'default': 'Reliable', 'items': ['Reliable', 'Unreliable']},
+            'entity_types': [{'name': 'Person', 'color': 'Blue'}],
+        }
+        scraper_censec = {
+            'source_types': ['Censec'],
+            'entity_types': [{'name': 'CourtCase'}],
+        }
+        chart = ANXChart()
+        chart.apply_config(base)
+        chart.apply_config(scraper_censec)
+        assert chart.source_types == ['Outros', 'Censec']
+        assert [et.name for et in chart._entity_types] == ['Person', 'CourtCase']
+        assert chart.grades_one.default == 'Reliable'  # base default survives
+        assert chart.grades_one.items == ['Reliable', 'Unreliable']
+
+
+# ── CLI: --config / --config-replace interleaving ──
+
+class TestCLIConfigReplaceInterleaving:
+
+    def _run_cli(self, *args, stdin_data=None):
+        import subprocess
+        import sys
+        cmd = [sys.executable, "-m", "anxwritter.cli"] + list(args)
+        result = subprocess.run(
+            cmd,
+            input=stdin_data,
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+        )
+        return result.returncode, result.stdout.strip(), result.stderr.strip()
+
+    def test_cli_config_replace_flag_is_per_layer(self):
+        """--config A --config-replace B --config C: A merges in, B replaces
+        sections it mentions, C merges into the result."""
+        cfg_a = _write_json({'source_types': ['A1', 'A2']})
+        cfg_b = _write_json({'source_types': ['B1']})  # will replace
+        cfg_c = _write_json({'source_types': ['C1']})  # will append
+        try:
+            rc, stdout, stderr = self._run_cli(
+                '--show-config',
+                '--config', cfg_a,
+                '--config-replace', cfg_b,
+                '--config', cfg_c,
+            )
+            assert rc == 0, f"CLI failed: {stderr}"
+            # After: B replaced with [B1], then C appended with dedup → [B1, C1]
+            assert 'B1' in stdout and 'C1' in stdout
+            assert 'A1' not in stdout and 'A2' not in stdout
+        finally:
+            os.unlink(cfg_a)
+            os.unlink(cfg_b)
+            os.unlink(cfg_c)
+
+    def test_cli_config_replace_alone_works(self):
+        cfg = _write_json({'source_types': ['Only']})
+        try:
+            rc, stdout, stderr = self._run_cli(
+                '--show-config', '--config-replace', cfg,
+            )
+            assert rc == 0, f"CLI failed: {stderr}"
+            assert 'Only' in stdout
+        finally:
+            os.unlink(cfg)

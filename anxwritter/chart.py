@@ -258,14 +258,26 @@ class ANXChart:
         """Convert a dataclass to a dict with None values removed."""
         return {k: v for k, v in dataclasses.asdict(obj).items() if v is not None}
 
-    def _apply_config(self, data: dict, *, is_config: bool = True) -> None:
+    def _apply_config(
+        self,
+        data: dict,
+        *,
+        is_config: bool = True,
+        replace: bool = False,
+    ) -> None:
         """Apply config sections from a dict to this chart.
 
         When *is_config* is True, names are registered into ``_config_locked``
         so that subsequent data-file loading can detect conflicts.
         When *is_config* is False and ``_has_config`` is True, incoming names
         are checked against the locked set — identical entries are silently
-        skipped, differing entries are recorded as conflicts.
+        skipped, differing entries are recorded as conflicts. *replace* is
+        ignored in data mode.
+
+        When *replace* is True and *is_config* is True, every section the
+        layer mentions is replaced wholesale instead of merged. Sections the
+        layer does not mention survive untouched. This is the per-section
+        opt-in for the rare "narrow the list" case.
 
         ``entities`` and ``links`` keys are silently ignored.
         """
@@ -273,10 +285,18 @@ class ANXChart:
         incoming_settings = data.get('settings')
         if incoming_settings is not None:
             if isinstance(incoming_settings, Settings):
-                # Convert to dict and merge so we don't replace nested defaults wholesale
-                self.settings.merge_from_dict(dataclasses.asdict(incoming_settings))
+                if is_config and replace:
+                    # Replace mode: discard existing settings, keep only what
+                    # this layer specifies.
+                    self.settings = incoming_settings
+                else:
+                    # Merge so we don't replace nested defaults wholesale.
+                    self.settings.merge_from_dict(dataclasses.asdict(incoming_settings))
             elif isinstance(incoming_settings, dict):
-                self.settings.merge_from_dict(incoming_settings)
+                if is_config and replace:
+                    self.settings = Settings.from_dict(incoming_settings)
+                else:
+                    self.settings.merge_from_dict(incoming_settings)
             else:
                 raise TypeError(
                     f"config['settings'] must be a Settings instance or dict, "
@@ -287,8 +307,15 @@ class ANXChart:
         raw_strengths = data.get('strengths')
         if raw_strengths is not None:
             strength_items: list = []
+            if is_config and replace:
+                # Wipe pre-populated 'Default' + any earlier-layer strengths
+                # so this layer fully replaces the section.
+                self.strengths = StrengthCollection()
+                self._config_locked.pop('strengths', None)
             if isinstance(raw_strengths, StrengthCollection):
-                self.strengths.default = raw_strengths.default
+                # Default: later wins if non-None, else keep earlier's.
+                if raw_strengths.default is not None:
+                    self.strengths.default = raw_strengths.default
                 strength_items = raw_strengths.items
             elif isinstance(raw_strengths, dict):
                 if raw_strengths.get('default') is not None:
@@ -333,13 +360,13 @@ class ANXChart:
         # configs cleanly override earlier definitions of the same entity
         # type / link type / attribute class / etc.
         _NAMED_SECTIONS = {
-            'entity_types': (EntityType, self.add_entity_type),
-            'link_types': (LinkType, self.add_link_type),
-            'attribute_classes': (AttributeClass, self.add_attribute_class),
-            'datetime_formats': (DateTimeFormat, self.add_datetime_format),
-            'semantic_entities': (SemanticEntity, self.add_semantic_entity),
-            'semantic_links': (SemanticLink, self.add_semantic_link),
-            'semantic_properties': (SemanticProperty, self.add_semantic_property),
+            'entity_types': (EntityType, self.add_entity_type, '_entity_types'),
+            'link_types': (LinkType, self.add_link_type, '_link_types'),
+            'attribute_classes': (AttributeClass, self.add_attribute_class, '_attribute_classes'),
+            'datetime_formats': (DateTimeFormat, self.add_datetime_format, '_datetime_formats'),
+            'semantic_entities': (SemanticEntity, self.add_semantic_entity, '_semantic_entities'),
+            'semantic_links': (SemanticLink, self.add_semantic_link, '_semantic_links'),
+            'semantic_properties': (SemanticProperty, self.add_semantic_property, '_semantic_properties'),
         }
 
         # Sections whose dataclasses contain a `font: Font` field — when the
@@ -347,8 +374,14 @@ class ANXChart:
         # Font instance before constructing the parent dataclass.
         _SECTIONS_WITH_FONT = {'attribute_classes'}
 
-        for section, (cls, adder) in _NAMED_SECTIONS.items():
+        for section, (cls, adder, attr_name) in _NAMED_SECTIONS.items():
+            if section not in data:
+                continue
             items = data.get(section, [])
+            if is_config and replace:
+                # Wipe the section before processing this layer's entries.
+                getattr(self, attr_name).clear()
+                self._config_locked.pop(section, None)
             locked = self._config_locked.get(section, {})
 
             for raw in items:
@@ -400,20 +433,25 @@ class ANXChart:
                 self._config_locked[section] = locked
 
         # ── palettes: always append (no natural key) ──
-        for raw in data.get('palettes', []):
-            if isinstance(raw, dict):
-                d = {k: v for k, v in raw.items() if v is not None}
-                ae = d.get('attribute_entries')
-                if ae and isinstance(ae, list):
-                    d['attribute_entries'] = [
-                        PaletteAttributeEntry(**e) if isinstance(e, dict) else e
-                        for e in ae
-                    ]
-                self._palettes.append(Palette(**d))
-            elif isinstance(raw, Palette):
-                self._palettes.append(raw)
+        if 'palettes' in data:
+            if is_config and replace:
+                self._palettes.clear()
+            for raw in data.get('palettes', []):
+                if isinstance(raw, dict):
+                    d = {k: v for k, v in raw.items() if v is not None}
+                    ae = d.get('attribute_entries')
+                    if ae and isinstance(ae, list):
+                        d['attribute_entries'] = [
+                            PaletteAttributeEntry(**e) if isinstance(e, dict) else e
+                            for e in ae
+                        ]
+                    self._palettes.append(Palette(**d))
+                elif isinstance(raw, Palette):
+                    self._palettes.append(raw)
 
         # ── legend_items: always append (no natural key) ──
+        if 'legend_items' in data and is_config and replace:
+            self._legend_items.clear()
         for raw in data.get('legend_items', []):
             if isinstance(raw, dict):
                 # Map 'label' to 'name' for backward compat with YAML configs
@@ -430,24 +468,52 @@ class ANXChart:
                 self._legend_items.append(raw)
 
         # ── grades ──
+        # Default behavior: append items with case-sensitive exact-text dedup;
+        # `default` field follows "later wins if non-None, else keep earlier's".
+        # replace=True replaces the whole GradeCollection wholesale.
         for key in ('grades_one', 'grades_two', 'grades_three'):
+            if key not in data:
+                continue
             val = data.get(key)
             if val is None:
                 continue
 
             if isinstance(val, GradeCollection):
-                gc = val
+                incoming_default = val.default
+                incoming_items = list(val.items)
             elif isinstance(val, dict):
-                default = val.get('default')
-                raw_items = val.get('items', [])
-                gc = GradeCollection(default=default, items=list(raw_items))
+                incoming_default = val.get('default')
+                incoming_items = list(val.get('items', []))
             else:
                 continue
 
-            if is_config:
+            if is_config and replace:
+                # Replace mode: the layer's GradeCollection becomes the
+                # whole section. Wipe existing items + locked entry first.
+                gc = GradeCollection(default=incoming_default, items=incoming_items)
                 setattr(self, key, gc)
                 self._config_locked_grades[key] = gc
+                continue
+
+            if is_config:
+                # Append + dedup mode: extend existing items, preserve order,
+                # skip exact-text matches already present.
+                current: GradeCollection = getattr(self, key)
+                existing = set(current.items)
+                for item in incoming_items:
+                    if item not in existing:
+                        current.items.append(item)
+                        existing.add(item)
+                if incoming_default is not None:
+                    current.default = incoming_default
+                # Re-lock with the merged state so conflict detection sees
+                # what the data file will be compared against.
+                self._config_locked_grades[key] = GradeCollection(
+                    default=current.default, items=list(current.items),
+                )
             else:
+                # Data mode: keep existing config-vs-data conflict semantics.
+                gc = GradeCollection(default=incoming_default, items=incoming_items)
                 if self._has_config and key in self._config_locked_grades:
                     locked = self._config_locked_grades[key]
                     if gc.items != locked.items or gc.default != locked.default:
@@ -467,31 +533,40 @@ class ANXChart:
                     setattr(self, key, gc)
 
         # ── source_types ──
-        val = data.get('source_types')
-        if val is not None:
-            # Normalise to List[str]
-            val = list(val)
+        # Default behavior: append with case-sensitive exact-text dedup.
+        # replace=True replaces the list wholesale.
+        if 'source_types' in data:
+            val = data.get('source_types')
+            if val is not None:
+                val = list(val)
 
-            if is_config:
-                self.source_types = val
-                self._config_locked_source_types = val
-            else:
-                if self._has_config and self._config_locked_source_types is not None:
-                    if val != self._config_locked_source_types:
-                        self._config_conflicts.append({
-                            'type': 'config_conflict',
-                            'section': 'source_types',
-                            'name': 'source_types',
-                            'message': (
-                                "Data redefines 'source_types' with different values than config. "
-                                "Remove from data file or match config."
-                            ),
-                            'config_value': self._config_locked_source_types,
-                            'data_value': val,
-                        })
-                    # else: identical → silent skip
-                else:
+                if is_config and replace:
                     self.source_types = val
+                    self._config_locked_source_types = list(val)
+                elif is_config:
+                    existing = set(self.source_types)
+                    for item in val:
+                        if item not in existing:
+                            self.source_types.append(item)
+                            existing.add(item)
+                    self._config_locked_source_types = list(self.source_types)
+                else:
+                    if self._has_config and self._config_locked_source_types is not None:
+                        if val != self._config_locked_source_types:
+                            self._config_conflicts.append({
+                                'type': 'config_conflict',
+                                'section': 'source_types',
+                                'name': 'source_types',
+                                'message': (
+                                    "Data redefines 'source_types' with different values than config. "
+                                    "Remove from data file or match config."
+                                ),
+                                'config_value': self._config_locked_source_types,
+                                'data_value': val,
+                            })
+                        # else: identical → silent skip
+                    else:
+                        self.source_types = val
 
         if is_config:
             self._has_config = True
@@ -645,12 +720,32 @@ class ANXChart:
     # Config public API
     # ------------------------------------------------------------------
 
-    def apply_config(self, data: dict) -> None:
+    def apply_config(self, data: dict, *, replace: bool = False) -> None:
         """Apply a config dict to this chart. Locks names for conflict detection.
 
         Only config sections are applied (settings, entity_types, link_types,
         attribute_classes, strengths, legend_items, grades, source_types).
         ``entities`` and ``links`` keys are silently ignored.
+
+        Layering rules (when this is the second-or-later config layer):
+
+        - ``settings``: deep merge — only fields the layer sets overwrite.
+        - ``entity_types``, ``link_types``, ``attribute_classes``,
+          ``datetime_formats``, ``semantic_*``, ``strengths.items``:
+          upsert by ``name`` — same name in a later layer replaces the entry,
+          new names are appended.
+        - ``strengths.default``, ``grades_*.default``: later wins if non-None,
+          otherwise the earlier layer's default is kept.
+        - ``source_types``, ``grades_one/two/three.items``: append with
+          case-sensitive exact-text dedup. ``'Witness'`` and ``'witness'``
+          both end up in the merged list — normalize strings if you layer
+          across teams.
+        - ``legend_items``, ``palettes``: append (no natural key, multiple
+          rows with the same name are valid).
+
+        When *replace* is True, every section the layer mentions is replaced
+        wholesale instead of merged. Sections the layer does not mention
+        survive untouched. Use this for the rare "narrow the list" case.
 
         No validation runs at load time. Call :meth:`validate` to lint the
         config (bad colors, duplicate names, malformed timezones, palette
@@ -658,17 +753,22 @@ class ANXChart:
         ``validate()`` walks every declared entity type, link type, attribute
         class, etc. regardless of whether any entity or link uses them.
         """
-        self._apply_config(data, is_config=True)
+        self._apply_config(data, is_config=True, replace=replace)
 
-    def apply_config_file(self, path: Union[str, Path]) -> None:
+    def apply_config_file(
+        self,
+        path: Union[str, Path],
+        *,
+        replace: bool = False,
+    ) -> None:
         """Load a config file (JSON or YAML) and apply it to this chart.
 
-        See :meth:`apply_config` for a note on validation — call
-        :meth:`validate` after loading to catch schema errors before
-        feeding the chart any data.
+        See :meth:`apply_config` for the full layering rules and the
+        meaning of *replace*. Call :meth:`validate` after loading to
+        catch schema errors before feeding the chart any data.
         """
         data = self._load_file(path)
-        self.apply_config(data)
+        self.apply_config(data, replace=replace)
 
     @classmethod
     def from_config(cls, source: str) -> "ANXChart":

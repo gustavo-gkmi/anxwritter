@@ -23,6 +23,22 @@ def _force_utf8_stdio() -> None:
             pass
 
 
+class _ConfigAppendAction(argparse.Action):
+    """--config: append a (path, replace=False) layer in CLI order."""
+    def __call__(self, parser, namespace, values, option_string=None):
+        layers = getattr(namespace, self.dest, None) or []
+        layers.append((values, False))
+        setattr(namespace, self.dest, layers)
+
+
+class _ConfigReplaceAction(argparse.Action):
+    """--config-replace: append a (path, replace=True) layer in CLI order."""
+    def __call__(self, parser, namespace, values, option_string=None):
+        layers = getattr(namespace, self.dest, None) or []
+        layers.append((values, True))
+        setattr(namespace, self.dest, layers)
+
+
 def _flatten_config(obj, prefix: str = ""):
     """Yield ``(flat_path, value)`` pairs from a nested config dict.
 
@@ -205,11 +221,25 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--config",
-        action="append",
+        dest="config_layers",
+        action=_ConfigAppendAction,
         default=[],
-        help="Config file path (JSON or YAML). Repeatable for layered configs. "
-             "Config files define org-level settings, types, grades, etc. "
-             "Data file can add new definitions but cannot override config names.",
+        help="Config file path (JSON or YAML). Repeatable. Layers apply "
+             "left-to-right; can be interleaved with --config-replace; "
+             "the rule applies per-layer at the moment that layer is "
+             "processed. Default behavior: merge sections (upsert by name "
+             "for named registries; append + exact-text dedup for grades / "
+             "source_types; deep-merge for settings).",
+    )
+    parser.add_argument(
+        "--config-replace",
+        dest="config_layers",
+        action=_ConfigReplaceAction,
+        default=[],
+        help="Like --config, but every section this layer mentions REPLACES "
+             "the chart's current state for that section wholesale. Sections "
+             "the layer does not mention survive untouched. Use for the rare "
+             "'narrow the list' case.",
     )
     parser.add_argument(
         "--validate-only",
@@ -241,14 +271,16 @@ def main(argv: list[str] | None = None) -> None:
     provenance: dict = {}
     prev_snapshot: dict = {}
 
-    # Apply config files in order
-    for cfg_path in args.config:
+    # Apply config layers in CLI order. Each layer is a (path, replace) tuple
+    # collected by the _ConfigAppendAction / _ConfigReplaceAction actions, which
+    # share the same `config_layers` dest so cross-flag order is preserved.
+    for cfg_path, replace in args.config_layers:
         p = Path(cfg_path)
         if not p.exists():
             print(f"Error: config file not found: {cfg_path}", file=sys.stderr)
             sys.exit(1)
         try:
-            chart.apply_config_file(cfg_path)
+            chart.apply_config_file(cfg_path, replace=replace)
         except (json.JSONDecodeError, ValueError) as exc:
             print(json.dumps({"error": f"Failed to parse config {cfg_path}: {exc}"}),
                   file=sys.stderr)
@@ -263,7 +295,7 @@ def main(argv: list[str] | None = None) -> None:
     # --show-config mode when no input was explicitly given — it's a
     # pure config-inspection tool and blocking on stdin would surprise users.
     data_file_provided = args.input is not None
-    if data_file_provided or (not args.show_config and not args.config):
+    if data_file_provided or (not args.show_config and not args.config_layers):
         try:
             data = _load_input(args.input)
         except (json.JSONDecodeError, ValueError) as exc:

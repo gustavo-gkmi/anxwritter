@@ -179,15 +179,41 @@ chart = ANXChart.from_config('{"entity_types": [...]}')
 
 ### Layered configs
 
-Apply multiple config files in order. For same-name entries between configs, the last config wins.
+Apply multiple config files in order. Each layer is merged into the chart by default;
+pass `replace=True` to make a layer wipe the sections it mentions instead of merging
+into them.
 
 ```python
 chart = ANXChart()
-chart.apply_config_file('config.yaml')
-chart.apply_config_file('overrides.yaml')
+chart.apply_config_file('base.yaml')
+chart.apply_config_file('project_overrides.yaml')   # merge (default)
+chart.apply_config_file('narrow.yaml', replace=True)  # opt-in: wipe-and-set per section
 
 # Now add entities and links:
 chart.add_icon(id='Alice', type='Person')
+```
+
+#### Per-section merge rules (default, `replace=False`)
+
+| Section | Rule |
+|---|---|
+| `settings` | Deep merge — only fields the layer sets overwrite. |
+| `entity_types`, `link_types`, `attribute_classes`, `datetime_formats`, `semantic_entities/links/properties`, `strengths.items` | Upsert by `name` — same name in a later layer replaces the entry, new names are appended, no duplicates. |
+| `strengths.default`, `grades_*.default` | Later wins if non-None, otherwise the earlier layer's default is kept. A layer can extend items without re-stating `default`. |
+| `source_types`, `grades_one/two/three.items` | Append with **case-sensitive exact-text dedup**. `'Witness'` and `'witness'` both end up in the merged list — normalize strings if you layer across teams. |
+| `legend_items`, `palettes` | Always append — no natural key, multiple rows with the same name are valid. |
+
+#### Per-section replace rules (`replace=True`)
+
+When `replace=True`, every section the layer mentions is replaced wholesale.
+Sections the layer does not mention survive untouched. The classic use case:
+narrowing a base catalog down to a project-specific subset without merging.
+
+```python
+chart.apply_config_file('full_catalog.yaml')
+# Drop everything except the source_types this project actually uses.
+chart.apply_config({'source_types': ['Witness', 'Officer']}, replace=True)
+# entity_types, grades, settings, etc. from full_catalog.yaml all survive.
 ```
 
 ### Applying config to an existing chart
@@ -240,16 +266,21 @@ When **no config** is applied (`_has_config` is `False`), conflict detection is 
 
 ---
 
-## CLI `--config`
+## CLI `--config` and `--config-replace`
 
-The `--config` flag can be repeated to apply multiple config files in order.
+`--config` and `--config-replace` can both be repeated and freely interleaved;
+order is preserved across the two flags. Each layer applies its own merge mode
+at the moment it is processed.
 
 ```bash
 # Single config
 anxwritter --config org.yaml data.json -o output/chart.anx
 
-# Layered configs (applied in order)
-anxwritter --config config.yaml --config overrides.yaml data.json -o output/chart.anx
+# Layered merges (applied in order)
+anxwritter --config base.yaml --config project.yaml data.json -o output/chart.anx
+
+# Mix merge and replace — base merges in, narrow replaces sections it mentions
+anxwritter --config base.yaml --config-replace narrow.yaml data.json -o output/chart.anx
 
 # Config-only (no data file)
 anxwritter --config org.yaml -o output/empty_chart.anx
