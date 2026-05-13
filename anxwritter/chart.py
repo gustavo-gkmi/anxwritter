@@ -1387,7 +1387,8 @@ class ANXChart:
         # Validate semantic types
         errors.extend(validate_semantic_types(
             self._semantic_entities, self._semantic_links, self._semantic_properties,
-            self._entity_types, self._link_types, self._attribute_classes
+            self._entity_types, self._link_types, self._attribute_classes,
+            self._entities, self._links,
         ))
 
         # Validate geo_map configuration

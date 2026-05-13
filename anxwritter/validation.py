@@ -1112,6 +1112,8 @@ def validate_semantic_types(
     entity_types: List['EntityType'],
     link_types: List['LinkType'],
     attribute_classes: List['AttributeClass'],
+    entities: Optional[List['_BaseEntity']] = None,
+    links: Optional[List['Link']] = None,
 ) -> List[Dict[str, Any]]:
     """Validate semantic type definitions and references."""
     errors: List[Dict[str, Any]] = []
@@ -1162,19 +1164,38 @@ def validate_semantic_types(
                 'location': loc,
             })
 
-    # Warn about LN-style semantic_type names (common mistake)
-    all_semantic_refs = []
-    for et in entity_types:
+    # Collect every (ref, location, tree) site that emits SemanticTypeGuid.
+    # tree is 'entity' | 'link' | 'property' — selects the resolver lookup
+    # to check membership against for the unknown-name pass below.
+    all_semantic_refs: List[tuple] = []
+    for i, et in enumerate(entity_types):
         if et.semantic_type:
-            all_semantic_refs.append((et.semantic_type, f'EntityType({et.name})'))
-    for lt in link_types:
+            all_semantic_refs.append(
+                (et.semantic_type, f'entity_types[{i}].semantic_type', 'entity')
+            )
+    for i, lt in enumerate(link_types):
         if lt.semantic_type:
-            all_semantic_refs.append((lt.semantic_type, f'LinkType({lt.name})'))
-    for ac in attribute_classes:
+            all_semantic_refs.append(
+                (lt.semantic_type, f'link_types[{i}].semantic_type', 'link')
+            )
+    for i, ac in enumerate(attribute_classes):
         if ac.semantic_type:
-            all_semantic_refs.append((ac.semantic_type, f'AttributeClass({ac.name})'))
+            all_semantic_refs.append(
+                (ac.semantic_type, f'attribute_classes[{i}].semantic_type', 'property')
+            )
+    for ent in (entities or []):
+        if getattr(ent, 'semantic_type', None):
+            all_semantic_refs.append(
+                (ent.semantic_type, f'entities[{ent.id}].semantic_type', 'entity')
+            )
+    for i, lk in enumerate(links or []):
+        if getattr(lk, 'semantic_type', None):
+            all_semantic_refs.append(
+                (lk.semantic_type, f'links[{i}].semantic_type', 'link')
+            )
 
-    for ref, loc in all_semantic_refs:
+    # LN-pattern check (i2 COM API names are always wrong)
+    for ref, loc, _tree in all_semantic_refs:
         if _LN_PATTERN.match(ref):
             errors.append({
                 'type': ErrorType.INVALID_SEMANTIC_TYPE.value,
@@ -1185,6 +1206,30 @@ def validate_semantic_types(
                 ),
                 'location': loc,
             })
+
+    # Unknown-name check: every reference must be a registered name in its
+    # matching tree, or a raw 'guid…' literal (passthrough, no further check).
+    _tree_sets = {
+        'entity': ({se.name for se in semantic_entities if se.name}, 'semantic_entities'),
+        'link': ({sl.name for sl in semantic_links if sl.name}, 'semantic_links'),
+        'property': ({sp.name for sp in semantic_properties if sp.name}, 'semantic_properties'),
+    }
+    for ref, loc, tree in all_semantic_refs:
+        if ref.startswith('guid'):
+            continue
+        if _LN_PATTERN.match(ref):
+            continue  # already flagged as INVALID_SEMANTIC_TYPE
+        known, section = _tree_sets[tree]
+        if ref in known:
+            continue
+        errors.append({
+            'type': ErrorType.UNKNOWN_SEMANTIC_TYPE.value,
+            'message': (
+                f"semantic_type '{ref}' is not registered in {section} "
+                f"and does not start with 'guid'."
+            ),
+            'location': loc,
+        })
 
     return errors
 

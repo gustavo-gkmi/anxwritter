@@ -219,6 +219,18 @@ INVALID_SPECS: List[tuple] = [
         {ErrorType.INVALID_ARROW.value},
     ),
 
+    # ── Unknown semantic_type ──────────────────────────────────────────────
+    (
+        "unknown_semantic_type",
+        {
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+            "attribute_classes": [
+                {"name": "Foo", "type": "text", "semantic_type": "Not Registered"},
+            ],
+        },
+        {ErrorType.UNKNOWN_SEMANTIC_TYPE.value},
+    ),
+
     # ── Invalid geo_map configuration ──────────────────────────────────────
     (
         "invalid_geo_map",
