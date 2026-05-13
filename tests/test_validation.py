@@ -1,7 +1,10 @@
 """Tests for chart validation — all error types."""
 
 import pytest
-from anxwritter import ANXChart, ANXValidationError, AttributeType, GradeCollection
+from anxwritter import (
+    ANXChart, ANXValidationError, AttributeType, GradeCollection,
+    SemanticEntity, SemanticLink, SemanticProperty,
+)
 
 
 class TestMissingRequired:
@@ -386,3 +389,115 @@ class TestAttributeClassBehaviourPerType:
         errors = c.validate()
         # max is invalid for Text (the explicit type), so should flag
         assert any(e['type'] == 'invalid_merge_behaviour' for e in errors)
+
+
+class TestUnknownSemanticType:
+    """semantic_type values that aren't registered AND don't start with 'guid'
+    must be flagged at validate() time, so the broken reference doesn't reach
+    ANB's XSD/keyref check."""
+
+    def test_attribute_class_typo(self):
+        c = ANXChart()
+        c.add_semantic_property(name='Event Date & Time', base_property='Abstract Date & Time')
+        c.add_attribute_class(
+            name='Data Evento', type=AttributeType.DATETIME,
+            semantic_type='Event Date',  # typo — missing "& Time"
+        )
+        errors = c.validate()
+        hits = [e for e in errors if e['type'] == 'unknown_semantic_type']
+        assert len(hits) == 1
+        assert hits[0]['location'] == 'attribute_classes[0].semantic_type'
+        assert "'Event Date'" in hits[0]['message']
+        assert 'semantic_properties' in hits[0]['message']
+
+    def test_entity_type_typo(self):
+        c = ANXChart()
+        c.add_semantic_entity(name='Person', kind_of='Entity')
+        c.add_entity_type(name='Pessoa', semantic_type='Persn')
+        errors = c.validate()
+        hits = [e for e in errors if e['type'] == 'unknown_semantic_type']
+        assert len(hits) == 1
+        assert hits[0]['location'] == 'entity_types[0].semantic_type'
+
+    def test_link_type_typo(self):
+        c = ANXChart()
+        c.add_semantic_link(name='Associate Of', kind_of='Link')
+        c.add_link_type(name='Conhece', semantic_type='Associat Of')
+        errors = c.validate()
+        hits = [e for e in errors if e['type'] == 'unknown_semantic_type']
+        assert len(hits) == 1
+        assert hits[0]['location'] == 'link_types[0].semantic_type'
+
+    def test_per_instance_entity_typo(self):
+        c = ANXChart()
+        c.add_semantic_entity(name='Suspect', kind_of='Entity')
+        c.add_icon(id='Alice', type='Person', semantic_type='Suspct')
+        errors = c.validate()
+        hits = [e for e in errors if e['type'] == 'unknown_semantic_type']
+        assert len(hits) == 1
+        assert hits[0]['location'] == 'entities[Alice].semantic_type'
+
+    def test_per_instance_link_typo(self):
+        c = ANXChart()
+        c.add_semantic_link(name='Surveilled', kind_of='Link')
+        c.add_icon(id='A', type='T')
+        c.add_icon(id='B', type='T')
+        c.add_link(from_id='A', to_id='B', type='Call', semantic_type='Surveiled')
+        errors = c.validate()
+        hits = [e for e in errors if e['type'] == 'unknown_semantic_type']
+        assert len(hits) == 1
+        assert hits[0]['location'] == 'links[0].semantic_type'
+
+    def test_raw_guid_passes_through(self):
+        """A raw 'guid…' literal is unchecked — advanced-user escape hatch."""
+        c = ANXChart()
+        c.add_attribute_class(
+            name='X', type=AttributeType.TEXT,
+            semantic_type='guidDEADBEEF-1234-1234-1234-123456789012',
+        )
+        errors = c.validate()
+        assert not any(e['type'] == 'unknown_semantic_type' for e in errors)
+
+    def test_registered_name_passes(self):
+        c = ANXChart()
+        c.add_semantic_property(name='Phone Number', base_property='Abstract Text')
+        c.add_attribute_class(
+            name='Phone', type=AttributeType.TEXT, semantic_type='Phone Number',
+        )
+        errors = c.validate()
+        assert not any(e['type'] == 'unknown_semantic_type' for e in errors)
+
+    def test_none_passes(self):
+        """Unset semantic_type is silently fine."""
+        c = ANXChart()
+        c.add_attribute_class(name='Phone', type=AttributeType.TEXT)
+        c.add_icon(id='A', type='T')
+        errors = c.validate()
+        assert not any(e['type'] == 'unknown_semantic_type' for e in errors)
+
+    def test_collects_all_at_once(self):
+        """Multiple sites in one chart all surface in a single validate() pass."""
+        c = ANXChart()
+        c.add_entity_type(name='Pessoa', semantic_type='Persn')      # typo
+        c.add_link_type(name='Conhece', semantic_type='Associat Of')  # typo
+        c.add_attribute_class(
+            name='Phone', type=AttributeType.TEXT, semantic_type='Phon Number',
+        )                                                             # typo
+        errors = c.validate()
+        hits = [e for e in errors if e['type'] == 'unknown_semantic_type']
+        assert len(hits) == 3
+        locations = {e['location'] for e in hits}
+        assert locations == {
+            'entity_types[0].semantic_type',
+            'link_types[0].semantic_type',
+            'attribute_classes[0].semantic_type',
+        }
+
+    def test_ln_pattern_not_double_flagged(self):
+        """LN-prefixed names get INVALID_SEMANTIC_TYPE, not also UNKNOWN."""
+        c = ANXChart()
+        c.add_entity_type(name='Pessoa', semantic_type='LNEntityPerson')
+        errors = c.validate()
+        types = {e['type'] for e in errors}
+        assert 'invalid_semantic_type' in types
+        assert 'unknown_semantic_type' not in types

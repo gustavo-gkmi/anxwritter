@@ -167,6 +167,15 @@ class SemanticResolver:
         self.referenced_type_guids: Set[str] = set()
         self.referenced_property_guids: Set[str] = set()
 
+    def is_known_entity_name(self, name: str) -> bool:
+        return name in self.custom_entity_lookup
+
+    def is_known_link_name(self, name: str) -> bool:
+        return name in self.custom_link_lookup
+
+    def is_known_property_name(self, name: str) -> bool:
+        return name in self.custom_property_lookup
+
     def resolve_type_name(self, name: Optional[str]) -> Optional[str]:
         """Resolve a semantic type name to a GUID. Returns None if no semantic type."""
         if not name:

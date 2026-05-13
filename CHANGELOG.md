@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.2] - 2026-05-13
+
+### Added
+- README shields: PyPI version, Python versions, License, PyPI monthly downloads.
+- README hero image (`.github/hero.png`) — composite of charts built with
+  anxwritter (timeline of transfers, trafficking network, theme lines +
+  event frames, link styles, auto-colored entities), shown above the
+  audience hook.
+
+### Fixed
+- `validate()` now rejects `semantic_type` values that aren't registered via
+  `add_semantic_entity` / `add_semantic_link` / `add_semantic_property` and
+  don't start with `guid`. Previously these were silently passed through and
+  emitted into `SemanticTypeGuid`, which ANB then rejected at load time with
+  a cryptic XSD/`xs:NCName` error pointing at the wrong line of the file.
+  The check covers all five emission sites: `EntityType.semantic_type`,
+  `LinkType.semantic_type`, `AttributeClass.semantic_type`, and per-instance
+  `semantic_type` on entities and links. New `ErrorType.UNKNOWN_SEMANTIC_TYPE`.
+  Raw `guid…` literals continue to pass through unchecked — they're the
+  documented advanced-user escape hatch and your responsibility to keep
+  resolvable in ANB.
+
 ## [1.7.1] - 2026-05-13
 
 ### Added

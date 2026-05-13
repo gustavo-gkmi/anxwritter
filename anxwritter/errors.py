@@ -69,6 +69,7 @@ class ErrorType(str, Enum):
 
     # Semantic type errors
     INVALID_SEMANTIC_TYPE = 'invalid_semantic_type'
+    UNKNOWN_SEMANTIC_TYPE = 'unknown_semantic_type'
 
     # Attribute class behaviour errors
     INVALID_MERGE_BEHAVIOUR = 'invalid_merge_behaviour'

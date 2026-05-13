@@ -119,8 +119,10 @@ class _BaseEntity:
 
     semantic_type: Optional[str] = None
     """Per-instance ``SemanticTypeGuid`` on ``<Entity>`` element. Overrides the
-    type-level semantic type set on ``EntityType``. Resolved to a GUID at build
-    time from the catalogue or custom semantic entity definitions."""
+    type-level semantic type set on ``EntityType``. Must be either a name
+    registered via ``add_semantic_entity`` or a raw ``guid…`` literal
+    (passthrough, unchecked). Unregistered non-GUID values are rejected by
+    ``validate()`` with ``unknown_semantic_type``."""
 
     def __post_init__(self):
         self.cards = Card.coerce_list(self.cards)

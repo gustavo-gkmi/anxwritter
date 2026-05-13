@@ -1,5 +1,12 @@
 # anxwritter
 
+[![PyPI version](https://img.shields.io/pypi/v/anxwritter.svg)](https://pypi.org/project/anxwritter/)
+[![Python versions](https://img.shields.io/pypi/pyversions/anxwritter.svg)](https://pypi.org/project/anxwritter/)
+[![License](https://img.shields.io/pypi/l/anxwritter.svg)](https://github.com/gustavo-gkmi/anxwritter/blob/main/LICENSE)
+[![PyPI downloads](https://img.shields.io/pypi/dm/anxwritter.svg)](https://pypi.org/project/anxwritter/)
+
+![Charts built with anxwritter — timeline of transfers, trafficking network, theme lines + event frames, link styles, auto-colored entities](https://github.com/gustavo-gkmi/anxwritter/raw/main/.github/hero.png)
+
 For law enforcement, OSINT practitioners, and intelligence analysts who need to generate i2 Analyst's Notebook charts programmatically from case data, scrapers, or ETL pipelines, with reusable organization-level defaults instead of dragging entities by hand.
 
 Write i2 Analyst's Notebook Exchange (`.anx`) files from Python, JSON, or YAML.

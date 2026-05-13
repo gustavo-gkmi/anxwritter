@@ -522,7 +522,7 @@ class AttributeClass:
     user_can_add: Optional[bool] = None
     user_can_remove: Optional[bool] = None
     icon_file: Optional[str] = None
-    semantic_type: Optional[str] = None   # SemanticTypeGuid — NCName from i2 Semantic Type Library
+    semantic_type: Optional[str] = None   # SemanticTypeGuid — either a name registered via add_semantic_property, or a raw 'guid…' literal (passthrough, unchecked).
     merge_behaviour: Optional[MergeBehaviour] = None
     paste_behaviour: Optional[MergeBehaviour] = None
     font: Font = field(default_factory=Font)
@@ -565,7 +565,7 @@ class Link:
     fan_out: Optional[int] = None            # arc spread for parallel links (integer, world coords)
     theme_wiring: Optional[Union[str, ThemeWiring]] = None       # 'KeepsAtEventHeight', 'ReturnsToThemeHeight', etc. — use ThemeWiring enum
     link_id: Optional[str] = None           # INTERNAL ONLY — used to target loose Card attachment. NOT written to XML.
-    semantic_type: Optional[str] = None     # Per-instance SemanticTypeGuid override on <Link> element. Overrides LinkType-level semantic type.
+    semantic_type: Optional[str] = None     # Per-instance SemanticTypeGuid override on <Link> — either a name registered via add_semantic_link, or a raw 'guid…' literal (passthrough, unchecked). Overrides LinkType-level semantic type.
 
     def __post_init__(self):
         self.cards = Card.coerce_list(self.cards)
@@ -650,7 +650,7 @@ class EntityType:
     color: Optional[Union[int, str, Color]] = None        # Colour (line color) — COLORREF int, named color, or '#RRGGBB'
     shade_color: Optional[Union[int, str, Color]] = None   # IconShadingColour — COLORREF int, named color, or '#RRGGBB'
     representation: Optional[Union[str, Representation]] = None             # 'Icon', 'Box', 'Circle', 'ThemeLine', 'EventFrame', 'TextBlock', 'Label'
-    semantic_type: Optional[str] = None              # SemanticTypeGuid — NCName from i2 Semantic Type Library
+    semantic_type: Optional[str] = None              # SemanticTypeGuid — either a name registered via add_semantic_entity, or a raw 'guid…' literal (passthrough, unchecked).
 
 
 @dataclass
@@ -659,7 +659,7 @@ class LinkType:
 
     name: str = ''
     color: Optional[Union[int, str, Color]] = None   # COLORREF int, named color, or '#RRGGBB'
-    semantic_type: Optional[str] = None         # SemanticTypeGuid — NCName from i2 Semantic Type Library
+    semantic_type: Optional[str] = None         # SemanticTypeGuid — either a name registered via add_semantic_link, or a raw 'guid…' literal (passthrough, unchecked).
 
 
 @dataclass
