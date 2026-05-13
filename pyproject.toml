@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anxwritter"
-version = "1.7.0"
+version = "1.7.1"
 description = "Write i2 Analyst's Notebook Exchange (.anx) files from Python, JSON, or YAML"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,15 +13,16 @@ authors = [
     { name = "gustavo-gkmi" },
 ]
 keywords = [
-    "i2",
-    "analyst-notebook",
-    "anx",
+    "i2-analyst-notebook",
     "anb",
+    "anx",
     "link-analysis",
+    "osint",
     "intelligence",
     "law-enforcement",
-    "chart",
-    "xml",
+    "investigation",
+    "network-analysis",
+    "fraud",
 ]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -55,8 +56,11 @@ dev = [
 anxwritter = "anxwritter.cli:main"
 
 [project.urls]
+Homepage = "https://github.com/gustavo-gkmi/anxwritter"
+Documentation = "https://github.com/gustavo-gkmi/anxwritter/blob/main/docs/getting-started.md"
 Repository = "https://github.com/gustavo-gkmi/anxwritter"
 Issues = "https://github.com/gustavo-gkmi/anxwritter/issues"
+Changelog = "https://github.com/gustavo-gkmi/anxwritter/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.sdist]
 include = [
