@@ -11,7 +11,7 @@ For law enforcement, OSINT practitioners, and intelligence analysts who need to 
 
 Write i2 Analyst's Notebook Exchange (`.anx`) files from Python, JSON, or YAML.
 
-Output files open directly in i2 ANB 9+ via **File > Open** — no import wizard, no intermediate CSV. The `.anx` file embeds the entire chart as XML.
+i2 Analyst's Notebook is an excellent link-analysis tool, and I've always appreciated how intuitive and powerful it is. But as someone who develops applications that produce data for it, I wanted a simpler workflow than exporting denormalized data into `.xlsx` or `.csv` files and maintaining separate `.ximp` import specifications. So I created anxwritter to generate `.anx` charts directly, making chart creation faster, cleaner, and easier for both developers and analysts.
 
 > Independent project — not affiliated with IBM, i2 Group, N.Harris Computer Corporation, or any other vendor. "i2", "i2 Analyst's Notebook", and "ANB" are trademarks of their respective owners (nominative use). See [NOTICE.md](https://github.com/gustavo-gkmi/anxwritter/blob/main/NOTICE.md) for the full interoperability, trademark, and attribution statement.
 
