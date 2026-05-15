@@ -289,8 +289,27 @@ def check_attr_types(
 # ── Focused validation functions ─────────────────────────────────────────────
 
 
+def _attach_source(
+    err: Dict[str, Any],
+    sources: Optional[Dict[str, str]],
+    name: Optional[str],
+) -> Dict[str, Any]:
+    """Attach a ``source`` key to *err* when *sources* has an entry for *name*.
+
+    Single helper to keep the optional-source pattern out of every validator
+    body. Mutates *err* in place and returns it for chaining.
+    """
+    if sources is None or not name:
+        return err
+    src = sources.get(name)
+    if src is not None:
+        err['source'] = src
+    return err
+
+
 def validate_strength_collection(
     strengths: 'StrengthCollection',
+    sources: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     """Validate StrengthCollection default and items."""
     errors: List[Dict[str, Any]] = []
@@ -318,12 +337,12 @@ def validate_strength_collection(
                 'location': loc,
             })
         elif st.name in seen_names:
-            errors.append({
+            errors.append(_attach_source({
                 'type': ErrorType.DUPLICATE_NAME.value,
                 'message': f"Duplicate Strength name '{st.name}' "
                            f"(first at {seen_names[st.name]})",
                 'location': loc,
-            })
+            }, sources, st.name))
         else:
             seen_names[st.name] = loc
 
@@ -334,6 +353,7 @@ def validate_grade_collections(
     grades_one: 'GradeCollection',
     grades_two: 'GradeCollection',
     grades_three: 'GradeCollection',
+    section_sources: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     """Validate GradeCollection defaults exist in items."""
     errors: List[Dict[str, Any]] = []
@@ -348,13 +368,18 @@ def validate_grade_collections(
         if not isinstance(gc, GradeCollection):
             continue
         if gc.default is not None and gc.default not in gc.items:
-            errors.append({
+            err = {
                 'type': ErrorType.INVALID_GRADE_DEFAULT.value,
                 'message': (
                     f"{gkey}.default = '{gc.default}' not found "
                     f"in {gkey}.items: {gc.items}"
                 ),
-            })
+            }
+            if section_sources:
+                src = section_sources.get(gkey)
+                if src is not None:
+                    err['source'] = src
+            errors.append(err)
 
     return errors
 
@@ -696,13 +721,17 @@ def validate_legend_items(legend_items: List['LegendItem']) -> List[Dict[str, An
 
 def validate_entity_types(
     entity_types: List['EntityType'],
+    sources: Optional[Dict[str, str]] = None,
 ) -> tuple[List[Dict[str, Any]], Dict[str, str]]:
     """Validate entity types and return errors and name→location map."""
     errors: List[Dict[str, Any]] = []
     et_names: Dict[str, str] = {}
 
+    # Record error count before each row so post-emitted errors (color, etc.)
+    # get tagged with the row's source as well.
     for i, et in enumerate(entity_types):
         loc = f"entity_types[{i}]"
+        row_start = len(errors)
         if not et.name:
             errors.append({
                 'type': ErrorType.MISSING_REQUIRED.value,
@@ -732,11 +761,19 @@ def validate_entity_types(
                     'location': loc,
                 })
 
+        # Tag every error emitted for this row with the source, if known.
+        if sources and et.name:
+            src = sources.get(et.name)
+            if src is not None:
+                for err in errors[row_start:]:
+                    err.setdefault('source', src)
+
     return errors, et_names
 
 
 def validate_link_types(
     link_types: List['LinkType'],
+    sources: Optional[Dict[str, str]] = None,
 ) -> tuple[List[Dict[str, Any]], Dict[str, str]]:
     """Validate link types and return errors and name→location map."""
     errors: List[Dict[str, Any]] = []
@@ -744,6 +781,7 @@ def validate_link_types(
 
     for i, lt in enumerate(link_types):
         loc = f"link_types[{i}]"
+        row_start = len(errors)
         if not lt.name:
             errors.append({
                 'type': ErrorType.MISSING_REQUIRED.value,
@@ -761,11 +799,18 @@ def validate_link_types(
             lt_names[lt.name] = loc
         check_color(lt.color, 'color', loc, errors)
 
+        if sources and lt.name:
+            src = sources.get(lt.name)
+            if src is not None:
+                for err in errors[row_start:]:
+                    err.setdefault('source', src)
+
     return errors, lt_names
 
 
 def validate_datetime_formats(
     datetime_formats: List['DateTimeFormat'],
+    sources: Optional[Dict[str, str]] = None,
 ) -> tuple[List[Dict[str, Any]], Set[str]]:
     """Validate datetime formats and return errors and name set."""
     errors: List[Dict[str, Any]] = []
@@ -773,6 +818,7 @@ def validate_datetime_formats(
 
     for i, dtf in enumerate(datetime_formats):
         loc = f"datetime_formats[{i}]"
+        row_start = len(errors)
         if not dtf.name:
             errors.append({
                 'type': ErrorType.MISSING_REQUIRED.value,
@@ -800,6 +846,12 @@ def validate_datetime_formats(
                 'message': "DateTimeFormat format string exceeds 259 characters",
                 'location': loc,
             })
+
+        if sources and dtf.name:
+            src = sources.get(dtf.name)
+            if src is not None:
+                for err in errors[row_start:]:
+                    err.setdefault('source', src)
 
     return errors, set(dtf_names.keys())
 
@@ -840,6 +892,7 @@ _PASTE_VALID: Dict[str, Set[str]] = {
 def validate_attribute_classes(
     attribute_classes: List['AttributeClass'],
     attr_types: Optional[Dict[str, str]] = None,
+    sources: Optional[Dict[str, str]] = None,
 ) -> tuple[List[Dict[str, Any]], Dict[str, str]]:
     """Validate attribute classes and return errors and name→location map.
 
@@ -864,8 +917,19 @@ def validate_attribute_classes(
     ac_names: Dict[str, str] = {}
     data_types = attr_types or {}
 
+    def _row_tag(name: Optional[str], row_start: int) -> None:
+        """Apply the per-row source tag to every error appended since row_start."""
+        if not sources or not name:
+            return
+        src = sources.get(name)
+        if src is None:
+            return
+        for err in errors[row_start:]:
+            err.setdefault('source', src)
+
     for i, ac in enumerate(attribute_classes):
         loc = f"attribute_classes[{i}]"
+        row_start = len(errors)
         if not ac.name:
             errors.append({
                 'type': ErrorType.MISSING_REQUIRED.value,
@@ -880,6 +944,7 @@ def validate_attribute_classes(
                            f"(first at {ac_names[ac.name]})",
                 'location': loc,
             })
+            _row_tag(ac.name, row_start)
             continue
         ac_names[ac.name] = loc
 
@@ -892,10 +957,12 @@ def validate_attribute_classes(
                 ),
                 'location': f"{loc}.type",
             })
+            _row_tag(ac.name, row_start)
             continue
 
         ac_type = _enum_val(ac.type).lower()
         if ac_type not in _MERGE_VALID:
+            _row_tag(ac.name, row_start)
             continue
 
         inferred = data_types.get(ac.name)
@@ -933,6 +1000,8 @@ def validate_attribute_classes(
                                f"{ac_type}: {sorted(valid_map[ac_type])}",
                     'location': loc,
                 })
+
+        _row_tag(ac.name, row_start)
 
     return errors, ac_names
 

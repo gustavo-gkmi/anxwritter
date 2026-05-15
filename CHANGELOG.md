@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-05-15
+
+### Added
+- `source_name` keyword argument on `apply_config`, `apply_config_file`,
+  `from_config`, and `from_config_file`. Tags every entry the layer
+  contributes (entity types, link types, attribute classes, strengths,
+  datetime formats, grades, source types) with that string. When set,
+  `validate()` enriches every error dict that originates from a tagged
+  entry with an optional `source` key identifying the layer that produced
+  the offending entry. Aimed at downstream tools layering a bundled config
+  + a user config + data, where "which file broke?" is otherwise hard to
+  answer.
+- `config_source` key on `config_conflict` error dicts — identifies the
+  config layer that locked the original entry the data file is now
+  trying to redefine.
+- `apply_config_file` and `from_config_file` auto-default `source_name`
+  to `Path(path).name` (basename). Pass an explicit `source_name=` to
+  override with a logical layer name.
+
+### Changed
+- `ANXValidationError` message string now appends a `(source: X)` suffix
+  to each error line that carries a `source` key (or `(config source: X)`
+  for `config_conflict` errors with `config_source`). The exception
+  message string format is explicitly documented as **unstable** — match
+  on the error dict's `type` and `location` keys, not the formatted
+  message text. The error dict shape (`type`, `location`, `message`,
+  optional `source`/`config_source`) remains the stable contract.
+  Non-breaking for anyone consuming the dicts; potentially affects callers
+  that regex-match `str(exc)`.
+
 ## [1.7.2] - 2026-05-13
 
 ### Added

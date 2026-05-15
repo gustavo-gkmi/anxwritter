@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anxwritter"
-version = "1.7.2"
+version = "1.8.0"
 description = "Write i2 Analyst's Notebook Exchange (.anx) files from Python, JSON, or YAML"
 readme = "README.md"
 requires-python = ">=3.10"

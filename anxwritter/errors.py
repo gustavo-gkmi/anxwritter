@@ -84,10 +84,34 @@ class ANXValidationError(Exception):
 
     Attributes:
         errors: List of structured error dicts.
+
+    The error dict shape — ``type``, ``location``, ``message`` — is the
+    stable contract. The optional ``source`` key (and ``config_source`` on
+    ``config_conflict`` errors) identifies the config layer that contributed
+    the offending entry; present only when the entry was applied via
+    :meth:`ANXChart.apply_config` / :meth:`ANXChart.apply_config_file` with a
+    known ``source_name``. The string returned by ``str(exc)`` is intentionally
+    NOT a stable contract — match on the dict keys, not the formatted message.
     """
 
     def __init__(self, errors: List[Dict[str, Any]]) -> None:
         self.errors = errors
         msg = f"{len(errors)} validation error(s) in chart data:\n" + \
-              "\n".join(f"  - [{e['type']}] {e['message']}" for e in errors)
+              "\n".join(_format_error_line(e) for e in errors)
         super().__init__(msg)
+
+
+def _format_error_line(err: Dict[str, Any]) -> str:
+    """Format one error dict for the ANXValidationError message body.
+
+    Appends a ``(source: X)`` suffix when ``err`` has a ``source`` key, or a
+    ``(config source: X)`` suffix for ``config_conflict`` errors carrying
+    ``config_source``. Message-string format is documented as unstable —
+    callers should consume the dict keys, not parse this output.
+    """
+    line = f"  - [{err['type']}] {err['message']}"
+    src = err.get('source') or err.get('config_source')
+    if src:
+        label = 'config source' if 'config_source' in err and 'source' not in err else 'source'
+        line += f" ({label}: {src})"
+    return line

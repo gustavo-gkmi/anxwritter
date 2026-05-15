@@ -761,3 +761,189 @@ class TestCLIConfigReplaceInterleaving:
             assert 'Only' in stdout
         finally:
             os.unlink(cfg)
+
+
+# ── Source name (layer provenance on validation errors) ──────────────────────
+
+
+class TestSourceName:
+    """`source_name` kwarg + auto-derivation tag config entries with the layer
+    that contributed them, so validators can surface a `source` key on errors
+    and the ANXValidationError message can say which file produced the bug."""
+
+    def _find_err(self, errors, **match):
+        """Return the first error dict matching every key/value in *match*."""
+        for e in errors:
+            if all(e.get(k) == v for k, v in match.items()):
+                return e
+        return None
+
+    def test_apply_config_explicit_source_name(self):
+        """Explicit source_name on a dict-form apply_config call tags errors."""
+        chart = ANXChart()
+        # AttributeClass missing 'type' → missing_required at .type
+        chart.apply_config(
+            {'attribute_classes': [{'name': 'Phone'}]},
+            source_name='my_layer',
+        )
+        errors = chart.validate()
+        e = self._find_err(errors, type='missing_required',
+                           location='attribute_classes[0].type')
+        assert e is not None
+        assert e.get('source') == 'my_layer'
+
+    def test_apply_config_file_auto_source_name_is_basename(self):
+        """apply_config_file auto-defaults source_name to the file basename."""
+        cfg = _write_yaml({
+            'attribute_classes': [{'name': 'Phone'}],  # missing type → error
+        })
+        try:
+            chart = ANXChart()
+            chart.apply_config_file(cfg)
+            errors = chart.validate()
+            e = self._find_err(errors, type='missing_required',
+                               location='attribute_classes[0].type')
+            assert e is not None
+            # Default is Path(path).name → basename, not full path.
+            assert e.get('source') == Path(cfg).name
+            assert e.get('source') != cfg  # not the absolute path
+        finally:
+            os.unlink(cfg)
+
+    def test_apply_config_file_explicit_source_name_overrides_basename(self):
+        cfg = _write_yaml({'attribute_classes': [{'name': 'Phone'}]})
+        try:
+            chart = ANXChart()
+            chart.apply_config_file(cfg, source_name='logical_name')
+            errors = chart.validate()
+            e = self._find_err(errors, type='missing_required',
+                               location='attribute_classes[0].type')
+            assert e is not None
+            assert e.get('source') == 'logical_name'
+        finally:
+            os.unlink(cfg)
+
+    def test_layered_configs_later_layer_wins_source_attribution(self):
+        """When two layers both contribute the same name, the later layer's
+        source is what shows up on validation errors for that entry."""
+        chart = ANXChart()
+        # First layer registers Phone with a valid type
+        chart.apply_config(
+            {'attribute_classes': [{'name': 'Phone', 'type': 'Text'}]},
+            source_name='base.yaml',
+        )
+        # Second layer overrides Phone — but with a bad merge_behaviour
+        # (Text doesn't accept 'xor').
+        chart.apply_config(
+            {'attribute_classes': [{'name': 'Phone', 'type': 'Text',
+                                    'merge_behaviour': 'xor'}]},
+            source_name='override.yaml',
+        )
+        errors = chart.validate()
+        e = self._find_err(errors, type='invalid_merge_behaviour')
+        assert e is not None
+        assert e.get('source') == 'override.yaml'  # later layer wins
+
+    def test_no_source_when_python_api_only(self):
+        """Charts built without apply_config/_file get no `source` key on errors —
+        non-breaking for callers who never opt in."""
+        chart = ANXChart()
+        chart.add_attribute_class(name='Phone')  # missing type → error
+        errors = chart.validate()
+        e = self._find_err(errors, type='missing_required',
+                           location='attribute_classes[0].type')
+        assert e is not None
+        assert 'source' not in e
+
+    def test_no_source_when_source_name_omitted(self):
+        """apply_config without source_name leaves errors un-tagged even though
+        the entry came from a config layer."""
+        chart = ANXChart()
+        chart.apply_config({'attribute_classes': [{'name': 'Phone'}]})
+        errors = chart.validate()
+        e = self._find_err(errors, type='missing_required',
+                           location='attribute_classes[0].type')
+        assert e is not None
+        assert 'source' not in e
+
+    def test_config_conflict_includes_config_source(self):
+        """config_conflict errors get config_source attribution from the layer
+        that locked the original entry."""
+        chart = ANXChart()
+        chart.apply_config({
+            'attribute_classes': [{'name': 'Phone', 'type': 'Text'}],
+        }, source_name='base.yaml')
+        # Data file redefines Phone with a different type → config_conflict
+        chart._apply_data({
+            'attribute_classes': [{'name': 'Phone', 'type': 'Number'}],
+            'entities': {},
+            'links': [],
+        })
+        errors = chart.validate()
+        e = self._find_err(errors, type='config_conflict', name='Phone')
+        assert e is not None
+        assert e.get('config_source') == 'base.yaml'
+
+    def test_anx_validation_error_message_includes_source(self):
+        """ANXValidationError str() appends a `(source: X)` suffix when an
+        error carries the `source` key. Format is documented as unstable —
+        this test pins current behavior, not a contract."""
+        from anxwritter.errors import ANXValidationError
+        errors = [
+            {'type': 'missing_required',
+             'message': "AttributeClass 'X' must declare 'type'",
+             'location': 'attribute_classes[0].type',
+             'source': 'base.yaml'},
+        ]
+        exc = ANXValidationError(errors)
+        assert '(source: base.yaml)' in str(exc)
+
+    def test_anx_validation_error_message_includes_config_source(self):
+        from anxwritter.errors import ANXValidationError
+        errors = [
+            {'type': 'config_conflict',
+             'message': "Data redefines 'X'",
+             'section': 'attribute_classes',
+             'name': 'X',
+             'config_source': 'base.yaml',
+             'config_value': {},
+             'data_value': {}},
+        ]
+        exc = ANXValidationError(errors)
+        assert '(config source: base.yaml)' in str(exc)
+
+    def test_grades_section_source(self):
+        """Grade collection errors get source from section-level tracking."""
+        chart = ANXChart()
+        chart.apply_config(
+            {'grades_one': {'default': 'missing', 'items': ['A', 'B']}},
+            source_name='grades.yaml',
+        )
+        errors = chart.validate()
+        e = self._find_err(errors, type='invalid_grade_default')
+        assert e is not None
+        assert e.get('source') == 'grades.yaml'
+
+    def test_entity_type_source_on_bad_color(self):
+        chart = ANXChart()
+        chart.apply_config(
+            {'entity_types': [{'name': 'Person', 'color': 'NotARealColor'}]},
+            source_name='types.yaml',
+        )
+        errors = chart.validate()
+        e = self._find_err(errors, type='unknown_color',
+                           location='entity_types[0]')
+        assert e is not None
+        assert e.get('source') == 'types.yaml'
+
+    def test_from_config_file_propagates_source_name(self):
+        cfg = _write_yaml({'attribute_classes': [{'name': 'Phone'}]})
+        try:
+            chart = ANXChart.from_config_file(cfg)
+            errors = chart.validate()
+            e = self._find_err(errors, type='missing_required',
+                               location='attribute_classes[0].type')
+            assert e is not None
+            assert e.get('source') == Path(cfg).name
+        finally:
+            os.unlink(cfg)

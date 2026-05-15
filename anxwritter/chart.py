@@ -244,10 +244,40 @@ class ANXChart:
         self._config_conflicts: List[Dict[str, Any]] = []
         self._has_config: bool = False
 
+        # Source provenance — maps config entries back to the layer that set them.
+        # Populated by `_apply_config` when a `source_name` is supplied (explicit
+        # kwarg, or auto-derived from the path in `apply_config_file`).
+        # `_config_sources[(section, name)]` → source_name for named-upsert
+        # sections (entity_types, link_types, attribute_classes, strengths.items,
+        # datetime_formats, semantic_*). `_config_section_sources[section]` →
+        # source_name for list-only sections (grades_one/two/three, source_types).
+        # Consumed by validators to enrich error dicts with an optional `source`
+        # key; consulted by `ANXValidationError.__str__` for the message suffix.
+        self._config_sources: Dict[tuple, str] = {}
+        self._config_section_sources: Dict[str, str] = {}
+
         if config_file:
             self.apply_config_file(config_file)
         elif config:
             self.apply_config(config)
+
+    # ------------------------------------------------------------------
+    # Source provenance helpers (used by validators)
+    # ------------------------------------------------------------------
+
+    def _source_for(self, section: str, name: Optional[str] = None) -> Optional[str]:
+        """Look up the source layer that contributed an entry.
+
+        For named-upsert sections, falls back to the section-level source
+        when no per-name entry exists (e.g. when source_name was not set
+        for the layer that added the entry but a later layer touched the
+        section).
+        """
+        if name is not None:
+            src = self._config_sources.get((section, name))
+            if src is not None:
+                return src
+        return self._config_section_sources.get(section)
 
     # ------------------------------------------------------------------
     # Config loading
@@ -264,6 +294,7 @@ class ANXChart:
         *,
         is_config: bool = True,
         replace: bool = False,
+        source_name: Optional[str] = None,
     ) -> None:
         """Apply config sections from a dict to this chart.
 
@@ -278,6 +309,12 @@ class ANXChart:
         layer mentions is replaced wholesale instead of merged. Sections the
         layer does not mention survive untouched. This is the per-section
         opt-in for the rare "narrow the list" case.
+
+        *source_name*, when set, tags every entry this layer contributes
+        (named-upsert sections via ``_config_sources``, list sections via
+        ``_config_section_sources``). Subsequent validators surface the tag
+        as an optional ``source`` key on each error dict so layered configs
+        can be debugged.
 
         ``entities`` and ``links`` keys are silently ignored.
         """
@@ -312,6 +349,12 @@ class ANXChart:
                 # so this layer fully replaces the section.
                 self.strengths = StrengthCollection()
                 self._config_locked.pop('strengths', None)
+            if is_config and replace:
+                # Wipe per-name sources for this section before re-populating.
+                self._config_sources = {
+                    k: v for k, v in self._config_sources.items() if k[0] != 'strengths'
+                }
+                self._config_section_sources.pop('strengths', None)
             if isinstance(raw_strengths, StrengthCollection):
                 # Default: later wins if non-None, else keep earlier's.
                 if raw_strengths.default is not None:
@@ -336,10 +379,12 @@ class ANXChart:
                     self.add_strength(obj)
                     if name:
                         locked[name] = clean
+                        if source_name is not None:
+                            self._config_sources[('strengths', name)] = source_name
                 else:
                     if self._has_config and name and name in locked:
                         if clean != locked[name]:
-                            self._config_conflicts.append({
+                            err = {
                                 'type': 'config_conflict',
                                 'section': 'strengths',
                                 'name': name,
@@ -349,7 +394,11 @@ class ANXChart:
                                 ),
                                 'config_value': locked[name],
                                 'data_value': clean,
-                            })
+                            }
+                            src = self._source_for('strengths', name)
+                            if src is not None:
+                                err['config_source'] = src
+                            self._config_conflicts.append(err)
                     else:
                         self.add_strength(obj)
             if is_config and locked:
@@ -382,6 +431,9 @@ class ANXChart:
                 # Wipe the section before processing this layer's entries.
                 getattr(self, attr_name).clear()
                 self._config_locked.pop(section, None)
+                self._config_sources = {
+                    k: v for k, v in self._config_sources.items() if k[0] != section
+                }
             locked = self._config_locked.get(section, {})
 
             for raw in items:
@@ -410,11 +462,13 @@ class ANXChart:
                     # Config mode: upsert (later wins per name) and lock
                     adder(obj)
                     locked[name] = clean
+                    if source_name is not None:
+                        self._config_sources[(section, name)] = source_name
                 else:
                     # Data mode: check against locked names
                     if self._has_config and name in locked:
                         if clean != locked[name]:
-                            self._config_conflicts.append({
+                            err = {
                                 'type': 'config_conflict',
                                 'section': section,
                                 'name': name,
@@ -424,7 +478,11 @@ class ANXChart:
                                 ),
                                 'config_value': locked[name],
                                 'data_value': clean,
-                            })
+                            }
+                            src = self._source_for(section, name)
+                            if src is not None:
+                                err['config_source'] = src
+                            self._config_conflicts.append(err)
                         # else: identical → silent skip
                     else:
                         adder(obj)
@@ -493,6 +551,10 @@ class ANXChart:
                 gc = GradeCollection(default=incoming_default, items=incoming_items)
                 setattr(self, key, gc)
                 self._config_locked_grades[key] = gc
+                if source_name is not None:
+                    self._config_section_sources[key] = source_name
+                else:
+                    self._config_section_sources.pop(key, None)
                 continue
 
             if is_config:
@@ -511,13 +573,15 @@ class ANXChart:
                 self._config_locked_grades[key] = GradeCollection(
                     default=current.default, items=list(current.items),
                 )
+                if source_name is not None:
+                    self._config_section_sources[key] = source_name
             else:
                 # Data mode: keep existing config-vs-data conflict semantics.
                 gc = GradeCollection(default=incoming_default, items=incoming_items)
                 if self._has_config and key in self._config_locked_grades:
                     locked = self._config_locked_grades[key]
                     if gc.items != locked.items or gc.default != locked.default:
-                        self._config_conflicts.append({
+                        err = {
                             'type': 'config_conflict',
                             'section': key,
                             'name': key,
@@ -527,7 +591,11 @@ class ANXChart:
                             ),
                             'config_value': {'default': locked.default, 'items': locked.items},
                             'data_value': {'default': gc.default, 'items': gc.items},
-                        })
+                        }
+                        src = self._config_section_sources.get(key)
+                        if src is not None:
+                            err['config_source'] = src
+                        self._config_conflicts.append(err)
                     # else: identical → silent skip
                 else:
                     setattr(self, key, gc)
@@ -543,6 +611,10 @@ class ANXChart:
                 if is_config and replace:
                     self.source_types = val
                     self._config_locked_source_types = list(val)
+                    if source_name is not None:
+                        self._config_section_sources['source_types'] = source_name
+                    else:
+                        self._config_section_sources.pop('source_types', None)
                 elif is_config:
                     existing = set(self.source_types)
                     for item in val:
@@ -550,10 +622,12 @@ class ANXChart:
                             self.source_types.append(item)
                             existing.add(item)
                     self._config_locked_source_types = list(self.source_types)
+                    if source_name is not None:
+                        self._config_section_sources['source_types'] = source_name
                 else:
                     if self._has_config and self._config_locked_source_types is not None:
                         if val != self._config_locked_source_types:
-                            self._config_conflicts.append({
+                            err = {
                                 'type': 'config_conflict',
                                 'section': 'source_types',
                                 'name': 'source_types',
@@ -563,7 +637,11 @@ class ANXChart:
                                 ),
                                 'config_value': self._config_locked_source_types,
                                 'data_value': val,
-                            })
+                            }
+                            src = self._config_section_sources.get('source_types')
+                            if src is not None:
+                                err['config_source'] = src
+                            self._config_conflicts.append(err)
                         # else: identical → silent skip
                     else:
                         self.source_types = val
@@ -720,7 +798,13 @@ class ANXChart:
     # Config public API
     # ------------------------------------------------------------------
 
-    def apply_config(self, data: dict, *, replace: bool = False) -> None:
+    def apply_config(
+        self,
+        data: dict,
+        *,
+        replace: bool = False,
+        source_name: Optional[str] = None,
+    ) -> None:
         """Apply a config dict to this chart. Locks names for conflict detection.
 
         Only config sections are applied (settings, entity_types, link_types,
@@ -747,55 +831,77 @@ class ANXChart:
         wholesale instead of merged. Sections the layer does not mention
         survive untouched. Use this for the rare "narrow the list" case.
 
+        When *source_name* is supplied, every entry this layer contributes is
+        tagged with that string. ``validate()`` then surfaces the tag as an
+        optional ``source`` key on error dicts (and a ``config_source`` key on
+        ``config_conflict`` errors), and ``ANXValidationError`` appends
+        ``(source: X)`` to the per-error message line. Pass it when you want
+        layered-config errors to identify which layer set the offending entry.
+        ``apply_config_file`` auto-derives this from the file's basename.
+
         No validation runs at load time. Call :meth:`validate` to lint the
         config (bad colors, duplicate names, malformed timezones, palette
         references to unknown attribute classes, etc.) without building XML —
         ``validate()`` walks every declared entity type, link type, attribute
         class, etc. regardless of whether any entity or link uses them.
         """
-        self._apply_config(data, is_config=True, replace=replace)
+        self._apply_config(data, is_config=True, replace=replace, source_name=source_name)
 
     def apply_config_file(
         self,
         path: Union[str, Path],
         *,
         replace: bool = False,
+        source_name: Optional[str] = None,
     ) -> None:
         """Load a config file (JSON or YAML) and apply it to this chart.
 
         See :meth:`apply_config` for the full layering rules and the
         meaning of *replace*. Call :meth:`validate` after loading to
         catch schema errors before feeding the chart any data.
+
+        *source_name* defaults to the file's basename (``Path(path).name``)
+        so layered-config errors attribute to the right file out of the box.
+        Pass an explicit value to override (e.g. a logical layer name like
+        ``'org_defaults'`` instead of the on-disk filename).
         """
         data = self._load_file(path)
-        self.apply_config(data, replace=replace)
+        if source_name is None:
+            source_name = Path(path).name
+        self.apply_config(data, replace=replace, source_name=source_name)
 
     @classmethod
-    def from_config(cls, source: str) -> "ANXChart":
+    def from_config(cls, source: str, *, source_name: Optional[str] = None) -> "ANXChart":
         """Create an ANXChart pre-loaded with config from a JSON or YAML string.
 
         Tries JSON first; falls back to YAML if JSON parsing fails.
 
-        See :meth:`apply_config` for a note on validation.
+        See :meth:`apply_config` for a note on validation and *source_name*.
         """
         try:
             data = json.loads(source)
         except (json.JSONDecodeError, ValueError):
             data = yaml.safe_load(source)
         chart = cls()
-        chart.apply_config(data)
+        chart.apply_config(data, source_name=source_name)
         return chart
 
     @classmethod
-    def from_config_file(cls, path: Union[str, Path]) -> "ANXChart":
+    def from_config_file(
+        cls,
+        path: Union[str, Path],
+        *,
+        source_name: Optional[str] = None,
+    ) -> "ANXChart":
         """Create an ANXChart pre-loaded with config from a JSON or YAML file.
 
         Format detected by extension (.yaml/.yml -> YAML, else JSON).
 
-        See :meth:`apply_config` for a note on validation.
+        See :meth:`apply_config` for a note on validation and *source_name*
+        (defaults to ``Path(path).name`` for file-loaded configs).
         """
         chart = cls()
-        chart.apply_config_file(path)
+        chart.apply_config_file(path, source_name=source_name)
         return chart
 
     @staticmethod
@@ -1322,16 +1428,34 @@ class ANXChart:
         if self._config_conflicts:
             errors.extend(self._config_conflicts)
 
+        # Build per-section name→source maps for source-aware validators.
+        # Empty dicts when no `source_name` was ever supplied — validators
+        # then skip the optional `source` key entirely (existing behaviour).
+        def _src_map(section: str) -> Dict[str, str]:
+            return {
+                name: src
+                for (sec, name), src in self._config_sources.items()
+                if sec == section
+            }
+        et_sources = _src_map('entity_types')
+        lt_sources = _src_map('link_types')
+        ac_sources = _src_map('attribute_classes')
+        st_sources = _src_map('strengths')
+        dtf_sources = _src_map('datetime_formats')
+
         # Validate strength collection (default + duplicates)
-        errors.extend(validate_strength_collection(self.strengths))
+        errors.extend(validate_strength_collection(self.strengths, st_sources or None))
 
         # Validate grade collections (defaults exist in items)
         errors.extend(validate_grade_collections(
-            self.grades_one, self.grades_two, self.grades_three
+            self.grades_one, self.grades_two, self.grades_three,
+            section_sources=self._config_section_sources or None,
         ))
 
         # Validate datetime formats (duplicates, length limits)
-        dtf_errors, dtf_names = validate_datetime_formats(self._datetime_formats)
+        dtf_errors, dtf_names = validate_datetime_formats(
+            self._datetime_formats, dtf_sources or None
+        )
         errors.extend(dtf_errors)
 
         # Shared state for cross-validation
@@ -1365,16 +1489,20 @@ class ANXChart:
         errors.extend(validate_legend_items(self._legend_items))
 
         # Validate entity types (returns name->location map for palette validation)
-        et_errors, et_names = validate_entity_types(self._entity_types)
+        et_errors, et_names = validate_entity_types(
+            self._entity_types, et_sources or None
+        )
         errors.extend(et_errors)
 
         # Validate link types (returns name->location map for palette validation)
-        lt_errors, lt_names = validate_link_types(self._link_types)
+        lt_errors, lt_names = validate_link_types(
+            self._link_types, lt_sources or None
+        )
         errors.extend(lt_errors)
 
         # Validate attribute classes (returns name->location map for palette validation)
         ac_errors, ac_names = validate_attribute_classes(
-            self._attribute_classes, attr_types
+            self._attribute_classes, attr_types, ac_sources or None
         )
         errors.extend(ac_errors)
 
