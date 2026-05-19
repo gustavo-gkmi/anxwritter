@@ -27,7 +27,7 @@ from loguru import logger
 from .chart import ANXChart
 from .errors import ANXValidationError, ErrorType
 from .colors import NAMED_COLORS, color_to_colorref, rgb_to_colorref
-from .enums import VALID_SHADING_COLORS, MergeBehaviour, DotStyle, Enlargement, AttributeType, Multiplicity, ThemeWiring, ArrowStyle, Representation, LegendItemType, Color
+from .enums import VALID_SHADING_COLORS, MergeBehaviour, DotStyle, Enlargement, AttributeType, Multiplicity, ThemeWiring, ArrowStyle, Representation, LegendItemType, Color, IntensityScale, ColorSpace, MissingPolicy
 from .entities import Icon, Box, Circle, ThemeLine, EventFrame, TextBlock, Label
 from .models import (
     Card, Link, AttributeClass, Strength, LegendItem, EntityType, LinkType,
@@ -37,6 +37,8 @@ from .models import (
     GradeCollection, StrengthCollection,
     Settings, ChartCfg, ViewCfg, GridCfg, WiringCfg, LinksCfg, TimeCfg,
     SummaryCfg, LegendCfg, ExtraCfg, GeoMapCfg,
+    StylingCfg, LinkStylingCfg, IntensityCfg, IntensityWidthCfg,
+    IntensityColorCfg, CategoricalCfg, CategoricalStyleCfg,
 )
 
 try:
@@ -74,6 +76,8 @@ __all__ = [
     'Font', 'Frame', 'Show', 'TimeZone', 'CustomProperty', 'Settings',
     'ChartCfg', 'ViewCfg', 'GridCfg', 'WiringCfg', 'LinksCfg', 'TimeCfg',
     'SummaryCfg', 'LegendCfg', 'ExtraCfg', 'GeoMapCfg',
+    'StylingCfg', 'LinkStylingCfg', 'IntensityCfg', 'IntensityWidthCfg',
+    'IntensityColorCfg', 'CategoricalCfg', 'CategoricalStyleCfg',
     # Enums
     'MergeBehaviour',
     'DotStyle',
@@ -85,6 +89,9 @@ __all__ = [
     'Representation',
     'LegendItemType',
     'Color',
+    'IntensityScale',
+    'ColorSpace',
+    'MissingPolicy',
     # Color helpers
     'VALID_SHADING_COLORS',
     'NAMED_COLORS',

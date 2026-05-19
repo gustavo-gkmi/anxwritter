@@ -65,6 +65,9 @@ from .transforms import (
     match_geo_entities,
     compute_geo_positions,
     inject_geo_attributes,
+    apply_link_categorical,
+    apply_link_intensity,
+    generate_styling_legend,
 )
 
 
@@ -1520,9 +1523,16 @@ class ANXChart:
         ))
 
         # Validate geo_map configuration
-        from .validation import validate_geo_map
+        from .validation import validate_geo_map, validate_styling
         errors.extend(validate_geo_map(
             self.settings.extra_cfg.geo_map, self._entities
+        ))
+
+        # Validate styling (extra_cfg.styling.links.{intensity,categorical})
+        errors.extend(validate_styling(
+            self.settings.extra_cfg.styling,
+            self._links,
+            strength_names,
         ))
 
         return errors
@@ -1927,6 +1937,7 @@ class ANXChart:
         # ── Resolve all links + apply transforms (no user-object mutation)
         _t0_links = time.perf_counter()
         resolved_links = []
+        valid_links: List[Link] = []  # filtered, aligned 1:1 with resolved_links
         for i, link in enumerate(self._links):
             if not link.from_id or not link.to_id:
                 errors.append(f"Link {i}: missing 'from_id' or 'to_id' — skipped")
@@ -1950,7 +1961,8 @@ class ANXChart:
                 semantic_guid=_link_semantic_guids.get(i),
             )
 
-            # link_match_entity_color — transform on resolved data, not original
+            # link_match_entity_color — lowest-precedence dynamic source. Runs
+            # before intensity / categorical so they can overwrite it when set.
             if link.line_color is None and s.extra_cfg.link_match_entity_color and link.to_id in _entity_color_map:
                 rl.line_color = _entity_color_map[link.to_id]
 
@@ -1959,7 +1971,23 @@ class ANXChart:
                 rl.offset = _auto_offsets.get(i, 0)
 
             resolved_links.append(rl)
+            valid_links.append(link)
         timer.record(f"Link resolve ({len(self._links)})", time.perf_counter() - _t0_links)
+
+        # ── Link styling (intensity then categorical so categorical wins) ─
+        _styling = s.extra_cfg.styling
+        _link_styling = getattr(_styling, 'links', None) if _styling is not None else None
+        if _link_styling is not None:
+            with timer.phase("Link styling (intensity)"):
+                apply_link_intensity(
+                    resolved_links, valid_links,
+                    getattr(_link_styling, 'intensity', None),
+                )
+            with timer.phase("Link styling (categorical)"):
+                apply_link_categorical(
+                    resolved_links, valid_links,
+                    getattr(_link_styling, 'categorical', None),
+                )
 
         # ── Apply grade defaults to resolved links ─────────────────────
         with timer.phase("Grade defaults (links)"):
@@ -2009,6 +2037,9 @@ class ANXChart:
                 # Pass Font dataclass directly — builder uses _font_overrides_from_dc()
                 d['font'] = li.font
                 legend_items.append(d)
+            # Auto-generated styling legend rows (intensity/categorical with legend=true)
+            if _styling is not None:
+                legend_items.extend(generate_styling_legend(_styling, valid_links))
 
         # Build palette dicts for the builder
         palette_dicts: Optional[List[Dict[str, Any]]] = None

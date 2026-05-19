@@ -5,6 +5,59 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-05-19
+
+### Added
+- **Data-driven link styling** under `extra_cfg.styling.links`. Two pure-function
+  styling modes that share precedence rules and missing-value policy:
+  - `intensity`: numeric link attribute → `line_width` and/or `line_color`
+    via a configurable scale (`linear` / `log` / `sqrt` / `power` / `quantile`)
+    and a color ramp (`rgb` / `rgb_linear` (default) / `hsl` spaces; multi-stop
+    ramps; optional `diverging: true` + `midpoint` for symmetric mapping).
+    Domain can be auto, explicit `[min, max]`, or `robust` (5th/95th percentile,
+    immune to single outliers).
+  - `categorical`: string link attribute → style lookup. Each style entry can
+    set `line_color`, `line_width`, and `strength` (named strength must be
+    registered separately). Case-insensitive and accent-insensitive by default,
+    matching the `geo_map` convention; both flags overridable. Optional `default`
+    for unmatched values.
+  - Both modes support `legend: true` for auto-emitted `LegendItem` rows
+    (intensity samples N points in scale-space; categorical emits one row per
+    `styles` entry in insertion order).
+  - Precedence: **explicit per-link > categorical > intensity >
+    `link_match_entity_color` > LinkType default**. An explicit
+    `Link.line_color` always beats every data-driven rule.
+  - New dataclasses (all importable from top-level): `StylingCfg`,
+    `LinkStylingCfg`, `IntensityCfg`, `IntensityWidthCfg`, `IntensityColorCfg`,
+    `CategoricalCfg`, `CategoricalStyleCfg`. New enums: `IntensityScale`,
+    `ColorSpace`, `MissingPolicy`.
+  - New `ErrorType` members: `INVALID_INTENSITY_CONFIG`,
+    `INVALID_INTENSITY_ATTRIBUTE`, `INVALID_INTENSITY_DOMAIN`,
+    `INVALID_INTENSITY_RANGE`, `INVALID_INTENSITY_RAMP`,
+    `INVALID_CATEGORICAL_CONFIG`, `INVALID_CATEGORICAL_ATTRIBUTE`,
+    `INVALID_CATEGORICAL_STYLE`, `STYLING_CONFLICT`. Both intensity and
+    categorical targeting the same attribute is a `STYLING_CONFLICT` error —
+    the user must pick one (mixed numeric-and-lookup styling on the same
+    attribute has ambiguous precedence).
+- New example `examples/link_styling.py` — fictional money-flow chart using
+  log-scale intensity on `Amount` and categorical color on `source_type`.
+- New colors helpers (public): `lerp_rgb`, `lerp_rgb_linear`, `lerp_hsl`,
+  `interpolate_ramp` in `anxwritter.colors`.
+- New transforms (public): `apply_scale`, `resolve_intensity_domain` in
+  `anxwritter.transforms`, exposed for users who want to reuse the same scale
+  math outside the styling pipeline.
+
+### Scope policy
+
+> anxwritter supports two kinds of data-driven styling: **continuous** (numeric
+> attribute → scale → width/color) and **categorical** (attribute value → style
+> lookup). Both are pure functions of a single attribute. Anything that
+> involves conditions across multiple attributes, range comparisons on text,
+> regex matching, or computed predicates is business logic — compute the
+> result in your data pipeline and either set `line_color` / `line_width`
+> explicitly per link, or precompute a synthetic attribute upstream (e.g.
+> `risk_class: "high"`) and use categorical on that.
+
 ## [1.8.0] - 2026-05-15
 
 ### Added

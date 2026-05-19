@@ -102,6 +102,27 @@ settings:
     arrange: grid                 # auto-layout: radial (default) | circle | grid | random
     link_arc_offset: 25           # spacing between parallel links
 
+    # ── Data-driven link styling (advanced) ───────────────────────────
+    # Drives line_color / line_width / strength from a link attribute.
+    # See docs/reference/visual-styling.md "Data-driven link styling" for
+    # the full schema, precedence rules, and the scope policy.
+    # styling:
+    #   links:
+    #     intensity:
+    #       attribute: Amount            # numeric attribute on links
+    #       scale: sqrt                  # linear | log | sqrt | power | quantile
+    #       domain: robust               # auto | 'robust' (5/95 pct) | [min, max]
+    #       width: { range: [1, 10] }
+    #       color: { ramp: [Light Yellow, Red] }
+    #       legend: true
+    #     categorical:
+    #       attribute: source_type       # string attribute on links
+    #       styles:
+    #         Witness:    { line_color: Green, line_width: 2 }
+    #         Informant:  { line_color: Orange }
+    #       default:      { line_color: Grey }
+    #       legend: true
+
 # ── Entity types ─────────────────────────────────────────────────────
 entity_types:
   - name: Person

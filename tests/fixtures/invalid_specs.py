@@ -250,6 +250,195 @@ INVALID_SPECS: List[tuple] = [
         },
         {ErrorType.INVALID_GEO_MAP.value},
     ),
+
+    # ── Styling: intensity without attribute ───────────────────────────────
+    (
+        "intensity_missing_attribute",
+        {
+            "settings": {
+                "extra_cfg": {
+                    "styling": {"links": {"intensity": {
+                        # 'attribute' missing — required (no top-level shortcut either)
+                        "width": {"range": [1, 10]},
+                    }}}
+                }
+            },
+            "entities": {"icons": [
+                {"id": "A", "type": "Person"},
+                {"id": "B", "type": "Person"},
+            ]},
+            "links": [{"from_id": "A", "to_id": "B", "type": "Call",
+                       "attributes": {"amount": 5}}],
+        },
+        {ErrorType.INVALID_INTENSITY_ATTRIBUTE.value},
+    ),
+
+    # ── Styling: intensity scale=log with non-positive value ───────────────
+    (
+        "intensity_log_with_zero",
+        {
+            "settings": {
+                "extra_cfg": {
+                    "styling": {"links": {"intensity": {
+                        "attribute": "amount", "scale": "log",
+                        "width": {"range": [1, 10]},
+                    }}}
+                }
+            },
+            "entities": {"icons": [
+                {"id": "A", "type": "Person"},
+                {"id": "B", "type": "Person"},
+            ]},
+            "links": [{"from_id": "A", "to_id": "B", "type": "Call",
+                       "attributes": {"amount": 0}}],
+        },
+        {ErrorType.INVALID_INTENSITY_DOMAIN.value},
+    ),
+
+    # ── Styling: intensity range backwards ─────────────────────────────────
+    (
+        "intensity_bad_range",
+        {
+            "settings": {
+                "extra_cfg": {
+                    "styling": {"links": {"intensity": {
+                        "attribute": "amount",
+                        "width": {"range": [10, 1]},
+                    }}}
+                }
+            },
+            "entities": {"icons": [
+                {"id": "A", "type": "Person"},
+                {"id": "B", "type": "Person"},
+            ]},
+            "links": [{"from_id": "A", "to_id": "B", "type": "Call",
+                       "attributes": {"amount": 5}}],
+        },
+        {ErrorType.INVALID_INTENSITY_RANGE.value},
+    ),
+
+    # ── Styling: intensity ramp with one color ─────────────────────────────
+    (
+        "intensity_short_ramp",
+        {
+            "settings": {
+                "extra_cfg": {
+                    "styling": {"links": {"intensity": {
+                        "attribute": "amount",
+                        "color": {"ramp": ["Red"]},
+                    }}}
+                }
+            },
+            "entities": {"icons": [
+                {"id": "A", "type": "Person"},
+                {"id": "B", "type": "Person"},
+            ]},
+            "links": [{"from_id": "A", "to_id": "B", "type": "Call",
+                       "attributes": {"amount": 5}}],
+        },
+        {ErrorType.INVALID_INTENSITY_RAMP.value},
+    ),
+
+    # ── Styling: intensity scale='power' without 'power' field ─────────────
+    (
+        "intensity_power_without_value",
+        {
+            "settings": {
+                "extra_cfg": {
+                    "styling": {"links": {"intensity": {
+                        "attribute": "amount", "scale": "power",
+                        "width": {"range": [1, 10]},
+                    }}}
+                }
+            },
+            "entities": {"icons": [
+                {"id": "A", "type": "Person"},
+                {"id": "B", "type": "Person"},
+            ]},
+            "links": [{"from_id": "A", "to_id": "B", "type": "Call",
+                       "attributes": {"amount": 5}}],
+        },
+        {ErrorType.INVALID_INTENSITY_CONFIG.value},
+    ),
+
+    # ── Styling: categorical without attribute ─────────────────────────────
+    (
+        "categorical_missing_attribute",
+        {
+            "settings": {
+                "extra_cfg": {
+                    "styling": {"links": {"categorical": {
+                        # 'attribute' missing — required
+                        "styles": {"Witness": {"line_color": "Green"}},
+                    }}}
+                }
+            },
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+        },
+        {ErrorType.INVALID_CATEGORICAL_ATTRIBUTE.value},
+    ),
+
+    # ── Styling: categorical with empty styles ─────────────────────────────
+    (
+        "categorical_empty_styles",
+        {
+            "settings": {
+                "extra_cfg": {
+                    "styling": {"links": {"categorical": {
+                        "attribute": "source_type",
+                        # 'styles' missing — required to be non-empty
+                    }}}
+                }
+            },
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+        },
+        {ErrorType.INVALID_CATEGORICAL_CONFIG.value},
+    ),
+
+    # ── Styling: categorical style with no settable fields ─────────────────
+    (
+        "categorical_empty_style_entry",
+        {
+            "settings": {
+                "extra_cfg": {
+                    "styling": {"links": {"categorical": {
+                        "attribute": "source_type",
+                        "styles": {"Witness": {}},  # no line_color/width/strength
+                    }}}
+                }
+            },
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+        },
+        {ErrorType.INVALID_CATEGORICAL_STYLE.value},
+    ),
+
+    # ── Styling: intensity + categorical on same attribute ─────────────────
+    (
+        "styling_intensity_categorical_conflict",
+        {
+            "settings": {
+                "extra_cfg": {
+                    "styling": {"links": {
+                        "intensity": {
+                            "attribute": "risk",
+                            "width": {"range": [1, 5]},
+                        },
+                        "categorical": {
+                            "attribute": "risk",
+                            "styles": {"high": {"line_color": "Red"}},
+                        },
+                    }}
+                }
+            },
+            "entities": {"icons": [
+                {"id": "A", "type": "Person"},
+                {"id": "B", "type": "Person"},
+            ]},
+            "links": [{"from_id": "A", "to_id": "B", "type": "Call",
+                       "attributes": {"risk": 1}}],
+        },
+        {ErrorType.STYLING_CONFLICT.value},
+    ),
 ]
 
 

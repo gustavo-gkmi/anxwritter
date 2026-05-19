@@ -371,3 +371,123 @@ When the user defines at least one palette explicitly, only those palettes are e
   </Palette>
 </PaletteCollection>
 ```
+
+## Data-driven link styling (`extra_cfg.styling.links`)
+
+Two ways to drive `line_color` / `line_width` / `strength` from a link attribute:
+
+- **`intensity`** — numeric attribute → continuous scale → width and/or color ramp.
+- **`categorical`** — discrete attribute value → style lookup.
+
+Both are *pure functions of a single attribute*. Compound conditions, regex
+matches, or rules across multiple attributes are out of scope by design —
+precompute a synthetic attribute upstream (e.g. `risk_class: "high"`) and use
+categorical on that.
+
+### YAML shape
+
+```yaml
+settings:
+  extra_cfg:
+    styling:
+      links:
+        intensity:
+          attribute: amount           # top-level shortcut for both width and color
+          scale: sqrt                 # linear | log | sqrt | power | quantile
+          domain: robust              # [min, max] | 'robust' (5/95 pct) | omitted
+          clip: true
+          missing: fallback           # fallback | skip | error
+          legend: true
+          legend_count: 5
+          width:
+            range: [1, 10]            # required if width: present
+          color:
+            ramp: [Light Yellow, Red] # length ≥ 2, evenly spaced stops
+            space: rgb_linear         # rgb | rgb_linear (default) | hsl
+            diverging: false
+            midpoint: 0               # required when diverging=true
+        categorical:
+          attribute: source_type
+          styles:
+            Witness:    { line_color: Green, line_width: 2 }
+            Informant:  { line_color: Orange }
+            Intercept:  { line_color: Red, line_width: 3, strength: Confirmed }
+          default:      { line_color: Grey }
+          missing: fallback
+          case_sensitive: false       # default false
+          accent_insensitive: true    # default true — folds São Paulo ↔ Sao Paulo
+          legend: true
+```
+
+### Precedence
+
+For every link the resolver walks this order; the first level that sets a value wins:
+
+```
+explicit per-link  >  categorical  >  intensity  >  link_match_entity_color  >  LinkType default
+```
+
+Each transform writes only to fields the original `Link` left unset, so an
+explicit `line_color="Blue"` on a link always beats every data-driven rule.
+
+### Scales
+
+| Scale | Behaviour | Best for |
+|---|---|---|
+| `linear` | `(v - min) / (max - min)` | Bounded ratings, percentages |
+| `log` | log-of-value mapping | Money, calls, durations (heavy-tailed). Requires every value > 0. |
+| `sqrt` | `v^0.5` softens high values | Default — perceptually closer to linear width |
+| `power` | `v^k` with user `power` value | Custom curve shaping |
+| `quantile` | rank-based positioning | "Top vs bottom" rankings; immune to outliers |
+
+### Color spaces
+
+| Space | Notes |
+|---|---|
+| `rgb` | Naive sRGB lerp. Cheap, muddy midpoints. |
+| `rgb_linear` | **Default.** Gamma-correct sRGB lerp via linear-light round-trip. Endpoints are byte-identical to `rgb`; midpoints are noticeably brighter. |
+| `hsl` | Hue-saturation-lightness lerp via `colorsys`. Takes the short way around the hue circle. Good for pure hue ramps. |
+
+### Missing-value policy
+
+- `fallback` (default) — link gets no styling, falls through to type / chart defaults.
+- `skip` — same as `fallback` (kept distinct so future versions can differentiate).
+- `error` — surfaces as a validation error at `validate()` time.
+
+### Categorical surface
+
+`CategoricalStyleCfg` supports `line_color`, `line_width`, and `strength`
+(the named strength must be registered on the chart via `add_strength`).
+`arrow` is intentionally excluded — arrow direction is data, not styling.
+
+### Legend auto-generation
+
+Set `legend: true` on either block to auto-emit `LegendItem(item_type='Line')`
+rows. Intensity samples `legend_count` (default 5) points in **scale-space**, so
+a log scale shows geometric value steps; categorical emits one row per `styles`
+entry in insertion order.
+
+### Validation rules
+
+| Check | Error type |
+|---|---|
+| Missing or non-numeric intensity attribute | `invalid_intensity_attribute` |
+| `scale: log` with any non-positive value | `invalid_intensity_domain` |
+| `range[0] ≥ range[1]` or negative width | `invalid_intensity_range` |
+| `ramp` shorter than 2 colors / unresolvable color | `invalid_intensity_ramp` |
+| `scale: power` without `power:` value | `invalid_intensity_config` |
+| `diverging: true` without `midpoint:` | `invalid_intensity_config` |
+| Categorical without `attribute:` or empty `styles:` | `invalid_categorical_attribute` / `_config` |
+| Style entry with no settable fields | `invalid_categorical_style` |
+| Intensity and categorical target the same attribute | `styling_conflict` |
+
+### What this is not
+
+> anxwritter supports two kinds of data-driven styling: **continuous** (numeric
+> attribute → scale → width/color) and **categorical** (attribute value → style
+> lookup). Both are pure functions of a single attribute. Anything that
+> involves conditions across multiple attributes, range comparisons on text,
+> regex matching, or computed predicates is business logic — compute the
+> result in your data pipeline and either set `line_color` / `line_width`
+> explicitly per link, or precompute a synthetic attribute upstream (e.g.
+> `risk_class: "high"`) and use categorical on that.

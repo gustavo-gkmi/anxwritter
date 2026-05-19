@@ -29,6 +29,8 @@ from anxwritter import (
     AttributeClass,
     Box,
     Card,
+    CategoricalCfg,
+    CategoricalStyleCfg,
     ChartCfg,
     Circle,
     EntityType,
@@ -38,14 +40,19 @@ from anxwritter import (
     GradeCollection,
     GridCfg,
     Icon,
+    IntensityCfg,
+    IntensityColorCfg,
+    IntensityWidthCfg,
     Label,
     LegendCfg,
     LegendItem,
     Link,
+    LinkStylingCfg,
     LinkType,
     Settings,
     Strength,
     StrengthCollection,
+    StylingCfg,
     TextBlock,
     ThemeLine,
 )
@@ -59,7 +66,27 @@ from anxwritter.enums import DotStyle
 FULL_SPEC: Dict[str, Any] = {
     "settings": {
         "chart": {"bg_color": 8421504},
-        "extra_cfg": {"entity_auto_color": True, "arrange": "grid"},
+        "extra_cfg": {
+            "entity_auto_color": True,
+            "arrange": "grid",
+            "styling": {
+                "links": {
+                    "intensity": {
+                        "attribute": "amount",
+                        "scale": "linear",
+                        "width": {"range": [1, 10]},
+                    },
+                    "categorical": {
+                        "attribute": "intel_source",
+                        "styles": {
+                            "Witness": {"line_color": "Green", "line_width": 2},
+                            "Informant": {"line_color": "Orange"},
+                        },
+                        "default": {"line_color": "Grey"},
+                    },
+                },
+            },
+        },
         "grid": {"snap": True},
         "legend_cfg": {
             "show": True,
@@ -79,6 +106,9 @@ FULL_SPEC: Dict[str, Any] = {
     "attribute_classes": [
         {"name": "phone", "type": "Text", "prefix": "Tel: "},
         {"name": "balance", "type": "Number", "prefix": "R$ ", "decimal_places": 2},
+        {"name": "amount", "type": "Number"},
+        {"name": "intel_source", "type": "Text"},
+        {"name": "duration", "type": "Number"},
     ],
     "strengths": {
         "items": [
@@ -136,7 +166,13 @@ FULL_SPEC: Dict[str, Any] = {
             "type": "Call",
             "arrow": "->",
             "date": "2024-01-15",
-            "attributes": {"duration": 120},
+            "attributes": {"duration": 120, "amount": 50, "intel_source": "Witness"},
+        },
+        {
+            "from_id": "Bob",
+            "to_id": "Alice",
+            "type": "Call",
+            "attributes": {"duration": 30, "amount": 250, "intel_source": "Informant"},
         },
     ],
 }
@@ -415,7 +451,25 @@ def build_via_settings_manual_dataclass(spec: Dict[str, Any]) -> ANXChart:
     if "chart" in s_dict:
         kwargs["chart"] = ChartCfg(**s_dict["chart"])
     if "extra_cfg" in s_dict:
-        kwargs["extra_cfg"] = ExtraCfg(**s_dict["extra_cfg"])
+        ec = dict(s_dict["extra_cfg"])
+        if "styling" in ec and isinstance(ec["styling"], dict):
+            sdict = ec["styling"]
+            links_d = sdict.get("links")
+            link_kwargs: Dict[str, Any] = {}
+            if isinstance(links_d, dict):
+                if isinstance(links_d.get("intensity"), dict):
+                    idict = dict(links_d["intensity"])
+                    if isinstance(idict.get("width"), dict):
+                        idict["width"] = IntensityWidthCfg(**idict["width"])
+                    if isinstance(idict.get("color"), dict):
+                        idict["color"] = IntensityColorCfg(**idict["color"])
+                    link_kwargs["intensity"] = IntensityCfg(**idict)
+                if isinstance(links_d.get("categorical"), dict):
+                    link_kwargs["categorical"] = CategoricalCfg(**links_d["categorical"])
+            ec["styling"] = StylingCfg(
+                links=LinkStylingCfg(**link_kwargs) if link_kwargs else None,
+            )
+        kwargs["extra_cfg"] = ExtraCfg(**ec)
     if "grid" in s_dict:
         kwargs["grid"] = GridCfg(**s_dict["grid"])
     if "legend_cfg" in s_dict:

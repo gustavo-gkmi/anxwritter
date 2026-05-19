@@ -78,6 +78,17 @@ class ErrorType(str, Enum):
     # Geo-map errors
     INVALID_GEO_MAP = 'invalid_geo_map'
 
+    # Styling errors (extra_cfg.styling.links.{intensity,categorical})
+    INVALID_INTENSITY_CONFIG = 'invalid_intensity_config'
+    INVALID_INTENSITY_ATTRIBUTE = 'invalid_intensity_attribute'
+    INVALID_INTENSITY_DOMAIN = 'invalid_intensity_domain'
+    INVALID_INTENSITY_RANGE = 'invalid_intensity_range'
+    INVALID_INTENSITY_RAMP = 'invalid_intensity_ramp'
+    INVALID_CATEGORICAL_CONFIG = 'invalid_categorical_config'
+    INVALID_CATEGORICAL_ATTRIBUTE = 'invalid_categorical_attribute'
+    INVALID_CATEGORICAL_STYLE = 'invalid_categorical_style'
+    STYLING_CONFLICT = 'styling_conflict'
+
 
 class ANXValidationError(Exception):
     """Raised when chart data contains validation errors.

@@ -207,6 +207,54 @@ class LegendItemType(str, Enum):
     ICON_FRAME = 'icon_frame'
 
 
+class IntensityScale(str, Enum):
+    """Scaling function for data-driven styling (``extra_cfg.styling.links.intensity``).
+
+    Maps a numeric attribute value to a normalised ``t`` in ``[0, 1]`` which is
+    then projected onto the configured width range and/or color ramp.
+
+    - ``linear``: ``(v - min) / (max - min)``. Best for bounded ratings.
+    - ``log``: log-of-value. Best for power-law data (money, calls, durations).
+      Requires every value > 0.
+    - ``sqrt`` / ``power``: ``v^k`` softens or exaggerates extremes. ``sqrt`` is
+      ``power`` with ``k=0.5`` and handles zero values.
+    - ``quantile``: rank-based. Immune to outliers but loses absolute magnitude.
+    - ``threshold``: piecewise from user-supplied break points (deferred — not in v1).
+    """
+    LINEAR    = 'linear'
+    LOG       = 'log'
+    SQRT      = 'sqrt'
+    POWER     = 'power'
+    QUANTILE  = 'quantile'
+    THRESHOLD = 'threshold'
+
+
+class ColorSpace(str, Enum):
+    """Color interpolation space for intensity ramps.
+
+    - ``rgb``: naive sRGB component-wise interpolation. Cheapest, muddy midpoints.
+    - ``rgb_linear``: gamma-correct sRGB interpolation (round-trip through linear-light).
+      Better midpoints, default. Endpoints are byte-identical to ``rgb``.
+    - ``hsl``: hue-saturation-lightness interpolation via ``colorsys``. Useful for
+      hue ramps; takes the shortest path around the hue circle.
+    """
+    RGB        = 'rgb'
+    RGB_LINEAR = 'rgb_linear'
+    HSL        = 'hsl'
+
+
+class MissingPolicy(str, Enum):
+    """How styling transforms treat links whose driving attribute is missing.
+
+    - ``fallback``: leave the link unstyled — type default applies (recommended).
+    - ``skip``: same as ``fallback`` (kept distinct so docs can grow if needed).
+    - ``error``: surface as a validation error at ``validate()`` time.
+    """
+    FALLBACK = 'fallback'
+    SKIP     = 'skip'
+    ERROR    = 'error'
+
+
 #: All valid shading color names accepted by i2 ANB (40 colors).
 VALID_SHADING_COLORS: frozenset = frozenset([
     'Black', 'Brown', 'Olive Green', 'Dark Green', 'Dark Teal', 'Dark Blue',

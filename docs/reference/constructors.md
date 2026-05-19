@@ -223,6 +223,43 @@ chart.apply_config(data_dict)         # from a dict
 chart.apply_config_file('path.yaml')  # from a file
 ```
 
+### Tagging layers with `source_name`
+
+When you layer multiple configs (a bundled template + a user override, for
+example), `validate()` errors can identify which layer set the offending
+entry. Pass `source_name=` to tag every entry the call contributes:
+
+```python
+chart.apply_config(bundled_dict, source_name='org_defaults')
+chart.apply_config_file('project.yaml')   # auto-derives 'project.yaml' from the path
+chart.apply_config(user_dict, source_name='inline override')
+```
+
+`apply_config_file` and `from_config_file` default `source_name` to
+`Path(path).name` (just the basename). Pass an explicit value to override
+with a logical layer name. `apply_config` and `from_config` accept no
+default — pass one if you want attribution.
+
+Each validation error that originated from a tagged entry then carries an
+optional `source` key:
+
+```python
+errors = chart.validate()
+# errors[i] == {
+#   'type': 'unknown_color',
+#   'location': 'entity_types[2]',
+#   'message': "...",
+#   'source': 'project.yaml',   # ← present only when known
+# }
+```
+
+`config_conflict` errors gain a separate `config_source` key identifying
+the layer that locked the original entry (the data file is the other
+side). `ANXValidationError`'s formatted message string appends
+`(source: X)` per line, but that string format is **explicitly
+unstable** — match on the error dict's `type` / `location` keys, not the
+message text.
+
 ### Exporting config
 
 Save the current chart configuration (without entities/links) for reuse.

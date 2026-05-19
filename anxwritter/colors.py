@@ -4,7 +4,8 @@ Color utilities for i2 Analyst's Notebook ANX files.
 ANB uses Windows COLORREF integers: ``R + G*256 + B*65536``
 (little-endian BGR, upper byte always 0).
 """
-from typing import Any, Dict
+import colorsys
+from typing import Any, Dict, Sequence
 
 
 def rgb_to_colorref(r: int, g: int, b: int) -> int:
@@ -116,3 +117,160 @@ def color_to_colorref(color: Any) -> int:
         f"Unknown color {color!r}. "
         f"Use a name from NAMED_COLORS or a hex string like '#FF0000'."
     )
+
+
+# ── Component split / join helpers ──────────────────────────────────────────
+
+
+def _colorref_to_rgb(c: int) -> tuple:
+    """Split a Windows COLORREF int into (R, G, B) ints in 0–255."""
+    r = c & 0xFF
+    g = (c >> 8) & 0xFF
+    b = (c >> 16) & 0xFF
+    return r, g, b
+
+
+# ── sRGB ↔ linear-light helpers (used by gamma-correct interpolation) ──
+
+
+def _srgb_to_linear(c: float) -> float:
+    """Convert one sRGB component in ``[0, 1]`` to linear light.
+
+    Standard sRGB transfer function. Used by ``lerp_rgb_linear`` so midpoints
+    aren't muddy. Endpoints are byte-identical to the naive lerp by construction
+    (the function is exact at ``c=0`` and ``c=1``).
+    """
+    if c <= 0.04045:
+        return c / 12.92
+    return ((c + 0.055) / 1.055) ** 2.4
+
+
+def _linear_to_srgb(c: float) -> float:
+    """Inverse of ``_srgb_to_linear``. Clamps to ``[0, 1]`` for safety."""
+    if c <= 0.0:
+        return 0.0
+    if c >= 1.0:
+        return 1.0
+    if c <= 0.0031308:
+        return c * 12.92
+    return 1.055 * (c ** (1.0 / 2.4)) - 0.055
+
+
+# ── Color interpolation ────────────────────────────────────────────────────
+
+
+def lerp_rgb(c1: int, c2: int, t: float) -> int:
+    """Naive sRGB component-wise linear interpolation.
+
+    Cheap and predictable, but produces muddy midpoints (red→green goes through
+    brown). Use ``lerp_rgb_linear`` for better mid-range fidelity at the cost of
+    one extra pow() round-trip.
+    """
+    if t <= 0.0:
+        return c1
+    if t >= 1.0:
+        return c2
+    r1, g1, b1 = _colorref_to_rgb(c1)
+    r2, g2, b2 = _colorref_to_rgb(c2)
+    r = round(r1 + (r2 - r1) * t)
+    g = round(g1 + (g2 - g1) * t)
+    b = round(b1 + (b2 - b1) * t)
+    return rgb_to_colorref(r, g, b)
+
+
+def lerp_rgb_linear(c1: int, c2: int, t: float) -> int:
+    """Gamma-correct sRGB interpolation (round-trip through linear light).
+
+    The mathematically-defensible default. Recommended for sequential ramps.
+    """
+    if t <= 0.0:
+        return c1
+    if t >= 1.0:
+        return c2
+    r1, g1, b1 = _colorref_to_rgb(c1)
+    r2, g2, b2 = _colorref_to_rgb(c2)
+    # Normalise to [0, 1] and linearise
+    lr1, lg1, lb1 = (_srgb_to_linear(x / 255.0) for x in (r1, g1, b1))
+    lr2, lg2, lb2 = (_srgb_to_linear(x / 255.0) for x in (r2, g2, b2))
+    lr = lr1 + (lr2 - lr1) * t
+    lg = lg1 + (lg2 - lg1) * t
+    lb = lb1 + (lb2 - lb1) * t
+    r = round(_linear_to_srgb(lr) * 255.0)
+    g = round(_linear_to_srgb(lg) * 255.0)
+    b = round(_linear_to_srgb(lb) * 255.0)
+    return rgb_to_colorref(r, g, b)
+
+
+def lerp_hsl(c1: int, c2: int, t: float) -> int:
+    """Interpolate via HLS (a.k.a. HSL) — short way around the hue circle.
+
+    Uses ``colorsys.rgb_to_hls`` / ``hls_to_rgb``. Hue interpolates along the
+    shorter of the two arcs between the endpoints; lightness and saturation lerp
+    linearly.
+    """
+    if t <= 0.0:
+        return c1
+    if t >= 1.0:
+        return c2
+    r1, g1, b1 = _colorref_to_rgb(c1)
+    r2, g2, b2 = _colorref_to_rgb(c2)
+    h1, l1, s1 = colorsys.rgb_to_hls(r1 / 255.0, g1 / 255.0, b1 / 255.0)
+    h2, l2, s2 = colorsys.rgb_to_hls(r2 / 255.0, g2 / 255.0, b2 / 255.0)
+    # Pick the shorter way around the hue circle
+    dh = h2 - h1
+    if dh > 0.5:
+        dh -= 1.0
+    elif dh < -0.5:
+        dh += 1.0
+    h = (h1 + dh * t) % 1.0
+    L = l1 + (l2 - l1) * t
+    s = s1 + (s2 - s1) * t
+    r, g, b = colorsys.hls_to_rgb(h, L, s)
+    return rgb_to_colorref(round(r * 255), round(g * 255), round(b * 255))
+
+
+# Resolution order for the lerp dispatcher.  Default falls through to rgb_linear.
+_LERP_BY_SPACE = {
+    'rgb': lerp_rgb,
+    'rgb_linear': lerp_rgb_linear,
+    'hsl': lerp_hsl,
+}
+
+
+def interpolate_ramp(
+    ramp: Sequence[int],
+    t: float,
+    space: str = 'rgb_linear',
+) -> int:
+    """Evaluate a multi-stop color ramp at ``t`` ∈ ``[0, 1]``.
+
+    Stops are evenly spaced: a two-color ramp interpolates from index 0 to
+    index 1; a three-color ramp has the second color at ``t=0.5``. Endpoints
+    are exact (``t=0`` returns ``ramp[0]`` byte-identically).
+
+    Args:
+        ramp: Sequence of COLORREF integers. Must have at least two entries
+            — callers should validate before calling.
+        t: Position along the ramp, clamped to ``[0, 1]``.
+        space: One of ``'rgb'``, ``'rgb_linear'`` (default), ``'hsl'``.
+
+    Returns:
+        A COLORREF integer.
+    """
+    n = len(ramp)
+    if n == 0:
+        raise ValueError("interpolate_ramp requires at least one color in ramp")
+    if n == 1:
+        return ramp[0]
+    if t <= 0.0:
+        return ramp[0]
+    if t >= 1.0:
+        return ramp[-1]
+    # Locate the segment
+    seg_len = 1.0 / (n - 1)
+    idx = int(t / seg_len)
+    if idx >= n - 1:
+        idx = n - 2
+    local_t = (t - idx * seg_len) / seg_len
+    lerp = _LERP_BY_SPACE.get(space, lerp_rgb_linear)
+    return lerp(ramp[idx], ramp[idx + 1], local_t)
