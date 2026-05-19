@@ -45,7 +45,7 @@ from .enums import DotStyle, Representation
 from .errors import ANXValidationError
 from ._i2_interop import LATITUDE_GUID, LONGITUDE_GUID, GRID_REFERENCE_GUID
 from .models import (
-    Card, Link, AttributeClass, CanvasDisplay, Strength, LegendItem,
+    Card, Link, AttributeClass, DateAttributeDisplay, Strength, LegendItem,
     EntityType, LinkType,
     Palette, PaletteAttributeEntry, DateTimeFormat,
     SemanticEntity, SemanticLink, SemanticProperty,
@@ -448,26 +448,6 @@ class ANXChart:
                             cleaned['font'] = Font(**{
                                 k: v for k, v in cleaned['font'].items() if v is not None
                             })
-                    if section == 'attribute_classes' and 'canvas_display' in cleaned:
-                        cv = cleaned['canvas_display']
-                        if cv is True:
-                            cleaned['canvas_display'] = CanvasDisplay()
-                        elif cv is False:
-                            cleaned['canvas_display'] = None
-                        elif isinstance(cv, dict):
-                            inner_cv = {k: v for k, v in cv.items() if v is not None}
-                            if isinstance(inner_cv.get('attribute_class'), dict):
-                                ac_inner = {
-                                    k: v for k, v in inner_cv['attribute_class'].items()
-                                    if v is not None
-                                }
-                                if isinstance(ac_inner.get('font'), dict):
-                                    ac_inner['font'] = Font(**{
-                                        k: v for k, v in ac_inner['font'].items()
-                                        if v is not None
-                                    })
-                                inner_cv['attribute_class'] = AttributeClass(**ac_inner)
-                            cleaned['canvas_display'] = CanvasDisplay(**inner_cv)
                     obj = cls(**cleaned)
                 elif isinstance(raw, cls):
                     obj = raw
@@ -1117,6 +1097,8 @@ class ANXChart:
             self._semantic_links.append(item)
         elif isinstance(item, SemanticProperty):
             self._semantic_properties.append(item)
+        elif isinstance(item, DateAttributeDisplay):
+            self.settings.extra_cfg.date_attribute_displays.append(item)
         else:
             raise TypeError(f"Cannot add item of type {type(item).__name__}")
 
@@ -1245,6 +1227,23 @@ class ANXChart:
             if name_or_obj is not None:
                 kwargs['name'] = name_or_obj
             self._legend_items.append(LegendItem(**kwargs))
+
+    def add_date_attribute_display(self, obj=None, **kwargs) -> None:
+        """Add a :class:`DateAttributeDisplay` to ``extra_cfg.date_attribute_displays``.
+
+        Pass a ``DateAttributeDisplay`` instance or keyword args matching its
+        fields (``start``, ``end``, ``name``, ``suffix``, ``format``,
+        ``separator``, ``missing``, ``start_placeholder``,
+        ``end_placeholder``, ``attribute_class``). Multiple displays can be
+        added; they are appended in order. Validation runs at
+        :meth:`validate` time.
+        """
+        if isinstance(obj, DateAttributeDisplay):
+            self.settings.extra_cfg.date_attribute_displays.append(obj)
+        else:
+            self.settings.extra_cfg.date_attribute_displays.append(
+                DateAttributeDisplay(**kwargs)
+            )
 
     def add_entity_type(self, name_or_obj=None, **kwargs) -> None:
         """Add or update an EntityType. Later calls with the same ``name``
@@ -1554,6 +1553,16 @@ class ANXChart:
             self.settings.extra_cfg.styling,
             self._links,
             strength_names,
+        ))
+
+        # Validate date_attribute_displays (extra_cfg.date_attribute_displays)
+        from .validation import validate_date_attribute_displays
+        errors.extend(validate_date_attribute_displays(
+            self.settings.extra_cfg.date_attribute_displays,
+            self._attribute_classes,
+            self._entities,
+            self._links,
+            ac_names,
         ))
 
         return errors
@@ -2018,14 +2027,15 @@ class ANXChart:
         # ── Store resolved links for lazy emit in build() ───────────────
         builder._resolved_items.extend(resolved_links)
 
-        # ── Canvas display expansion ────────────────────────────────────
+        # ── Date attribute display expansion ────────────────────────────
         # Must run after both entity AND link resolution and before
         # builder.build() consumes att_class_config.
-        with timer.phase("Canvas display expansion"):
-            from .transforms import expand_canvas_display_atttime
-            expand_canvas_display_atttime(
+        with timer.phase("Date attribute display expansion"):
+            from .transforms import expand_date_attribute_displays
+            expand_date_attribute_displays(
                 resolved_entities,
                 resolved_links,
+                self.settings.extra_cfg.date_attribute_displays,
                 self._attribute_classes,
                 builder,
                 att_class_config,

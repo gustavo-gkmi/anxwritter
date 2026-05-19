@@ -82,21 +82,23 @@ def test_link_styling_builds(link_styling_module, tmp_path, monkeypatch):
 
 
 @pytest.fixture(scope="module")
-def canvas_display_module():
+def date_attribute_displays_module():
     sys.path.insert(0, str(EXAMPLES_DIR.parent))
     try:
-        mod = importlib.import_module("examples.canvas_display_example")
+        mod = importlib.import_module("examples.date_attribute_displays_example")
     finally:
         sys.path.pop(0)
     return mod
 
 
-def test_canvas_display_example_builds(canvas_display_module, tmp_path, monkeypatch):
-    """Both the baseline and the canvas_display variants build clean."""
+def test_date_attribute_displays_example_builds(date_attribute_displays_module, tmp_path, monkeypatch):
+    """Single-date workaround + range variants all build clean."""
     monkeypatch.chdir(tmp_path)
 
-    baseline_path = canvas_display_module.build_baseline().to_anx(tmp_path / "baseline")
-    workaround_path = canvas_display_module.build_workaround().to_anx(tmp_path / "workaround")
+    paths = []
+    for name, builder in date_attribute_displays_module.BUILDERS.items():
+        path = builder().to_anx(tmp_path / name)
+        paths.append(Path(path))
 
-    assert Path(baseline_path).exists() and Path(baseline_path).stat().st_size > 0
-    assert Path(workaround_path).exists() and Path(workaround_path).stat().st_size > 0
+    for p in paths:
+        assert p.exists() and p.stat().st_size > 0
