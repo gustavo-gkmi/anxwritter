@@ -469,6 +469,58 @@ class StylingCfg:
 
 
 @dataclass
+class DateAttributeDisplay:
+    """Synthesises a text-sibling AttributeClass that renders one or two
+    datetime attribute values on the canvas, as a workaround for ANB v9 not
+    rendering ``AttTime`` values directly.
+
+    Lives under ``extra_cfg.date_attribute_displays`` — a chart-level
+    synthesizer (same family as ``styling`` and ``geo_map``), not a property
+    of any single ``AttributeClass``.
+
+    Single-date mode:
+        ``start`` names a declared ``datetime`` AC. The sibling AC name is
+        auto-derived as ``f"{start}{suffix}"`` (suffix defaults to
+        ``' (display)'``) unless ``name`` is set explicitly.
+
+    Range mode:
+        ``start`` and ``end`` each name a declared ``datetime`` AC. ``name``
+        is required. Per-item value is
+        ``f"{fmt(start)}{separator}{fmt(end)}"`` when both bounds are set;
+        when one is missing the ``missing`` policy applies (``skip`` |
+        ``substitute`` | ``truncate`` | ``error``), with placeholder strings
+        used by ``substitute`` mode.
+
+    Both referenced ACs MUST have ``visible=False`` — validation errors out
+    otherwise with a fix-it message. The transform does not silently mutate
+    user-declared ACs.
+
+    Sibling AC styling comes from ``attribute_class`` (no inheritance from
+    the source ACs). Inner ``attribute_class.name`` and ``.type`` must be
+    ``None`` — the sibling is auto-named and auto-typed as text.
+    """
+    start: Optional[str] = None             # Required: source AC name (single-date or range start)
+    end: Optional[str] = None               # Optional: present = range mode; must differ from start
+    name: Optional[str] = None              # Sibling AC name; required in range mode
+    suffix: Optional[str] = None            # Used only for auto-derived single-date name (default ' (display)')
+    format: Optional[str] = None            # strftime (default '%Y-%m-%d')
+    separator: Optional[str] = None         # Range mode only (default ' - ')
+    missing: Optional[str] = None           # 'skip' (default) | 'substitute' | 'truncate' | 'error'
+    start_placeholder: Optional[str] = None # substitute mode: text for missing start bound (default '')
+    end_placeholder: Optional[str] = None   # substitute mode: text for missing end bound (default '')
+    attribute_class: Optional['AttributeClass'] = None  # Sibling AC styling template (inner .name/.type must be None)
+
+    def __post_init__(self):
+        if isinstance(self.attribute_class, dict):
+            inner = {k: v for k, v in self.attribute_class.items() if v is not None}
+            if isinstance(inner.get('font'), dict):
+                inner['font'] = Font(**{
+                    k: v for k, v in inner['font'].items() if v is not None
+                })
+            self.attribute_class = AttributeClass(**inner)
+
+
+@dataclass
 class ExtraCfg:
     """ANXWritter-only knobs (not written to ANX XML)."""
     entity_auto_color: Optional[bool] = None       # Distribute HSV hues
@@ -478,6 +530,7 @@ class ExtraCfg:
     link_arc_offset: Optional[int] = None          # Parallel-link arc offset
     geo_map: Optional[GeoMapCfg] = None            # Geographic positioning
     styling: Optional[StylingCfg] = None           # Data-driven link styling (intensity + categorical)
+    date_attribute_displays: List[DateAttributeDisplay] = field(default_factory=list)  # Datetime → text sibling synthesizers
 
 
 # Forward references resolved after all classes defined — see bottom of Settings class
@@ -661,28 +714,6 @@ class Card:
 
 
 @dataclass
-class CanvasDisplay:
-    """Opt-in workaround for ANB v9 not rendering datetime attribute values
-    on the canvas after import.
-
-    When set on a datetime AttributeClass, anxwritter emits a paired text
-    sibling AC plus a formatted-string sibling attribute on every entity/link
-    that uses the parent. The properties panel, time-wheel, sort, and filter
-    keep working off the original datetime parent; the canvas renders the
-    text sibling.
-    """
-    format: Optional[str] = None        # strftime; default '%Y-%m-%d'
-    suffix: Optional[str] = None        # default ' (display)'
-    attribute_class: Optional['AttributeClass'] = None
-
-    def __post_init__(self):
-        if isinstance(self.attribute_class, dict):
-            self.attribute_class = AttributeClass(**{
-                k: v for k, v in self.attribute_class.items() if v is not None
-            })
-
-
-@dataclass
 class AttributeClass:
     """Chart-level configuration for a named attribute type."""
 
@@ -707,17 +738,6 @@ class AttributeClass:
     merge_behaviour: Optional[MergeBehaviour] = None
     paste_behaviour: Optional[MergeBehaviour] = None
     font: Font = field(default_factory=Font)
-    canvas_display: Optional[CanvasDisplay] = None
-
-    def __post_init__(self):
-        if self.canvas_display is True:
-            self.canvas_display = CanvasDisplay()
-        elif self.canvas_display is False:
-            self.canvas_display = None
-        elif isinstance(self.canvas_display, dict):
-            self.canvas_display = CanvasDisplay(**{
-                k: v for k, v in self.canvas_display.items() if v is not None
-            })
 
 
 @dataclass

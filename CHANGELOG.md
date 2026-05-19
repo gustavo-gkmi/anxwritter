@@ -5,6 +5,60 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.1] - 2026-05-19
+
+### Breaking
+
+- **`canvas_display` on `AttributeClass` was removed** and replaced with a
+  chart-level synthesizer under `extra_cfg.date_attribute_displays`. The
+  field-on-AC shape forced an arbitrary "owner" choice and didn't generalize
+  to date ranges (two source ACs, no natural owner). The new shape sits
+  alongside `styling` / `geo_map` / `entity_auto_color` — same chart-level
+  synthesizer family. Since v1.10.0 had been live for hours when the redesign
+  shipped and the lib has no known external consumers of `canvas_display`,
+  this is treated as a hotfix patch rather than a major version bump.
+- The `CanvasDisplay` dataclass was renamed to `DateAttributeDisplay`. Both
+  the top-level export (`anxwritter.CanvasDisplay`) and the field
+  (`AttributeClass.canvas_display`) are gone.
+- `ErrorType` members renamed:
+  `ATTTIME_VISIBLE_FORBIDS_CANVAS_DISPLAY` → `DATETIME_AC_FORBIDS_VISIBLE`;
+  `CANVAS_DISPLAY_INVALID` → `DATE_DISPLAY_INVALID`;
+  `CANVAS_DISPLAY_NAME_COLLISION` → `DATE_DISPLAY_NAME_COLLISION`.
+
+### Added
+
+- **`extra_cfg.date_attribute_displays`** — opt-in chart-level synthesizer
+  that replaces v1.10.0's `canvas_display`. Each entry declares a synthesised
+  text-sibling AttributeClass derived from one (single-date) or two (range)
+  datetime ACs. Range mode renders both bounds into one canvas-visible string
+  via `start`, `end`, `name`, `separator`, and a `format` shared by both
+  bounds.
+  - **Missing-bound policies** for range mode: `missing='skip'` (default),
+    `'substitute'` (with per-bound `start_placeholder` / `end_placeholder`,
+    e.g. `'ongoing'` for open-ended investigations), `'truncate'` (render
+    the present bound alone, no separator), or `'error'` (surface
+    `date_display_invalid` per item at `validate()` time).
+  - **Source ACs must declare `visible=False` explicitly.** The transform no
+    longer mutates user-declared ACs. Validation emits `date_display_invalid`
+    with a fix-it message naming the AC, the display index, and the
+    `visible=False` requirement. The cross-cutting "any datetime AC with
+    `visible=True` is rejected" rule (`datetime_ac_forbids_visible`) remains
+    in place independently.
+  - **Range mode requires an explicit `name`** — there's no natural single-AC
+    base to auto-derive from. Single-date mode keeps the
+    `f"{start}{suffix}"` auto-derivation with `suffix` defaulting to
+    `' (display)'`.
+  - **Sibling-name collisions** surface as `date_display_name_collision`
+    against either explicit ACs or other displays.
+  - YAML/JSON form: a list under `settings.extra_cfg.date_attribute_displays`.
+    `AttributeClass` styling template is supported under each entry's
+    `attribute_class` field (inner `.name` and `.type` must be `None`, same
+    as v1.10.0).
+- New top-level export: `DateAttributeDisplay`.
+- New chart method: `chart.add_date_attribute_display(start=..., end=..., name=..., ...)`.
+- New example `examples/date_attribute_displays_example.py` — single-date,
+  range, and range-with-substitute charts.
+
 ## [1.10.0] - 2026-05-19
 
 ### Added

@@ -515,63 +515,94 @@ def inject_geo_attributes(
             re.attributes.append(ResolvedAttr('Longitude', lon_ref_id, str(lon)))
 
 
-# ── Canvas display: workaround for unrendered datetime values ───────────────
+# ── Date attribute displays: workaround for unrendered datetime values ──────
+
+_DATE_DISPLAY_RESOLVED_FMT = '%Y-%m-%dT%H:%M:%S.%f'
+_DATE_DISPLAY_RESOLVED_FMT_NO_MS = '%Y-%m-%dT%H:%M:%S'
 
 
-def expand_canvas_display_atttime(
+def _date_display_sibling_name(disp: Any) -> Optional[str]:
+    """Mirror of validation._date_display_sibling_name — kept here to avoid
+    importing the validation module from transforms."""
+    name = getattr(disp, 'name', None)
+    if name:
+        return name
+    start = getattr(disp, 'start', None)
+    end = getattr(disp, 'end', None)
+    if not start or end:
+        return None
+    suffix = getattr(disp, 'suffix', None)
+    if suffix is None:
+        suffix = ' (display)'
+    return f"{start}{suffix}"
+
+
+def expand_date_attribute_displays(
     resolved_entities,
     resolved_links,
+    displays,
     attribute_classes,
     builder,
     att_class_config,
 ):
-    """Expand datetime ACs with canvas_display into text sibling ACs +
-    formatted-string sibling attributes on every resolved entity/link.
+    """Synthesise text-sibling AttributeClasses from datetime sources and
+    paint per-item sibling values onto every resolved entity/link.
 
-    Must run AFTER both entity and link resolution complete, BEFORE
-    builder.build(). The transform:
+    For each ``DateAttributeDisplay``:
 
-    1. Forces parent ``visible=False`` so its chrome does not render.
-    2. Registers a text sibling AC named ``<parent.name><suffix>`` on the
-       builder and ``att_class_config``.
-    3. Appends a ``ResolvedAttr`` sibling row to every resolved entity/link
-       that carries the parent AC, with the parent's datetime value
-       re-parsed from its canonical ISO ``value_str`` and re-formatted via
-       the configured strftime ``format``.
+    1. Compute the effective sibling name (explicit ``name`` or
+       ``f"{start}{suffix}"``).
+    2. Register the sibling as a text AC on the builder + ``att_class_config``,
+       defaulting ``visible=True`` + ``show_value=True``. The display's
+       ``attribute_class`` template overrides those defaults.
+    3. Walk every resolved entity/link. For each item, look up start/end
+       values from its existing ``ResolvedAttr`` rows, branch on the
+       ``missing`` policy, and append a ``ResolvedAttr(sibling_name, ...)``
+       with the rendered text (or skip).
 
-    Sibling AC styling comes from ``canvas_display.attribute_class``
-    (no inheritance from the parent — explicit beats implicit).
+    Visibility of the source ACs is NOT mutated — validation already requires
+    the user to set ``visible=False`` on referenced ACs.
     """
     from .resolved import ResolvedAttr
     from datetime import datetime as _dt
 
-    _RESOLVED_FMT = '%Y-%m-%dT%H:%M:%S.%f'
-    _RESOLVED_FMT_NO_MS = '%Y-%m-%dT%H:%M:%S'
+    if not displays:
+        return
 
-    expansion_map = {}  # parent_name -> (sibling_name, sibling_ref_id, fmt)
-    for ac in attribute_classes:
-        if ac.canvas_display is None or not ac.name:
+    def _parse(value_str: str):
+        try:
+            return _dt.strptime(value_str, _DATE_DISPLAY_RESOLVED_FMT)
+        except ValueError:
+            try:
+                return _dt.strptime(value_str, _DATE_DISPLAY_RESOLVED_FMT_NO_MS)
+            except ValueError:
+                return None
+
+    for disp in displays:
+        sib_name = _date_display_sibling_name(disp)
+        if not sib_name:
+            # Validation already flagged this entry; emit nothing.
             continue
-        cd = ac.canvas_display
-        suffix = cd.suffix if cd.suffix is not None else ' (display)'
-        sibling_name = f"{ac.name}{suffix}"
-        fmt = cd.format if cd.format else '%Y-%m-%d'
+        start = getattr(disp, 'start', None)
+        end = getattr(disp, 'end', None)
+        if not start:
+            continue
+        fmt = getattr(disp, 'format', None) or '%Y-%m-%d'
+        sep = getattr(disp, 'separator', None)
+        if sep is None:
+            sep = ' - '
+        missing = getattr(disp, 'missing', None) or 'skip'
+        start_ph = getattr(disp, 'start_placeholder', None) or ''
+        end_ph = getattr(disp, 'end_placeholder', None) or ''
 
-        # Force parent visible=False so its chrome does not render.
-        att_class_config.setdefault(ac.name, {})['visible'] = False
-
-        sibling_ref_id = builder._att_class_id(sibling_name, 'AttText')
-
-        # Build sibling AC row from cd.attribute_class (no parent inheritance).
-        # Default the sibling to visible=True + show_value=True so the
-        # formatted date actually renders on the canvas; the user can still
-        # override by setting either field on cd.attribute_class.
-        inner = cd.attribute_class
+        # Register sibling AC + config row.
+        sib_ref_id = builder._att_class_id(sib_name, 'AttText')
         sibling_row: Dict[str, Any] = {
             'type': 'text',
             'visible': True,
             'show_value': True,
         }
+        inner = getattr(disp, 'attribute_class', None)
         if inner is not None:
             for fn in ('prefix', 'suffix', 'decimal_places', 'show_value',
                        'show_date', 'show_time', 'show_seconds', 'show_if_set',
@@ -582,34 +613,64 @@ def expand_canvas_display_atttime(
                 v = getattr(inner, fn, None)
                 if v is not None:
                     sibling_row[fn] = v
-            sibling_row['font'] = inner.font
-        att_class_config[sibling_name] = sibling_row
+            inner_font = getattr(inner, 'font', None)
+            if inner_font is not None:
+                sibling_row['font'] = inner_font
+        att_class_config[sib_name] = sibling_row
 
-        expansion_map[ac.name] = (sibling_name, sibling_ref_id, fmt)
+        # Bind per-display loop variables as default args so each closure
+        # captures the values rather than the names — ruff B023 / late-binding
+        # hazard if _paint were ever called after the loop iterates further.
+        def _paint(
+            items,
+            *,
+            _sib_name=sib_name, _sib_ref_id=sib_ref_id,
+            _start=start, _end=end, _fmt=fmt, _sep=sep, _missing=missing,
+            _start_ph=start_ph, _end_ph=end_ph,
+        ):
+            for ri in items:
+                start_attr = None
+                end_attr = None
+                for ra in ri.attributes:
+                    if ra.class_name == _start:
+                        start_attr = ra
+                    elif _end is not None and ra.class_name == _end:
+                        end_attr = ra
+                    if start_attr is not None and (_end is None or end_attr is not None):
+                        break
 
-    if not expansion_map:
-        return
+                start_dt = _parse(start_attr.value_str) if start_attr is not None else None
+                end_dt = _parse(end_attr.value_str) if end_attr is not None else None
 
-    def _expand(items):
-        for ri in items:
-            extras = []
-            for ra in ri.attributes:
-                if ra.class_name not in expansion_map:
-                    continue
-                sib_name, sib_ref, fmt = expansion_map[ra.class_name]
-                try:
-                    parsed = _dt.strptime(ra.value_str, _RESOLVED_FMT)
-                except ValueError:
-                    try:
-                        parsed = _dt.strptime(ra.value_str, _RESOLVED_FMT_NO_MS)
-                    except ValueError:
+                # Single-date mode
+                if _end is None:
+                    if start_dt is None:
                         continue
-                extras.append(ResolvedAttr(sib_name, sib_ref, parsed.strftime(fmt)))
-            if extras:
-                ri.attributes.extend(extras)
+                    ri.attributes.append(ResolvedAttr(
+                        _sib_name, _sib_ref_id, start_dt.strftime(_fmt)
+                    ))
+                    continue
 
-    _expand(resolved_entities)
-    _expand(resolved_links)
+                # Range mode
+                if start_dt is not None and end_dt is not None:
+                    rendered = f"{start_dt.strftime(_fmt)}{_sep}{end_dt.strftime(_fmt)}"
+                elif start_dt is None and end_dt is None:
+                    continue  # both missing → always skip
+                elif _missing == 'skip' or _missing == 'error':
+                    # 'error' was already surfaced at validate time; defensive skip here.
+                    continue
+                elif _missing == 'truncate':
+                    bound_dt = start_dt if start_dt is not None else end_dt
+                    rendered = bound_dt.strftime(_fmt)
+                else:  # 'substitute'
+                    left = start_dt.strftime(_fmt) if start_dt is not None else _start_ph
+                    right = end_dt.strftime(_fmt) if end_dt is not None else _end_ph
+                    rendered = f"{left}{_sep}{right}"
+
+                ri.attributes.append(ResolvedAttr(_sib_name, _sib_ref_id, rendered))
+
+        _paint(resolved_entities)
+        _paint(resolved_links)
 
 
 # ── Link styling: scales, intensity, categorical ────────────────────────────

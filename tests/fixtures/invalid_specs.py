@@ -440,42 +440,52 @@ INVALID_SPECS: List[tuple] = [
         {ErrorType.STYLING_CONFLICT.value},
     ),
 
-    # ── Canvas display: AttTime + visible=True forbidden ────────────────────
+    # ── Datetime + visible=True forbidden ───────────────────────────────────
     (
-        "atttime_visible_true_forbidden",
+        "datetime_visible_true_forbidden",
         {
             "entities": {"icons": [{"id": "A", "type": "Person"}]},
             "attribute_classes": [
                 {"name": "EventDate", "type": "datetime", "visible": True},
             ],
         },
-        {ErrorType.ATTTIME_VISIBLE_FORBIDS_CANVAS_DISPLAY.value},
+        {ErrorType.DATETIME_AC_FORBIDS_VISIBLE.value},
     ),
 
-    # ── Canvas display: canvas_display on non-datetime AC ───────────────────
+    # ── date_attribute_displays: start references undeclared AC ─────────────
     (
-        "canvas_display_on_non_datetime",
+        "date_display_start_undeclared",
         {
             "entities": {"icons": [{"id": "A", "type": "Person"}]},
-            "attribute_classes": [
-                {"name": "Phone", "type": "text", "canvas_display": True},
-            ],
+            "settings": {
+                "extra_cfg": {
+                    "date_attribute_displays": [
+                        {"start": "missing_ac"},
+                    ],
+                },
+            },
         },
-        {ErrorType.CANVAS_DISPLAY_INVALID.value},
+        {ErrorType.DATE_DISPLAY_INVALID.value},
     ),
 
-    # ── Canvas display: sibling name collides with explicit AC ──────────────
+    # ── date_attribute_displays: sibling name collides with explicit AC ─────
     (
-        "canvas_display_name_collision",
+        "date_display_name_collides_with_ac",
         {
             "entities": {"icons": [{"id": "A", "type": "Person"}]},
             "attribute_classes": [
-                {"name": "EventDate", "type": "datetime",
-                 "visible": False, "canvas_display": True},
+                {"name": "EventDate", "type": "datetime", "visible": False},
                 {"name": "EventDate (display)", "type": "text"},
             ],
+            "settings": {
+                "extra_cfg": {
+                    "date_attribute_displays": [
+                        {"start": "EventDate"},
+                    ],
+                },
+            },
         },
-        {ErrorType.CANVAS_DISPLAY_NAME_COLLISION.value},
+        {ErrorType.DATE_DISPLAY_NAME_COLLISION.value},
     ),
 ]
 

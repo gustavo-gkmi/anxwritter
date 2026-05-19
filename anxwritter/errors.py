@@ -89,10 +89,10 @@ class ErrorType(str, Enum):
     INVALID_CATEGORICAL_STYLE = 'invalid_categorical_style'
     STYLING_CONFLICT = 'styling_conflict'
 
-    # Canvas display (ANB v9 AttTime canvas-render workaround) errors
-    ATTTIME_VISIBLE_FORBIDS_CANVAS_DISPLAY = 'atttime_visible_forbids_canvas_display'
-    CANVAS_DISPLAY_INVALID = 'canvas_display_invalid'
-    CANVAS_DISPLAY_NAME_COLLISION = 'canvas_display_name_collision'
+    # Date attribute display (ANB v9 AttTime canvas-render workaround) errors
+    DATETIME_AC_FORBIDS_VISIBLE = 'datetime_ac_forbids_visible'
+    DATE_DISPLAY_INVALID = 'date_display_invalid'
+    DATE_DISPLAY_NAME_COLLISION = 'date_display_name_collision'
 
 
 class ANXValidationError(Exception):

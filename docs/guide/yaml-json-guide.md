@@ -425,29 +425,41 @@ type: [attributes.md](../reference/attributes.md).
 
 #### Rendering datetime attributes on the canvas
 
-ANB v9 does not render datetime values on the canvas after import. Use
-`canvas_display` on a `datetime` AC to emit a paired text sibling whose
-formatted value renders correctly. The parent's `visible` must be `false`.
+ANB v9 does not render datetime values on the canvas after import. Datetime
+ACs must have `visible: false`; a separate `extra_cfg.date_attribute_displays`
+entry synthesises a text sibling AttributeClass whose formatted value
+renders correctly. Range mode (`start` + `end`) is also supported.
 
 ```yaml
 attribute_classes:
   - name: EventDate
     type: datetime
     visible: false
-    canvas_display: true          # defaults: '%Y-%m-%d', suffix ' (display)'
-
-  - name: CallTime
+  - name: investigation_start
     type: datetime
     visible: false
-    canvas_display:
-      format: "%d/%m/%Y %H:%M"
-      suffix: " (display)"
-      attribute_class:
-        prefix: "Call: "
-        font: { italic: true }
+  - name: investigation_end
+    type: datetime
+    visible: false
+
+settings:
+  extra_cfg:
+    date_attribute_displays:
+      # Single-date workaround
+      - start: EventDate
+        format: "%d/%m/%Y"
+
+      # Range with substitute policy for ongoing investigations
+      - start: investigation_start
+        end: investigation_end
+        name: Period
+        format: "%Y-%m-%d"
+        separator: " – "
+        missing: substitute
+        end_placeholder: ongoing
 ```
 
-See [attributes.md → Canvas display for date/time attributes](../reference/attributes.md#canvas-display-for-datetime-attributes).
+See [attributes.md → Date attribute displays](../reference/attributes.md#date-attribute-displays).
 
 ---
 

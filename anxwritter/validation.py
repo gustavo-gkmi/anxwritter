@@ -1015,132 +1015,28 @@ def validate_attribute_classes(
                     'location': loc,
                 })
 
-        # ── Canvas display ──────────────────────────────────────────────
-        cd = getattr(ac, 'canvas_display', None)
-        is_datetime = ac_type == 'datetime'
-
-        # Rule A — type=datetime + visible=True is always rejected, with or
-        # without canvas_display. ANB v9 does not render datetime values on
-        # the canvas after import; the surrounding chrome appears but the
-        # value is blank. Users must set visible=False and opt into
-        # canvas_display=True to render the formatted date as a text sibling.
-        if is_datetime and ac.visible is True:
+        # ── Rule: datetime + visible=True is always rejected ────────────
+        # ANB v9 does not render datetime values on the canvas after import;
+        # the surrounding chrome appears but the value is blank. Users must
+        # set visible=False and configure an extra_cfg.date_attribute_displays
+        # entry that references this AC to render the formatted date as a
+        # paired text sibling.
+        if ac_type == 'datetime' and ac.visible is True:
             errors.append({
-                'type': ErrorType.ATTTIME_VISIBLE_FORBIDS_CANVAS_DISPLAY.value,
+                'type': ErrorType.DATETIME_AC_FORBIDS_VISIBLE.value,
                 'message': (
                     f"AttributeClass '{ac.name}' (datetime) cannot have "
                     f"visible=True: ANB v9 does not render datetime values "
                     f"on the canvas, so the chrome would render with no "
-                    f"value. Set visible=False and add canvas_display=True "
-                    f"to render the formatted date as a paired text sibling."
+                    f"value. Set visible=False and add an "
+                    f"extra_cfg.date_attribute_displays entry referencing "
+                    f"this AC to render the formatted date as a paired text "
+                    f"sibling."
                 ),
                 'location': f"{loc}.visible",
             })
 
-        # Rule B — canvas_display on non-datetime AC
-        if cd is not None and not is_datetime:
-            errors.append({
-                'type': ErrorType.CANVAS_DISPLAY_INVALID.value,
-                'message': (
-                    f"AttributeClass '{ac.name}' has canvas_display but "
-                    f"type is '{ac_type}'. canvas_display is only valid on "
-                    f"datetime AttributeClasses."
-                ),
-                'location': f"{loc}.canvas_display",
-            })
-
-        # Rule C — inner attribute_class.name / .type must be None
-        if cd is not None:
-            inner = cd.attribute_class
-            if inner is not None:
-                if inner.name:
-                    errors.append({
-                        'type': ErrorType.CANVAS_DISPLAY_INVALID.value,
-                        'message': (
-                            f"AttributeClass '{ac.name}' canvas_display."
-                            f"attribute_class.name must be None — the sibling "
-                            f"name is auto-derived as "
-                            f"'<parent.name><suffix>'."
-                        ),
-                        'location': f"{loc}.canvas_display.attribute_class.name",
-                    })
-                if inner.type is not None:
-                    errors.append({
-                        'type': ErrorType.CANVAS_DISPLAY_INVALID.value,
-                        'message': (
-                            f"AttributeClass '{ac.name}' canvas_display."
-                            f"attribute_class.type must be None — the sibling "
-                            f"type is auto-locked to AttText."
-                        ),
-                        'location': f"{loc}.canvas_display.attribute_class.type",
-                    })
-
-        # Rule D — format must be a valid strftime string when set
-        if cd is not None and cd.format is not None:
-            if not _is_valid_strftime(cd.format):
-                errors.append({
-                    'type': ErrorType.CANVAS_DISPLAY_INVALID.value,
-                    'message': (
-                        f"AttributeClass '{ac.name}' canvas_display.format "
-                        f"{cd.format!r} is not a valid strftime format string."
-                    ),
-                    'location': f"{loc}.canvas_display.format",
-                })
-
         _row_tag(ac.name, row_start)
-
-    # ── Rules E & F — sibling-name collision (second pass) ──────────────
-    # Build map of explicit AC name -> location (only ACs with valid name).
-    explicit_names = dict(ac_names)
-    sibling_to_parent: Dict[str, str] = {}  # sibling_name -> parent.name
-    sibling_locs: Dict[str, str] = {}        # sibling_name -> location
-
-    for i, ac in enumerate(attribute_classes):
-        if not ac.name:
-            continue
-        cd = getattr(ac, 'canvas_display', None)
-        if cd is None:
-            continue
-        # Only valid datetime parents produce siblings — non-datetime parents
-        # are already flagged by Rule B; collision checks would be noise.
-        if _enum_val(ac.type).lower() != 'datetime':
-            continue
-        suffix = cd.suffix if cd.suffix is not None else ' (display)'
-        sibling_name = f"{ac.name}{suffix}"
-        loc = f"attribute_classes[{i}]"
-        row_start = len(errors)
-
-        # Rule E — sibling name collides with an explicit AC
-        if sibling_name in explicit_names:
-            errors.append({
-                'type': ErrorType.CANVAS_DISPLAY_NAME_COLLISION.value,
-                'message': (
-                    f"AttributeClass '{ac.name}' canvas_display sibling name "
-                    f"'{sibling_name}' collides with explicit "
-                    f"AttributeClass at {explicit_names[sibling_name]}."
-                ),
-                'location': f"{loc}.canvas_display.suffix",
-            })
-            _row_tag(ac.name, row_start)
-            continue
-
-        # Rule F — two parents resolve to the same sibling name
-        if sibling_name in sibling_to_parent:
-            errors.append({
-                'type': ErrorType.CANVAS_DISPLAY_NAME_COLLISION.value,
-                'message': (
-                    f"AttributeClass '{ac.name}' canvas_display sibling name "
-                    f"'{sibling_name}' collides with the sibling for "
-                    f"AttributeClass '{sibling_to_parent[sibling_name]}' "
-                    f"at {sibling_locs[sibling_name]}."
-                ),
-                'location': f"{loc}.canvas_display.suffix",
-            })
-            _row_tag(ac.name, row_start)
-            continue
-
-        sibling_to_parent[sibling_name] = ac.name
-        sibling_locs[sibling_name] = loc
 
     return errors, ac_names
 
@@ -1943,5 +1839,307 @@ def validate_styling(
                 ),
                 'location': base,
             })
+
+    return errors
+
+
+_VALID_MISSING_POLICIES = frozenset({'skip', 'substitute', 'truncate', 'error'})
+
+
+def _date_display_sibling_name(disp: Any) -> Optional[str]:
+    """Compute the effective sibling AC name for a DateAttributeDisplay.
+
+    Returns the explicit ``name`` when set, else ``f"{start}{suffix}"`` with
+    suffix defaulting to ``' (display)'`` (single-date mode only). Returns
+    ``None`` when neither path can produce a name (e.g. range mode without
+    explicit ``name``, or single-date with no ``start``) — callers should
+    treat that as "validation already flagged this entry, no sibling name to
+    use yet."
+    """
+    name = getattr(disp, 'name', None)
+    if name:
+        return name
+    start = getattr(disp, 'start', None)
+    end = getattr(disp, 'end', None)
+    if not start or end:
+        # Range mode requires explicit name; missing-start is invalid anyway.
+        return None
+    suffix = getattr(disp, 'suffix', None)
+    if suffix is None:
+        suffix = ' (display)'
+    return f"{start}{suffix}"
+
+
+def validate_date_attribute_displays(
+    displays: List[Any],
+    attribute_classes: List['AttributeClass'],
+    entities: List['_BaseEntity'],
+    links: List['Link'],
+    ac_names: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    """Validate ``extra_cfg.date_attribute_displays`` entries.
+
+    Each entry synthesises a text-sibling AC from one (single-date) or two
+    (range) datetime ACs. Validation enforces:
+
+    - ``start`` is required and must reference a declared ``datetime`` AC
+      with ``visible=False``.
+    - ``end`` is optional; same constraints; must differ from ``start``.
+    - ``name`` is required when ``end`` is set (no natural single-AC base
+      to auto-derive from).
+    - ``format`` must be a valid strftime when set.
+    - ``missing`` ∈ {``skip``, ``substitute``, ``truncate``, ``error``}.
+    - ``attribute_class.name`` / ``.type`` must be ``None`` — the sibling
+      is auto-named and auto-typed as text.
+    - The effective sibling name must not collide with any explicit AC or
+      with any other display's effective sibling name.
+    - When ``missing == 'error'``: every entity/link that carries one bound
+      must also carry the other; missing bound is surfaced per-item.
+    """
+    errors: List[Dict[str, Any]] = []
+    if not displays:
+        return errors
+
+    # Build a fast lookup of declared AC name → AttributeClass for type +
+    # visibility checks. Only ACs with a name are eligible (unnamed ACs are
+    # already flagged by validate_attribute_classes).
+    ac_by_name: Dict[str, 'AttributeClass'] = {
+        ac.name: ac for ac in attribute_classes if ac.name
+    }
+
+    base_loc = 'settings.extra_cfg.date_attribute_displays'
+
+    # Per-display checks ------------------------------------------------------
+    effective_names: List[Optional[str]] = []
+    for i, disp in enumerate(displays):
+        loc = f"{base_loc}[{i}]"
+        start = getattr(disp, 'start', None)
+        end = getattr(disp, 'end', None)
+        name = getattr(disp, 'name', None)
+        fmt = getattr(disp, 'format', None)
+        missing = getattr(disp, 'missing', None)
+        inner = getattr(disp, 'attribute_class', None)
+
+        # Rule 1 — start required
+        if not start:
+            errors.append({
+                'type': ErrorType.DATE_DISPLAY_INVALID.value,
+                'message': (
+                    f"date_attribute_displays[{i}]: 'start' is required "
+                    f"(name of a declared datetime AttributeClass)."
+                ),
+                'location': f"{loc}.start",
+            })
+            effective_names.append(None)
+            continue
+
+        # Rule 2/3/4 — start references valid AC, datetime, visible=False
+        start_ac = ac_by_name.get(start)
+        if start_ac is None:
+            errors.append({
+                'type': ErrorType.DATE_DISPLAY_INVALID.value,
+                'message': (
+                    f"date_attribute_displays[{i}].start references "
+                    f"'{start}' but no AttributeClass with that name is "
+                    f"declared on the chart."
+                ),
+                'location': f"{loc}.start",
+            })
+        else:
+            start_type = _enum_val(start_ac.type).lower() if start_ac.type else None
+            if start_type != 'datetime':
+                errors.append({
+                    'type': ErrorType.DATE_DISPLAY_INVALID.value,
+                    'message': (
+                        f"date_attribute_displays[{i}].start references AC "
+                        f"'{start}' but its type is '{start_type}', not "
+                        f"'datetime'."
+                    ),
+                    'location': f"{loc}.start",
+                })
+            elif start_ac.visible is not False:
+                errors.append({
+                    'type': ErrorType.DATE_DISPLAY_INVALID.value,
+                    'message': (
+                        f"AC '{start}' is referenced by "
+                        f"date_attribute_displays[{i}] and must have "
+                        f"visible=False — ANB v9 won't render the datetime "
+                        f"value otherwise."
+                    ),
+                    'location': f"{loc}.start",
+                })
+
+        # Range-mode checks (end set)
+        if end is not None:
+            if end == start:
+                errors.append({
+                    'type': ErrorType.DATE_DISPLAY_INVALID.value,
+                    'message': (
+                        f"date_attribute_displays[{i}]: 'end' cannot equal "
+                        f"'start' ({start!r}). Use single-date mode (omit "
+                        f"'end') for one source AC."
+                    ),
+                    'location': f"{loc}.end",
+                })
+            end_ac = ac_by_name.get(end)
+            if end_ac is None:
+                errors.append({
+                    'type': ErrorType.DATE_DISPLAY_INVALID.value,
+                    'message': (
+                        f"date_attribute_displays[{i}].end references "
+                        f"'{end}' but no AttributeClass with that name is "
+                        f"declared on the chart."
+                    ),
+                    'location': f"{loc}.end",
+                })
+            else:
+                end_type = _enum_val(end_ac.type).lower() if end_ac.type else None
+                if end_type != 'datetime':
+                    errors.append({
+                        'type': ErrorType.DATE_DISPLAY_INVALID.value,
+                        'message': (
+                            f"date_attribute_displays[{i}].end references "
+                            f"AC '{end}' but its type is '{end_type}', not "
+                            f"'datetime'."
+                        ),
+                        'location': f"{loc}.end",
+                    })
+                elif end_ac.visible is not False:
+                    errors.append({
+                        'type': ErrorType.DATE_DISPLAY_INVALID.value,
+                        'message': (
+                            f"AC '{end}' is referenced by "
+                            f"date_attribute_displays[{i}] and must have "
+                            f"visible=False — ANB v9 won't render the "
+                            f"datetime value otherwise."
+                        ),
+                        'location': f"{loc}.end",
+                    })
+
+            # Rule — range mode requires explicit name
+            if not name:
+                errors.append({
+                    'type': ErrorType.DATE_DISPLAY_INVALID.value,
+                    'message': (
+                        f"date_attribute_displays[{i}] is a range "
+                        f"(end set) — 'name' is required because there's "
+                        f"no single source AC to derive the sibling name "
+                        f"from."
+                    ),
+                    'location': f"{loc}.name",
+                })
+
+        # format must be valid strftime when set
+        if fmt is not None and not _is_valid_strftime(fmt):
+            errors.append({
+                'type': ErrorType.DATE_DISPLAY_INVALID.value,
+                'message': (
+                    f"date_attribute_displays[{i}].format {fmt!r} is not a "
+                    f"valid strftime format string."
+                ),
+                'location': f"{loc}.format",
+            })
+
+        # missing policy must be in valid set
+        if missing is not None and missing not in _VALID_MISSING_POLICIES:
+            errors.append({
+                'type': ErrorType.DATE_DISPLAY_INVALID.value,
+                'message': (
+                    f"date_attribute_displays[{i}].missing {missing!r} is "
+                    f"invalid. Valid values: "
+                    f"{sorted(_VALID_MISSING_POLICIES)}."
+                ),
+                'location': f"{loc}.missing",
+            })
+
+        # attribute_class.name and .type must be None
+        if inner is not None:
+            if getattr(inner, 'name', None):
+                errors.append({
+                    'type': ErrorType.DATE_DISPLAY_INVALID.value,
+                    'message': (
+                        f"date_attribute_displays[{i}].attribute_class.name "
+                        f"must be None — the sibling AC name is the "
+                        f"display's 'name' field (or auto-derived from "
+                        f"start+suffix)."
+                    ),
+                    'location': f"{loc}.attribute_class.name",
+                })
+            if getattr(inner, 'type', None) is not None:
+                errors.append({
+                    'type': ErrorType.DATE_DISPLAY_INVALID.value,
+                    'message': (
+                        f"date_attribute_displays[{i}].attribute_class.type "
+                        f"must be None — the sibling AC type is auto-locked "
+                        f"to text."
+                    ),
+                    'location': f"{loc}.attribute_class.type",
+                })
+
+        effective_names.append(_date_display_sibling_name(disp))
+
+    # Cross-entry sibling-name collision checks --------------------------------
+    explicit = dict(ac_names)
+    sibling_to_index: Dict[str, int] = {}
+    for i, sib_name in enumerate(effective_names):
+        if not sib_name:
+            continue
+        loc = f"{base_loc}[{i}]"
+        if sib_name in explicit:
+            errors.append({
+                'type': ErrorType.DATE_DISPLAY_NAME_COLLISION.value,
+                'message': (
+                    f"date_attribute_displays[{i}] sibling name "
+                    f"'{sib_name}' collides with explicit AttributeClass "
+                    f"at {explicit[sib_name]}."
+                ),
+                'location': f"{loc}.name",
+            })
+            continue
+        if sib_name in sibling_to_index:
+            errors.append({
+                'type': ErrorType.DATE_DISPLAY_NAME_COLLISION.value,
+                'message': (
+                    f"date_attribute_displays[{i}] sibling name "
+                    f"'{sib_name}' collides with "
+                    f"date_attribute_displays[{sibling_to_index[sib_name]}]."
+                ),
+                'location': f"{loc}.name",
+            })
+            continue
+        sibling_to_index[sib_name] = i
+
+    # Per-item walk for missing='error' ----------------------------------------
+    for i, disp in enumerate(displays):
+        missing = getattr(disp, 'missing', None)
+        if missing != 'error':
+            continue
+        start = getattr(disp, 'start', None)
+        end = getattr(disp, 'end', None)
+        if not start:
+            continue
+        for kind, items in (('entities', entities), ('links', links)):
+            for j, it in enumerate(items):
+                attrs = getattr(it, 'attributes', None) or {}
+                has_start = start in attrs and attrs[start] is not None
+                has_end = (end is None) or (end in attrs and attrs[end] is not None)
+                if has_start and not has_end:
+                    errors.append({
+                        'type': ErrorType.DATE_DISPLAY_INVALID.value,
+                        'message': (
+                            f"date_attribute_displays[{i}].missing='error' "
+                            f"and {kind}[{j}] has '{start}' but no '{end}'."
+                        ),
+                        'location': f"{kind}[{j}].attributes.{end}",
+                    })
+                elif not has_start and end is not None and end in attrs and attrs[end] is not None:
+                    errors.append({
+                        'type': ErrorType.DATE_DISPLAY_INVALID.value,
+                        'message': (
+                            f"date_attribute_displays[{i}].missing='error' "
+                            f"and {kind}[{j}] has '{end}' but no '{start}'."
+                        ),
+                        'location': f"{kind}[{j}].attributes.{start}",
+                    })
 
     return errors

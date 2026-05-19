@@ -103,116 +103,171 @@ Every field is declared `Optional[...] = None` on the dataclass. The "ANB defaul
 | `merge_behaviour` | `Optional[MergeBehaviour]` | `MergeBehaviour` | All | omitted | Merge behavior when two items with the same attribute are merged. Omitted by default -- ANB uses its own built-in default. Only set to override. See Merge behaviour values below. |
 | `paste_behaviour` | `Optional[MergeBehaviour]` | `PasteBehaviour` | All | omitted | Paste behavior when an attribute value is pasted onto an item. Omitted by default. See Paste behaviour values below. |
 | `font` | `Font` | `<Font>` child | All | `Font()` | Font styling for the attribute display. Same shared `Font` dataclass used by chart/legend/entity fonts. The `<Font>` element is only emitted when at least one field is explicitly set. i2 defaults: Tahoma 8pt. |
-| `canvas_display` | `Optional[CanvasDisplay]` | -- (emits a paired text sibling AC) | DateTime only | `None` | Opt-in workaround for ANB v9 not rendering datetime attribute values on the canvas. When set on a `datetime` AC, anxwritter emits a paired text sibling AC named `<parent.name><suffix>` and a formatted-string sibling attribute on every entity/link that uses the parent. The parent's `visible` is forced to `False`. See **Canvas display for date/time attributes** below. |
+
+> **`datetime` ACs cannot have `visible=True`.** ANB v9 does not render
+> datetime values on the canvas; the chrome would render with no value.
+> Validation rejects `type=datetime` + `visible=True` with
+> `datetime_ac_forbids_visible`. Use
+> [`extra_cfg.date_attribute_displays`](#date-attribute-displays) to
+> synthesise a text sibling that renders the formatted date.
 
 ---
 
-## Canvas display for date/time attributes
+## Date attribute displays {#date-attribute-displays}
 
 ANB v9 does not render datetime attribute values on the canvas after `.anx`
 import. The values load correctly -- they appear in the properties panel and
 work for time-wheel, sort, and filter -- but on the canvas, only the
 surrounding chrome (symbol, prefix, suffix, class name) appears next to each
-entity/link. The date itself is blank. `canvas_display` is an opt-in
-workaround that ships the formatted date as a paired text attribute so the
-canvas has something to render.
+entity/link. The date itself is blank.
+
+`extra_cfg.date_attribute_displays` is an opt-in chart-level synthesizer that
+declares one or more text-sibling AttributeClasses derived from datetime ACs.
+The synthesizer also supports **date ranges** -- two datetime ACs combined
+into one canvas-rendered string -- which the single-AC workaround on its own
+couldn't express.
 
 ### What it does
 
-When you set `canvas_display` on a `datetime` AttributeClass, anxwritter:
+For each `DateAttributeDisplay` entry, anxwritter:
 
-1. Forces the parent AC's `visible=False` so the chrome doesn't render with
-   a blank value.
-2. Registers a paired text sibling AttributeClass named
-   `<parent.name><suffix>` (default suffix `' (display)'`). The sibling
-   defaults to `visible=True` and `show_value=True` so the formatted date
-   actually renders on the canvas.
-3. On every entity/link that carries the parent attribute, appends a sibling
-   attribute whose value is the parent's `datetime` formatted via `strftime`
-   (default format `'%Y-%m-%d'` -- ISO date, locale-neutral).
+1. Computes the sibling AC's name (the entry's `name` field if set, else
+   `f"{start}{suffix}"` with suffix defaulting to `' (display)'` in
+   single-date mode).
+2. Registers the sibling as a text AttributeClass (`visible=True`,
+   `show_value=True` by default; override via `attribute_class=...`).
+3. Walks every entity/link in the chart and appends a sibling attribute
+   whose value is the parent's datetime(s) formatted via `strftime`
+   (default `'%Y-%m-%d'`).
 
-The original `datetime` parent is still emitted and ANB still loads it.
-Time-wheel, sort, filter, and the properties panel keep working off the
-parent. The canvas shows the text sibling.
+The original datetime ACs are still emitted and ANB still loads them. They
+**must have `visible=False`** -- validation requires it explicitly. ANB never
+renders the datetime value on the canvas, so leaving the parent visible
+would render the chrome with no value. The synthesised sibling carries the
+canvas-rendered text.
 
-Any field you set on `canvas_display.attribute_class` overrides the sibling
-defaults -- e.g. set `attribute_class=AttributeClass(visible=False)` if you
-want the sibling registered (for use elsewhere in ANB) but not rendered.
-
-### Three accepted forms
+### Single-date mode
 
 ```python
-from anxwritter import ANXChart, AttributeClass, CanvasDisplay, Font
+from anxwritter import ANXChart, AttributeClass, Font
 
-# Defaults: '%Y-%m-%d' format, ' (display)' suffix, no inner styling.
-chart.add_attribute_class(name='EventDate', type='datetime',
-                          visible=False, canvas_display=True)
-
-# Dict shortcut.
-chart.add_attribute_class(name='EventDate', type='datetime', visible=False,
-                          canvas_display={'format': '%d/%m/%Y'})
-
-# Full control via the dataclass.
-chart.add_attribute_class(
-    name='EventDate', type='datetime', visible=False,
-    canvas_display=CanvasDisplay(
-        format='%d/%m/%Y %H:%M',
-        suffix=' (display)',
-        attribute_class=AttributeClass(
-            prefix='When: ',
-            show_symbol=True,
-            font=Font(italic=True),
-        ),
-    ),
+chart = ANXChart()
+chart.add_attribute_class(name='event_date', type='datetime', visible=False)
+chart.add_date_attribute_display(
+    start='event_date',
+    format='%d/%m/%Y',
+    attribute_class=AttributeClass(prefix='Event: ', font=Font(italic=True)),
 )
+chart.add_icon(id='A', type='Person',
+               attributes={'event_date': datetime(2024, 1, 15)})
+# Canvas shows: Event: 15/01/2024
 ```
 
-YAML:
+The synthesised AC's name auto-derives as `event_date (display)`. Set
+`name='Event'` on the display to override.
+
+### Range mode
+
+```python
+chart = ANXChart()
+chart.add_attribute_class(name='investigation_start', type='datetime', visible=False)
+chart.add_attribute_class(name='investigation_end',   type='datetime', visible=False)
+chart.add_date_attribute_display(
+    start='investigation_start',
+    end='investigation_end',
+    name='Period',                 # required in range mode
+    format='%Y-%m-%d',
+    separator=' – ',
+)
+chart.add_icon(id='Case A', type='Event',
+               attributes={'investigation_start': datetime(2023, 6, 1),
+                           'investigation_end': datetime(2023, 12, 31)})
+# Canvas shows: 2023-06-01 – 2023-12-31
+```
+
+`name` is required in range mode -- there's no single source AC to
+auto-derive from.
+
+### Missing bounds
+
+By default, items missing one bound emit no sibling row for that item. Four
+policies are available via `missing=`:
+
+| Policy | End missing (start present) | Start missing (end present) | Both missing |
+|---|---|---|---|
+| `'skip'` (default) | no sibling row | no sibling row | no sibling row |
+| `'substitute'` | `"2024-01-15 – {end_placeholder}"` | `"{start_placeholder} – 2024-12-31"` | no sibling row |
+| `'truncate'` | `"2024-01-15"` (no separator) | `"2024-12-31"` | no sibling row |
+| `'error'` | `validate()` row at `entities[i].attributes.<end>` | symmetric | no error |
+
+Per-bound placeholders default to `''`; set them via `start_placeholder=`
+and `end_placeholder=`. Common values: `'?'`, `'…'`, `'N/A'`, `'ongoing'`.
+
+```python
+chart.add_date_attribute_display(
+    start='investigation_start', end='investigation_end', name='Period',
+    missing='substitute', end_placeholder='ongoing',
+)
+# Open investigation (no end_date): Canvas shows "2024-01-10 – ongoing"
+```
+
+### YAML form
 
 ```yaml
 attribute_classes:
-  - name: EventDate
+  - name: investigation_start
     type: datetime
     visible: false
-    canvas_display:
-      format: "%d/%m/%Y %H:%M"
-      suffix: " (display)"
-      attribute_class:
-        prefix: "When: "
-        show_symbol: true
-        font: { italic: true }
+  - name: investigation_end
+    type: datetime
+    visible: false
+
+settings:
+  extra_cfg:
+    date_attribute_displays:
+      - start: investigation_start
+        end: investigation_end
+        name: Period
+        format: '%Y-%m-%d'
+        separator: ' – '
+        missing: substitute
+        end_placeholder: ongoing
 ```
 
-### `CanvasDisplay` fields
+### `DateAttributeDisplay` fields
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `format` | `Optional[str]` | `'%Y-%m-%d'` | `strftime` format string applied to the parent's datetime. |
-| `suffix` | `Optional[str]` | `' (display)'` | Appended to the parent's `name` to derive the sibling AC name. |
-| `attribute_class` | `Optional[AttributeClass]` | `None` | Styling for the sibling AC. `name` and `type` must be `None` -- the sibling is auto-named and auto-typed as text. No inheritance from the parent. |
+| `start` | `Optional[str]` | -- (required) | Name of the source datetime AC. |
+| `end` | `Optional[str]` | `None` | Range mode: name of the end-date AC. Must differ from `start`. |
+| `name` | `Optional[str]` | auto | Sibling AC name. Required in range mode; auto-derived as `f"{start}{suffix}"` in single-date mode. |
+| `suffix` | `Optional[str]` | `' (display)'` | Used only when `name` is None (single-date mode). |
+| `format` | `Optional[str]` | `'%Y-%m-%d'` | `strftime` format applied to both bounds. |
+| `separator` | `Optional[str]` | `' - '` | Range mode only. |
+| `missing` | `Optional[str]` | `'skip'` | One of `skip` / `substitute` / `truncate` / `error`. |
+| `start_placeholder` | `Optional[str]` | `''` | `substitute` mode: text for missing start bound. |
+| `end_placeholder` | `Optional[str]` | `''` | `substitute` mode: text for missing end bound. |
+| `attribute_class` | `Optional[AttributeClass]` | `None` | Styling template for the sibling AC. Inner `.name` and `.type` must be `None` -- the sibling is auto-named and auto-typed as text. No inheritance from the source ACs. |
 
 ### Validation rules
 
-`chart.validate()` emits the following errors before `to_anx()` will write the
-file:
+`chart.validate()` emits these errors before `to_anx()` will write the file:
 
-| Rule | Error type | Condition |
-|---|---|---|
-| A | `atttime_visible_forbids_canvas_display` | `type=datetime` + `visible=True`, with or without `canvas_display`. The message names `canvas_display=True` as the workaround. |
-| B | `canvas_display_invalid` | `canvas_display` set on a non-`datetime` AttributeClass. |
-| C | `canvas_display_invalid` | `canvas_display.attribute_class.name` or `.type` is set (must be `None` -- the sibling is auto-named and auto-typed). |
-| D | `canvas_display_invalid` | `canvas_display.format` is not a valid `strftime` format string. Empty string is invalid. |
-| E | `canvas_display_name_collision` | The derived sibling name (`<parent.name><suffix>`) collides with another explicit AttributeClass on the chart. |
-| F | `canvas_display_name_collision` | Two parent ACs resolve to the same sibling name. |
+| Error type | Condition |
+|---|---|
+| `datetime_ac_forbids_visible` | Any `type=datetime` AC has `visible=True`. ANB v9 will render the chrome with no value. |
+| `date_display_invalid` | `start` missing or references undeclared / non-datetime AC; `start` AC has `visible!=False`; `end` references undeclared / non-datetime AC; `end` AC has `visible!=False`; `end == start`; range mode without `name`; `format` is not a valid strftime; `missing` not in valid set; inner `attribute_class.name` / `.type` set; or `missing='error'` and an item has only one of two bounds. |
+| `date_display_name_collision` | The synthesised sibling name collides with an explicit AC, or two displays produce the same sibling name. |
 
 ### Forward-compat note
 
 If a future ANB release renders datetime values on the canvas without this
-workaround, the `canvas_display` field becomes redundant -- the text sibling
-will still emit alongside the now-rendering parent. A future anxwritter
-release may add a deprecation warning and eventually remove the transform.
-**Existing configs will not break** -- the field will continue to parse and
-the runtime behavior will degrade gracefully to "redundant but harmless."
+workaround, `date_attribute_displays` entries become redundant -- the text
+siblings still emit alongside the now-rendering datetime parents (after
+removing `visible=False`). A future anxwritter release may add a deprecation
+warning and eventually remove the transform. **Existing configs will not
+break** -- the synthesizer will degrade gracefully to "redundant but
+harmless."
 
 ---
 
