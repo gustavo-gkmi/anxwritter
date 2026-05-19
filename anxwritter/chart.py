@@ -45,7 +45,8 @@ from .enums import DotStyle, Representation
 from .errors import ANXValidationError
 from ._i2_interop import LATITUDE_GUID, LONGITUDE_GUID, GRID_REFERENCE_GUID
 from .models import (
-    Card, Link, AttributeClass, Strength, LegendItem, EntityType, LinkType,
+    Card, Link, AttributeClass, CanvasDisplay, Strength, LegendItem,
+    EntityType, LinkType,
     Palette, PaletteAttributeEntry, DateTimeFormat,
     SemanticEntity, SemanticLink, SemanticProperty,
     GradeCollection, StrengthCollection,
@@ -447,6 +448,26 @@ class ANXChart:
                             cleaned['font'] = Font(**{
                                 k: v for k, v in cleaned['font'].items() if v is not None
                             })
+                    if section == 'attribute_classes' and 'canvas_display' in cleaned:
+                        cv = cleaned['canvas_display']
+                        if cv is True:
+                            cleaned['canvas_display'] = CanvasDisplay()
+                        elif cv is False:
+                            cleaned['canvas_display'] = None
+                        elif isinstance(cv, dict):
+                            inner_cv = {k: v for k, v in cv.items() if v is not None}
+                            if isinstance(inner_cv.get('attribute_class'), dict):
+                                ac_inner = {
+                                    k: v for k, v in inner_cv['attribute_class'].items()
+                                    if v is not None
+                                }
+                                if isinstance(ac_inner.get('font'), dict):
+                                    ac_inner['font'] = Font(**{
+                                        k: v for k, v in ac_inner['font'].items()
+                                        if v is not None
+                                    })
+                                inner_cv['attribute_class'] = AttributeClass(**ac_inner)
+                            cleaned['canvas_display'] = CanvasDisplay(**inner_cv)
                     obj = cls(**cleaned)
                 elif isinstance(raw, cls):
                     obj = raw
@@ -1996,6 +2017,19 @@ class ANXChart:
 
         # ── Store resolved links for lazy emit in build() ───────────────
         builder._resolved_items.extend(resolved_links)
+
+        # ── Canvas display expansion ────────────────────────────────────
+        # Must run after both entity AND link resolution and before
+        # builder.build() consumes att_class_config.
+        with timer.phase("Canvas display expansion"):
+            from .transforms import expand_canvas_display_atttime
+            expand_canvas_display_atttime(
+                resolved_entities,
+                resolved_links,
+                self._attribute_classes,
+                builder,
+                att_class_config,
+            )
 
         # ── Build configs ─────────────────────────────────────────────────
         with timer.phase("Build configs"):

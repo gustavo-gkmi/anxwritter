@@ -515,6 +515,103 @@ def inject_geo_attributes(
             re.attributes.append(ResolvedAttr('Longitude', lon_ref_id, str(lon)))
 
 
+# ── Canvas display: workaround for unrendered datetime values ───────────────
+
+
+def expand_canvas_display_atttime(
+    resolved_entities,
+    resolved_links,
+    attribute_classes,
+    builder,
+    att_class_config,
+):
+    """Expand datetime ACs with canvas_display into text sibling ACs +
+    formatted-string sibling attributes on every resolved entity/link.
+
+    Must run AFTER both entity and link resolution complete, BEFORE
+    builder.build(). The transform:
+
+    1. Forces parent ``visible=False`` so its chrome does not render.
+    2. Registers a text sibling AC named ``<parent.name><suffix>`` on the
+       builder and ``att_class_config``.
+    3. Appends a ``ResolvedAttr`` sibling row to every resolved entity/link
+       that carries the parent AC, with the parent's datetime value
+       re-parsed from its canonical ISO ``value_str`` and re-formatted via
+       the configured strftime ``format``.
+
+    Sibling AC styling comes from ``canvas_display.attribute_class``
+    (no inheritance from the parent — explicit beats implicit).
+    """
+    from .resolved import ResolvedAttr
+    from datetime import datetime as _dt
+
+    _RESOLVED_FMT = '%Y-%m-%dT%H:%M:%S.%f'
+    _RESOLVED_FMT_NO_MS = '%Y-%m-%dT%H:%M:%S'
+
+    expansion_map = {}  # parent_name -> (sibling_name, sibling_ref_id, fmt)
+    for ac in attribute_classes:
+        if ac.canvas_display is None or not ac.name:
+            continue
+        cd = ac.canvas_display
+        suffix = cd.suffix if cd.suffix is not None else ' (display)'
+        sibling_name = f"{ac.name}{suffix}"
+        fmt = cd.format if cd.format else '%Y-%m-%d'
+
+        # Force parent visible=False so its chrome does not render.
+        att_class_config.setdefault(ac.name, {})['visible'] = False
+
+        sibling_ref_id = builder._att_class_id(sibling_name, 'AttText')
+
+        # Build sibling AC row from cd.attribute_class (no parent inheritance).
+        # Default the sibling to visible=True + show_value=True so the
+        # formatted date actually renders on the canvas; the user can still
+        # override by setting either field on cd.attribute_class.
+        inner = cd.attribute_class
+        sibling_row: Dict[str, Any] = {
+            'type': 'text',
+            'visible': True,
+            'show_value': True,
+        }
+        if inner is not None:
+            for fn in ('prefix', 'suffix', 'decimal_places', 'show_value',
+                       'show_date', 'show_time', 'show_seconds', 'show_if_set',
+                       'show_class_name', 'show_symbol', 'visible',
+                       'is_user', 'user_can_add', 'user_can_remove',
+                       'icon_file', 'semantic_type',
+                       'merge_behaviour', 'paste_behaviour'):
+                v = getattr(inner, fn, None)
+                if v is not None:
+                    sibling_row[fn] = v
+            sibling_row['font'] = inner.font
+        att_class_config[sibling_name] = sibling_row
+
+        expansion_map[ac.name] = (sibling_name, sibling_ref_id, fmt)
+
+    if not expansion_map:
+        return
+
+    def _expand(items):
+        for ri in items:
+            extras = []
+            for ra in ri.attributes:
+                if ra.class_name not in expansion_map:
+                    continue
+                sib_name, sib_ref, fmt = expansion_map[ra.class_name]
+                try:
+                    parsed = _dt.strptime(ra.value_str, _RESOLVED_FMT)
+                except ValueError:
+                    try:
+                        parsed = _dt.strptime(ra.value_str, _RESOLVED_FMT_NO_MS)
+                    except ValueError:
+                        continue
+                extras.append(ResolvedAttr(sib_name, sib_ref, parsed.strftime(fmt)))
+            if extras:
+                ri.attributes.extend(extras)
+
+    _expand(resolved_entities)
+    _expand(resolved_links)
+
+
 # ── Link styling: scales, intensity, categorical ────────────────────────────
 
 

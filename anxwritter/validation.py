@@ -8,13 +8,27 @@ from __future__ import annotations
 
 import math
 import re
-from datetime import date as _date
+from datetime import date as _date, datetime as _datetime
 from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 
 from .errors import ErrorType
 from .utils import _enum_val, _is_valid_color, _validate_date, _validate_time
 
 from .models import TimeZone
+
+
+_STRFTIME_PROBE_DT = _datetime(2024, 1, 15, 14, 30, 45, 123000)
+
+
+def _is_valid_strftime(fmt: str) -> bool:
+    """Return True if ``fmt`` is a strftime format string that runs cleanly."""
+    if not isinstance(fmt, str) or not fmt:
+        return False
+    try:
+        _STRFTIME_PROBE_DT.strftime(fmt)
+        return True
+    except (ValueError, TypeError):
+        return False
 
 if TYPE_CHECKING:
     from .entities import _BaseEntity
@@ -1001,7 +1015,132 @@ def validate_attribute_classes(
                     'location': loc,
                 })
 
+        # ── Canvas display ──────────────────────────────────────────────
+        cd = getattr(ac, 'canvas_display', None)
+        is_datetime = ac_type == 'datetime'
+
+        # Rule A — type=datetime + visible=True is always rejected, with or
+        # without canvas_display. ANB v9 does not render datetime values on
+        # the canvas after import; the surrounding chrome appears but the
+        # value is blank. Users must set visible=False and opt into
+        # canvas_display=True to render the formatted date as a text sibling.
+        if is_datetime and ac.visible is True:
+            errors.append({
+                'type': ErrorType.ATTTIME_VISIBLE_FORBIDS_CANVAS_DISPLAY.value,
+                'message': (
+                    f"AttributeClass '{ac.name}' (datetime) cannot have "
+                    f"visible=True: ANB v9 does not render datetime values "
+                    f"on the canvas, so the chrome would render with no "
+                    f"value. Set visible=False and add canvas_display=True "
+                    f"to render the formatted date as a paired text sibling."
+                ),
+                'location': f"{loc}.visible",
+            })
+
+        # Rule B — canvas_display on non-datetime AC
+        if cd is not None and not is_datetime:
+            errors.append({
+                'type': ErrorType.CANVAS_DISPLAY_INVALID.value,
+                'message': (
+                    f"AttributeClass '{ac.name}' has canvas_display but "
+                    f"type is '{ac_type}'. canvas_display is only valid on "
+                    f"datetime AttributeClasses."
+                ),
+                'location': f"{loc}.canvas_display",
+            })
+
+        # Rule C — inner attribute_class.name / .type must be None
+        if cd is not None:
+            inner = cd.attribute_class
+            if inner is not None:
+                if inner.name:
+                    errors.append({
+                        'type': ErrorType.CANVAS_DISPLAY_INVALID.value,
+                        'message': (
+                            f"AttributeClass '{ac.name}' canvas_display."
+                            f"attribute_class.name must be None — the sibling "
+                            f"name is auto-derived as "
+                            f"'<parent.name><suffix>'."
+                        ),
+                        'location': f"{loc}.canvas_display.attribute_class.name",
+                    })
+                if inner.type is not None:
+                    errors.append({
+                        'type': ErrorType.CANVAS_DISPLAY_INVALID.value,
+                        'message': (
+                            f"AttributeClass '{ac.name}' canvas_display."
+                            f"attribute_class.type must be None — the sibling "
+                            f"type is auto-locked to AttText."
+                        ),
+                        'location': f"{loc}.canvas_display.attribute_class.type",
+                    })
+
+        # Rule D — format must be a valid strftime string when set
+        if cd is not None and cd.format is not None:
+            if not _is_valid_strftime(cd.format):
+                errors.append({
+                    'type': ErrorType.CANVAS_DISPLAY_INVALID.value,
+                    'message': (
+                        f"AttributeClass '{ac.name}' canvas_display.format "
+                        f"{cd.format!r} is not a valid strftime format string."
+                    ),
+                    'location': f"{loc}.canvas_display.format",
+                })
+
         _row_tag(ac.name, row_start)
+
+    # ── Rules E & F — sibling-name collision (second pass) ──────────────
+    # Build map of explicit AC name -> location (only ACs with valid name).
+    explicit_names = dict(ac_names)
+    sibling_to_parent: Dict[str, str] = {}  # sibling_name -> parent.name
+    sibling_locs: Dict[str, str] = {}        # sibling_name -> location
+
+    for i, ac in enumerate(attribute_classes):
+        if not ac.name:
+            continue
+        cd = getattr(ac, 'canvas_display', None)
+        if cd is None:
+            continue
+        # Only valid datetime parents produce siblings — non-datetime parents
+        # are already flagged by Rule B; collision checks would be noise.
+        if _enum_val(ac.type).lower() != 'datetime':
+            continue
+        suffix = cd.suffix if cd.suffix is not None else ' (display)'
+        sibling_name = f"{ac.name}{suffix}"
+        loc = f"attribute_classes[{i}]"
+        row_start = len(errors)
+
+        # Rule E — sibling name collides with an explicit AC
+        if sibling_name in explicit_names:
+            errors.append({
+                'type': ErrorType.CANVAS_DISPLAY_NAME_COLLISION.value,
+                'message': (
+                    f"AttributeClass '{ac.name}' canvas_display sibling name "
+                    f"'{sibling_name}' collides with explicit "
+                    f"AttributeClass at {explicit_names[sibling_name]}."
+                ),
+                'location': f"{loc}.canvas_display.suffix",
+            })
+            _row_tag(ac.name, row_start)
+            continue
+
+        # Rule F — two parents resolve to the same sibling name
+        if sibling_name in sibling_to_parent:
+            errors.append({
+                'type': ErrorType.CANVAS_DISPLAY_NAME_COLLISION.value,
+                'message': (
+                    f"AttributeClass '{ac.name}' canvas_display sibling name "
+                    f"'{sibling_name}' collides with the sibling for "
+                    f"AttributeClass '{sibling_to_parent[sibling_name]}' "
+                    f"at {sibling_locs[sibling_name]}."
+                ),
+                'location': f"{loc}.canvas_display.suffix",
+            })
+            _row_tag(ac.name, row_start)
+            continue
+
+        sibling_to_parent[sibling_name] = ac.name
+        sibling_locs[sibling_name] = loc
 
     return errors, ac_names
 

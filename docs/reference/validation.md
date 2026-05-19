@@ -88,6 +88,9 @@ Errors that originate from a config-tagged entry (see [`source_name`](constructo
 | `invalid_categorical_attribute` | Categorical attribute missing or unresolved. | The attribute named by `categorical.attribute` is missing on a link (only emitted when `missing: 'error'`), or the `attribute` field itself is missing. |
 | `invalid_categorical_style` | Bad style entry. | A `styles` value has no settable fields, an unresolvable `line_color`, a negative `line_width`, or references an unregistered `strength`. |
 | `styling_conflict` | Both intensity and categorical target the same attribute. | Pick one — mixed numeric-and-lookup styling on the same attribute has ambiguous precedence. |
+| `atttime_visible_forbids_canvas_display` | `datetime` AttributeClass with `visible=True`. | ANB v9 does not render datetime values on the canvas, so the chrome would render with no value. Set `visible=False` and add `canvas_display=True` to render the formatted date as a paired text sibling. See [attributes.md → Canvas display for date/time attributes](attributes.md#canvas-display-for-datetime-attributes). |
+| `canvas_display_invalid` | Malformed `canvas_display` config. | `canvas_display` set on a non-`datetime` AC, `canvas_display.attribute_class.name` or `.type` set (must be `None` -- the sibling is auto-named and auto-typed), or `canvas_display.format` is not a valid `strftime` format string. |
+| `canvas_display_name_collision` | Sibling name collides. | The derived sibling name (`<parent.name><suffix>`) collides with another explicit `AttributeClass`, or two parents resolve to the same sibling name. Change `canvas_display.suffix` to disambiguate. |
 
 ---
 

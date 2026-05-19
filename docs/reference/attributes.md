@@ -103,6 +103,116 @@ Every field is declared `Optional[...] = None` on the dataclass. The "ANB defaul
 | `merge_behaviour` | `Optional[MergeBehaviour]` | `MergeBehaviour` | All | omitted | Merge behavior when two items with the same attribute are merged. Omitted by default -- ANB uses its own built-in default. Only set to override. See Merge behaviour values below. |
 | `paste_behaviour` | `Optional[MergeBehaviour]` | `PasteBehaviour` | All | omitted | Paste behavior when an attribute value is pasted onto an item. Omitted by default. See Paste behaviour values below. |
 | `font` | `Font` | `<Font>` child | All | `Font()` | Font styling for the attribute display. Same shared `Font` dataclass used by chart/legend/entity fonts. The `<Font>` element is only emitted when at least one field is explicitly set. i2 defaults: Tahoma 8pt. |
+| `canvas_display` | `Optional[CanvasDisplay]` | -- (emits a paired text sibling AC) | DateTime only | `None` | Opt-in workaround for ANB v9 not rendering datetime attribute values on the canvas. When set on a `datetime` AC, anxwritter emits a paired text sibling AC named `<parent.name><suffix>` and a formatted-string sibling attribute on every entity/link that uses the parent. The parent's `visible` is forced to `False`. See **Canvas display for date/time attributes** below. |
+
+---
+
+## Canvas display for date/time attributes
+
+ANB v9 does not render datetime attribute values on the canvas after `.anx`
+import. The values load correctly -- they appear in the properties panel and
+work for time-wheel, sort, and filter -- but on the canvas, only the
+surrounding chrome (symbol, prefix, suffix, class name) appears next to each
+entity/link. The date itself is blank. `canvas_display` is an opt-in
+workaround that ships the formatted date as a paired text attribute so the
+canvas has something to render.
+
+### What it does
+
+When you set `canvas_display` on a `datetime` AttributeClass, anxwritter:
+
+1. Forces the parent AC's `visible=False` so the chrome doesn't render with
+   a blank value.
+2. Registers a paired text sibling AttributeClass named
+   `<parent.name><suffix>` (default suffix `' (display)'`). The sibling
+   defaults to `visible=True` and `show_value=True` so the formatted date
+   actually renders on the canvas.
+3. On every entity/link that carries the parent attribute, appends a sibling
+   attribute whose value is the parent's `datetime` formatted via `strftime`
+   (default format `'%Y-%m-%d'` -- ISO date, locale-neutral).
+
+The original `datetime` parent is still emitted and ANB still loads it.
+Time-wheel, sort, filter, and the properties panel keep working off the
+parent. The canvas shows the text sibling.
+
+Any field you set on `canvas_display.attribute_class` overrides the sibling
+defaults -- e.g. set `attribute_class=AttributeClass(visible=False)` if you
+want the sibling registered (for use elsewhere in ANB) but not rendered.
+
+### Three accepted forms
+
+```python
+from anxwritter import ANXChart, AttributeClass, CanvasDisplay, Font
+
+# Defaults: '%Y-%m-%d' format, ' (display)' suffix, no inner styling.
+chart.add_attribute_class(name='EventDate', type='datetime',
+                          visible=False, canvas_display=True)
+
+# Dict shortcut.
+chart.add_attribute_class(name='EventDate', type='datetime', visible=False,
+                          canvas_display={'format': '%d/%m/%Y'})
+
+# Full control via the dataclass.
+chart.add_attribute_class(
+    name='EventDate', type='datetime', visible=False,
+    canvas_display=CanvasDisplay(
+        format='%d/%m/%Y %H:%M',
+        suffix=' (display)',
+        attribute_class=AttributeClass(
+            prefix='When: ',
+            show_symbol=True,
+            font=Font(italic=True),
+        ),
+    ),
+)
+```
+
+YAML:
+
+```yaml
+attribute_classes:
+  - name: EventDate
+    type: datetime
+    visible: false
+    canvas_display:
+      format: "%d/%m/%Y %H:%M"
+      suffix: " (display)"
+      attribute_class:
+        prefix: "When: "
+        show_symbol: true
+        font: { italic: true }
+```
+
+### `CanvasDisplay` fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `format` | `Optional[str]` | `'%Y-%m-%d'` | `strftime` format string applied to the parent's datetime. |
+| `suffix` | `Optional[str]` | `' (display)'` | Appended to the parent's `name` to derive the sibling AC name. |
+| `attribute_class` | `Optional[AttributeClass]` | `None` | Styling for the sibling AC. `name` and `type` must be `None` -- the sibling is auto-named and auto-typed as text. No inheritance from the parent. |
+
+### Validation rules
+
+`chart.validate()` emits the following errors before `to_anx()` will write the
+file:
+
+| Rule | Error type | Condition |
+|---|---|---|
+| A | `atttime_visible_forbids_canvas_display` | `type=datetime` + `visible=True`, with or without `canvas_display`. The message names `canvas_display=True` as the workaround. |
+| B | `canvas_display_invalid` | `canvas_display` set on a non-`datetime` AttributeClass. |
+| C | `canvas_display_invalid` | `canvas_display.attribute_class.name` or `.type` is set (must be `None` -- the sibling is auto-named and auto-typed). |
+| D | `canvas_display_invalid` | `canvas_display.format` is not a valid `strftime` format string. Empty string is invalid. |
+| E | `canvas_display_name_collision` | The derived sibling name (`<parent.name><suffix>`) collides with another explicit AttributeClass on the chart. |
+| F | `canvas_display_name_collision` | Two parent ACs resolve to the same sibling name. |
+
+### Forward-compat note
+
+If a future ANB release renders datetime values on the canvas without this
+workaround, the `canvas_display` field becomes redundant -- the text sibling
+will still emit alongside the now-rendering parent. A future anxwritter
+release may add a deprecation warning and eventually remove the transform.
+**Existing configs will not break** -- the field will continue to parse and
+the runtime behavior will degrade gracefully to "redundant but harmless."
 
 ---
 

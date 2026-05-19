@@ -5,6 +5,42 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-05-19
+
+### Added
+- **`canvas_display` on `AttributeClass`** — opt-in workaround for ANB v9 not
+  rendering `datetime` attribute values on the canvas after `.anx` import.
+  When set on a `datetime` AC, anxwritter emits a paired text sibling AC named
+  `<parent.name><suffix>` plus a formatted-string sibling attribute on every
+  entity/link that carries the parent. The parent's `visible` is forced to
+  `False`; the sibling defaults to `visible=True` + `show_value=True` so the
+  formatted date actually renders. The original `datetime` parent is still
+  emitted, so the properties panel, time-wheel, sort, and filter keep working.
+  - Three accepted forms, all normalized to `CanvasDisplay` internally:
+    `canvas_display=True` (defaults), `canvas_display={'format': '%d/%m/%Y'}`
+    (dict shortcut), `canvas_display=CanvasDisplay(format=..., suffix=...,
+    attribute_class=AttributeClass(prefix=..., font=Font(italic=True)))`
+    (full control). Default `format` is `'%Y-%m-%d'` (ISO, locale-neutral);
+    default `suffix` is `' (display)'`.
+  - YAML equivalent supports the same three forms, including
+    `canvas_display: true` shorthand and the nested-dict form. The sibling AC's
+    inner `attribute_class.name` and `.type` must be `None` — the sibling is
+    auto-named (`<parent>+suffix`) and auto-typed as text. No inheritance
+    from the parent.
+  - New top-level export: `CanvasDisplay` (also accepts dict-shape coercion
+    for `attribute_class` and nested `font` via the Python API).
+  - New `ErrorType` members:
+    - `ATTTIME_VISIBLE_FORBIDS_CANVAS_DISPLAY` — `type=datetime` +
+      `visible=True` is rejected with or without `canvas_display`, since ANB
+      would render the chrome with no value either way.
+    - `CANVAS_DISPLAY_INVALID` — `canvas_display` on a non-`datetime` AC,
+      `canvas_display.attribute_class.name` or `.type` set (must be `None`),
+      or an unparseable `strftime` format.
+    - `CANVAS_DISPLAY_NAME_COLLISION` — the derived sibling name collides with
+      another explicit AC, or two parents resolve to the same sibling name.
+- New example `examples/canvas_display_example.py` — baseline vs workaround
+  charts to open side-by-side in ANB.
+
 ## [1.9.0] - 2026-05-19
 
 ### Added

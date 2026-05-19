@@ -423,6 +423,32 @@ attribute_classes:
 Full field reference + valid `merge_behaviour` / `paste_behaviour` values per
 type: [attributes.md](../reference/attributes.md).
 
+#### Rendering datetime attributes on the canvas
+
+ANB v9 does not render datetime values on the canvas after import. Use
+`canvas_display` on a `datetime` AC to emit a paired text sibling whose
+formatted value renders correctly. The parent's `visible` must be `false`.
+
+```yaml
+attribute_classes:
+  - name: EventDate
+    type: datetime
+    visible: false
+    canvas_display: true          # defaults: '%Y-%m-%d', suffix ' (display)'
+
+  - name: CallTime
+    type: datetime
+    visible: false
+    canvas_display:
+      format: "%d/%m/%Y %H:%M"
+      suffix: " (display)"
+      attribute_class:
+        prefix: "Call: "
+        font: { italic: true }
+```
+
+See [attributes.md → Canvas display for date/time attributes](../reference/attributes.md#canvas-display-for-datetime-attributes).
+
 ---
 
 ## Grades, source types, strengths
