@@ -333,6 +333,37 @@ Common options:
 | `visible` | Whether the attribute is visible on the chart |
 | `icon_file` | ANB icon key for the attribute symbol |
 
+### Rendering datetime attributes on the canvas
+
+ANB v9 does not render datetime attribute values on the canvas after import —
+they show up in the properties panel and work for time-wheel, sort, and
+filter, but the canvas only shows the surrounding chrome (symbol, prefix,
+suffix). The `canvas_display` flag on a datetime AttributeClass is the
+workaround: anxwritter emits a paired text sibling attribute whose value is
+the parent's datetime formatted via `strftime`. The canvas renders the text
+sibling; the original datetime stays available for everything else.
+
+```python
+from anxwritter import CanvasDisplay, AttributeClass, Font
+
+# Simplest: defaults to '%Y-%m-%d' (ISO), suffix ' (display)'
+chart.add_attribute_class(name='EventDate', type='datetime',
+                          visible=False, canvas_display=True)
+
+# Custom format and styled sibling
+chart.add_attribute_class(
+    name='CallTime', type='datetime', visible=False,
+    canvas_display=CanvasDisplay(
+        format='%d/%m/%Y %H:%M',
+        attribute_class=AttributeClass(prefix='Call: ',
+                                       font=Font(italic=True)),
+    ),
+)
+```
+
+The parent's `visible` must be `False` (validation rejects `visible=True` on
+any datetime AC). See [reference/attributes.md → Canvas display for date/time attributes](../reference/attributes.md#canvas-display-for-datetime-attributes).
+
 ### Merge and paste behaviour
 
 When entities are merged in ANB, you can control how attribute values combine:

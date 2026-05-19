@@ -661,6 +661,28 @@ class Card:
 
 
 @dataclass
+class CanvasDisplay:
+    """Opt-in workaround for ANB v9 not rendering datetime attribute values
+    on the canvas after import.
+
+    When set on a datetime AttributeClass, anxwritter emits a paired text
+    sibling AC plus a formatted-string sibling attribute on every entity/link
+    that uses the parent. The properties panel, time-wheel, sort, and filter
+    keep working off the original datetime parent; the canvas renders the
+    text sibling.
+    """
+    format: Optional[str] = None        # strftime; default '%Y-%m-%d'
+    suffix: Optional[str] = None        # default ' (display)'
+    attribute_class: Optional['AttributeClass'] = None
+
+    def __post_init__(self):
+        if isinstance(self.attribute_class, dict):
+            self.attribute_class = AttributeClass(**{
+                k: v for k, v in self.attribute_class.items() if v is not None
+            })
+
+
+@dataclass
 class AttributeClass:
     """Chart-level configuration for a named attribute type."""
 
@@ -685,6 +707,17 @@ class AttributeClass:
     merge_behaviour: Optional[MergeBehaviour] = None
     paste_behaviour: Optional[MergeBehaviour] = None
     font: Font = field(default_factory=Font)
+    canvas_display: Optional[CanvasDisplay] = None
+
+    def __post_init__(self):
+        if self.canvas_display is True:
+            self.canvas_display = CanvasDisplay()
+        elif self.canvas_display is False:
+            self.canvas_display = None
+        elif isinstance(self.canvas_display, dict):
+            self.canvas_display = CanvasDisplay(**{
+                k: v for k, v in self.canvas_display.items() if v is not None
+            })
 
 
 @dataclass

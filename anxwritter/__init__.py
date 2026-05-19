@@ -30,7 +30,8 @@ from .colors import NAMED_COLORS, color_to_colorref, rgb_to_colorref
 from .enums import VALID_SHADING_COLORS, MergeBehaviour, DotStyle, Enlargement, AttributeType, Multiplicity, ThemeWiring, ArrowStyle, Representation, LegendItemType, Color, IntensityScale, ColorSpace, MissingPolicy
 from .entities import Icon, Box, Circle, ThemeLine, EventFrame, TextBlock, Label
 from .models import (
-    Card, Link, AttributeClass, Strength, LegendItem, EntityType, LinkType,
+    Card, Link, AttributeClass, CanvasDisplay, Strength, LegendItem,
+    EntityType, LinkType,
     Palette, PaletteAttributeEntry, DateTimeFormat,
     SemanticEntity, SemanticLink, SemanticProperty,
     Font, Frame, Show, TimeZone, CustomProperty,
@@ -66,7 +67,7 @@ __all__ = [
     # Entity classes
     'Icon', 'Box', 'Circle', 'ThemeLine', 'EventFrame', 'TextBlock', 'Label',
     # Chart item classes
-    'Card', 'Link', 'AttributeClass', 'Strength', 'LegendItem',
+    'Card', 'Link', 'AttributeClass', 'CanvasDisplay', 'Strength', 'LegendItem',
     'GradeCollection', 'StrengthCollection',
     'EntityType', 'LinkType',
     'Palette', 'PaletteAttributeEntry',

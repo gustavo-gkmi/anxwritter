@@ -439,6 +439,44 @@ INVALID_SPECS: List[tuple] = [
         },
         {ErrorType.STYLING_CONFLICT.value},
     ),
+
+    # ── Canvas display: AttTime + visible=True forbidden ────────────────────
+    (
+        "atttime_visible_true_forbidden",
+        {
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+            "attribute_classes": [
+                {"name": "EventDate", "type": "datetime", "visible": True},
+            ],
+        },
+        {ErrorType.ATTTIME_VISIBLE_FORBIDS_CANVAS_DISPLAY.value},
+    ),
+
+    # ── Canvas display: canvas_display on non-datetime AC ───────────────────
+    (
+        "canvas_display_on_non_datetime",
+        {
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+            "attribute_classes": [
+                {"name": "Phone", "type": "text", "canvas_display": True},
+            ],
+        },
+        {ErrorType.CANVAS_DISPLAY_INVALID.value},
+    ),
+
+    # ── Canvas display: sibling name collides with explicit AC ──────────────
+    (
+        "canvas_display_name_collision",
+        {
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+            "attribute_classes": [
+                {"name": "EventDate", "type": "datetime",
+                 "visible": False, "canvas_display": True},
+                {"name": "EventDate (display)", "type": "text"},
+            ],
+        },
+        {ErrorType.CANVAS_DISPLAY_NAME_COLLISION.value},
+    ),
 ]
 
 

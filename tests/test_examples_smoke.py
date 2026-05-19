@@ -79,3 +79,24 @@ def test_link_styling_builds(link_styling_module, tmp_path, monkeypatch):
 
     assert Path(path).exists(), f"Expected .anx file at {path}"
     assert Path(path).stat().st_size > 0
+
+
+@pytest.fixture(scope="module")
+def canvas_display_module():
+    sys.path.insert(0, str(EXAMPLES_DIR.parent))
+    try:
+        mod = importlib.import_module("examples.canvas_display_example")
+    finally:
+        sys.path.pop(0)
+    return mod
+
+
+def test_canvas_display_example_builds(canvas_display_module, tmp_path, monkeypatch):
+    """Both the baseline and the canvas_display variants build clean."""
+    monkeypatch.chdir(tmp_path)
+
+    baseline_path = canvas_display_module.build_baseline().to_anx(tmp_path / "baseline")
+    workaround_path = canvas_display_module.build_workaround().to_anx(tmp_path / "workaround")
+
+    assert Path(baseline_path).exists() and Path(baseline_path).stat().st_size > 0
+    assert Path(workaround_path).exists() and Path(workaround_path).stat().st_size > 0
