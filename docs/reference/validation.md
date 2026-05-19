@@ -39,7 +39,9 @@ The exception message contains a human-readable summary of all validation errors
 
 ## Validation error types
 
-Every error dict has a `type`, a `message`, and (almost always) a `location` string pointing at the offending row (e.g. `"entities[2] (Icon)"`, `"links[7]"`, `"attribute_classes[0].type"`). The `config_conflict` error additionally includes `section`, `name`, `config_value`, and `data_value`. No other error types add fields.
+Every error dict has a `type`, a `message`, and (almost always) a `location` string pointing at the offending row (e.g. `"entities[2] (Icon)"`, `"links[7]"`, `"attribute_classes[0].type"`). The `config_conflict` error additionally includes `section`, `name`, `config_value`, and `data_value`.
+
+Errors that originate from a config-tagged entry (see [`source_name`](constructors.md#tagging-layers-with-source_name)) also carry an optional `source` key naming the layer; `config_conflict` errors gain a `config_source` key naming the layer that locked the original entry. Both are present only when the layer supplied a `source_name` (or was loaded via `apply_config_file` / `from_config_file`, which auto-derive one from the path). `ANXValidationError`'s formatted message string (`str(exc)`) appends `(source: X)` / `(config source: X)` per line — that string format is **explicitly unstable** and may change between releases. Match on the dict keys, not the rendered text.
 
 | Error type | Trigger | Notes |
 |------------|---------|-------|
@@ -73,10 +75,19 @@ Every error dict has a `type`, a `message`, and (almost always) a `location` str
 | `invalid_merge_behaviour` | Invalid merge behaviour. | `AttributeClass.merge_behaviour` is unknown or invalid for the declared attribute type (e.g. `'add_space'` on a Number class). |
 | `invalid_paste_behaviour` | Invalid paste behaviour. | `AttributeClass.paste_behaviour` is unknown or invalid for the declared attribute type. |
 | `invalid_geo_map` | Invalid geo_map configuration. | `extra_cfg.geo_map` is missing `attribute_name`, has an unknown `mode`, non-positive `width`/`height`, negative `spread_radius`, no `data` or `data_file`, or out-of-range lat/lon coordinates. |
-| `config_conflict` | Config-locked name redefined with different specs. | Only raised when a config file was applied. The data file attempts to redefine a config-locked entry with different values. Error dict includes `section`, `name`, `config_value`, and `data_value`. See [constructors.md](constructors.md). |
+| `config_conflict` | Config-locked name redefined with different specs. | Only raised when a config file was applied. The data file attempts to redefine a config-locked entry with different values. Error dict includes `section`, `name`, `config_value`, `data_value`, and (when the locking layer was tagged) `config_source`. See [constructors.md](constructors.md). |
 | `palette_unknown_ref` | Palette references unregistered name. | An entity type, link type, or attribute class name in a palette definition is not registered. |
 | `palette_invalid_class` | Palette references restricted attribute class. | Attribute class with `is_user=False` or `user_can_add=False` cannot appear in palettes. ANB rejects palette entries pointing at non-user-addable attribute classes at import time. |
 | `palette_type_mismatch` | Palette entry value/type mismatch. | Palette attribute entry value does not match the attribute class type (e.g. non-numeric string for a Number class). |
+| `invalid_intensity_config` | Bad intensity styling config. | `extra_cfg.styling.links.intensity` has an unknown `scale`, missing `power` when `scale='power'`, `diverging: true` without `midpoint`, or another structural error. |
+| `invalid_intensity_attribute` | Intensity attribute missing or non-numeric. | The attribute named by `intensity.attribute` is missing on every link, or some links have non-numeric values. |
+| `invalid_intensity_domain` | Bad domain or log-scale with non-positive value. | `domain` is malformed, or `scale: log` was used with a value ≤ 0. |
+| `invalid_intensity_range` | Bad `width.range`. | Width range is malformed, negative, or `range[0] >= range[1]`. |
+| `invalid_intensity_ramp` | Bad color ramp. | Ramp has fewer than two colors or contains an unresolvable color. |
+| `invalid_categorical_config` | Bad categorical styling config. | `extra_cfg.styling.links.categorical` has missing/empty `styles` or unknown `missing` policy. |
+| `invalid_categorical_attribute` | Categorical attribute missing or unresolved. | The attribute named by `categorical.attribute` is missing on a link (only emitted when `missing: 'error'`), or the `attribute` field itself is missing. |
+| `invalid_categorical_style` | Bad style entry. | A `styles` value has no settable fields, an unresolvable `line_color`, a negative `line_width`, or references an unregistered `strength`. |
+| `styling_conflict` | Both intensity and categorical target the same attribute. | Pick one — mixed numeric-and-lookup styling on the same attribute has ambiguous precedence. |
 
 ---
 

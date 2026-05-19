@@ -37,6 +37,7 @@ Thumbs.db
 
 # Scratch / output
 /output/
+/examples/output/
 *.log
 *.orig
 *.rej

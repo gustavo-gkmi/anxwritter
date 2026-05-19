@@ -81,6 +81,20 @@ def _build_group(cls: Type, raw: dict) -> Any:
                     kwargs[fld.name] = val
             else:
                 kwargs[fld.name] = val
+        elif get_origin(ftype) is dict and isinstance(val, dict):
+            # Handle Dict[str, SomeDataclass] — convert each dict value.
+            # CategoricalCfg.__post_init__ already covers the same case for
+            # styles, but this branch keeps the helper symmetric with the
+            # List[Dataclass] handling above for any future Dict-of-dataclass field.
+            inner_args = get_args(ftype)
+            if len(inner_args) == 2 and isinstance(inner_args[1], type) and dataclasses.is_dataclass(inner_args[1]):
+                inner_type = inner_args[1]
+                kwargs[fld.name] = {
+                    k: (_build_group(inner_type, v) if isinstance(v, dict) else v)
+                    for k, v in val.items()
+                }
+            else:
+                kwargs[fld.name] = val
         else:
             kwargs[fld.name] = val
 
@@ -144,6 +158,25 @@ def _merge_group(existing: Any, raw: dict) -> None:
                         else item
                         for item in val
                     ]
+                    setattr(existing, fld.name, converted)
+                else:
+                    setattr(existing, fld.name, val)
+            else:
+                setattr(existing, fld.name, val)
+        elif isinstance(current, dict) and isinstance(val, dict):
+            # Dict[str, Dataclass] field replacement — coerce inner dict values
+            # to their dataclass type so e.g. categorical.styles ends up as
+            # ``{key: CategoricalStyleCfg}`` after a layered apply_config call.
+            # Replaces the dict wholesale (same contract as List[Dataclass]).
+            ftype = _get_inner_type(hints.get(fld.name, fld.type))
+            if get_origin(ftype) is dict:
+                inner_args = get_args(ftype)
+                if len(inner_args) == 2 and isinstance(inner_args[1], type) and dataclasses.is_dataclass(inner_args[1]):
+                    inner_type = inner_args[1]
+                    converted = {
+                        k: (_build_group(inner_type, v) if isinstance(v, dict) else v)
+                        for k, v in val.items()
+                    }
                     setattr(existing, fld.name, converted)
                 else:
                     setattr(existing, fld.name, val)
@@ -311,6 +344,131 @@ class GeoMapCfg:
 
 
 @dataclass
+class CategoricalStyleCfg:
+    """One style entry in a categorical styling map.
+
+    Used as the value type for ``CategoricalCfg.styles`` and ``CategoricalCfg.default``.
+    All fields default to ``None`` so the transform can write "only what's set",
+    preserving the precedence rules around explicit per-link values.
+
+    ``strength`` references a named ``Strength`` registered on the chart — the
+    transform does not auto-register strengths, so callers should declare any
+    strengths they reference. ``arrow`` is intentionally excluded: arrow direction
+    is data, not styling — see ``extra_cfg.styling`` docs.
+    """
+    line_color: Optional[Union[int, str, Color]] = None
+    line_width: Optional[int] = None
+    strength: Optional[str] = None
+
+
+@dataclass
+class IntensityWidthCfg:
+    """Width-mapping sub-config for ``IntensityCfg``.
+
+    ``range`` is the only required field; ``attribute``, ``scale``, ``domain``,
+    ``clip``, ``power`` all fall through to the top-level ``IntensityCfg`` values
+    when unset, so the common case (one attribute drives both width and color)
+    stays terse.
+    """
+    attribute: Optional[str] = None
+    scale: Optional[str] = None
+    domain: Optional[Any] = None                   # [min, max] or 'robust' or None
+    clip: Optional[bool] = None
+    power: Optional[float] = None
+    range: Optional[List[int]] = None              # [min_width, max_width]
+
+
+@dataclass
+class IntensityColorCfg:
+    """Color-mapping sub-config for ``IntensityCfg``.
+
+    ``ramp`` is required when ``color:`` is present. Endpoints and interior stops
+    are evenly spaced; for non-uniform stops, supply more entries to shape the curve.
+    """
+    attribute: Optional[str] = None
+    scale: Optional[str] = None
+    domain: Optional[Any] = None
+    clip: Optional[bool] = None
+    power: Optional[float] = None
+    ramp: Optional[List[Union[int, str, Color]]] = None
+    space: Optional[str] = None                    # 'rgb' | 'rgb_linear' | 'hsl' (default rgb_linear)
+    diverging: Optional[bool] = None
+    midpoint: Optional[float] = None
+
+
+@dataclass
+class IntensityCfg:
+    """Numeric-attribute → width/color styling.
+
+    Top-level fields (``attribute``, ``scale``, ``domain``, ``clip``) act as
+    shortcuts inherited by ``width`` / ``color`` when those don't override.
+    At least one of ``width`` / ``color`` must be set for the block to do
+    anything; an empty ``IntensityCfg()`` is a silent no-op.
+    """
+    attribute: Optional[str] = None
+    scale: Optional[str] = None
+    domain: Optional[Any] = None
+    clip: Optional[bool] = None
+    missing: Optional[str] = None                  # 'fallback' | 'skip' | 'error'
+    legend: Optional[bool] = None
+    legend_count: Optional[int] = None             # default 5
+    width: Optional[IntensityWidthCfg] = None
+    color: Optional[IntensityColorCfg] = None
+
+
+@dataclass
+class CategoricalCfg:
+    """Categorical attribute → style lookup.
+
+    ``styles`` keys are attribute values (e.g. ``'Witness'``, ``'Informant'``).
+    Matching is case- and accent-insensitive by default; tighten via the flags.
+    ``default`` applies to links whose attribute value isn't in ``styles``;
+    ``missing`` applies to links that don't have the attribute at all.
+    """
+    attribute: Optional[str] = None
+    styles: Dict[str, CategoricalStyleCfg] = field(default_factory=dict)
+    default: Optional[CategoricalStyleCfg] = None
+    missing: Optional[str] = None                  # 'fallback' | 'skip' | 'error'
+    case_sensitive: Optional[bool] = None          # default False
+    accent_insensitive: Optional[bool] = None      # default True (matches GeoMapCfg)
+    legend: Optional[bool] = None
+
+    def __post_init__(self):
+        if isinstance(self.styles, dict):
+            self.styles = {
+                k: (v if isinstance(v, CategoricalStyleCfg) else CategoricalStyleCfg(**v))
+                for k, v in self.styles.items()
+            }
+        if isinstance(self.default, dict):
+            self.default = CategoricalStyleCfg(**self.default)
+
+
+@dataclass
+class LinkStylingCfg:
+    """Styling rules applied to links during build.
+
+    Both sub-blocks are optional; an empty ``LinkStylingCfg`` is a no-op.
+    A future release will add the symmetric ``EntityStylingCfg`` and parent
+    ``StylingCfg.entities`` field.
+    """
+    intensity: Optional[IntensityCfg] = None
+    categorical: Optional[CategoricalCfg] = None
+
+
+@dataclass
+class StylingCfg:
+    """Container for data-driven styling configuration.
+
+    ``links`` holds link-side intensity and categorical rules. The ``entities``
+    slot is reserved for a future release — the parent dataclass is named
+    ``StylingCfg`` (not ``LinkStylingCfg``) precisely so adding entity styling
+    later doesn't break configs in the wild.
+    """
+    links: Optional[LinkStylingCfg] = None
+    # entities: reserved for v1.10.0
+
+
+@dataclass
 class ExtraCfg:
     """ANXWritter-only knobs (not written to ANX XML)."""
     entity_auto_color: Optional[bool] = None       # Distribute HSV hues
@@ -319,6 +477,7 @@ class ExtraCfg:
     layout_scale: Optional[float] = None           # Uniform spread multiplier across all arrange modes (default 1.0)
     link_arc_offset: Optional[int] = None          # Parallel-link arc offset
     geo_map: Optional[GeoMapCfg] = None            # Geographic positioning
+    styling: Optional[StylingCfg] = None           # Data-driven link styling (intensity + categorical)
 
 
 # Forward references resolved after all classes defined — see bottom of Settings class

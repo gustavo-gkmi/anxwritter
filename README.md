@@ -95,6 +95,7 @@ anxwritter chart.yaml -o output/my_chart.anx
 - **Semantic types** — full `lcx:LibraryCatalogue` support with custom type extension; per-instance overrides
 - **Auto-layout** — geometric (circle, grid, radial, random) plus topology-aware force-directed: Fruchterman-Reingold, ForceAtlas2, tidy tree (Reingold-Tilford). Manual `x`/`y` always wins; pinned entities act as anchors
 - **Auto-coloring** — distribute HSV hues across entities; matching link colors that follow the target entity
+- **Data-driven link styling** — width and/or color from a numeric attribute via a configurable scale (linear, log, sqrt, power, quantile) and color ramp; or per-value lookup on a string attribute. Optional auto-generated legend.
 - **CLI** — `anxwritter [--config org.yaml ...] data.{json,yaml} -o out.anx`, with `--show-config` provenance and `--geo-data` for external geo lookups
 - **Three input forms** — Python objects, JSON, or YAML; all paths produce identical output
 - **Typed dataclass API** — `Icon`, `Box`, `Circle`, `ThemeLine`, `EventFrame`, `TextBlock`, `Label`, `Link`, `Card`

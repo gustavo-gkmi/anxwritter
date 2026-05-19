@@ -1405,3 +1405,404 @@ def validate_geo_map(
             })
 
     return errors
+
+
+# ── Styling validation (extra_cfg.styling.links.{intensity,categorical}) ────
+
+
+_VALID_SCALES = ('linear', 'log', 'sqrt', 'power', 'quantile', 'threshold')
+_VALID_SPACES = ('rgb', 'rgb_linear', 'hsl')
+_VALID_MISSING = ('fallback', 'skip', 'error')
+
+
+def _collect_numeric_attr_values(
+    links: List['Link'],
+    attr_name: str,
+) -> tuple:
+    """Return (values_seen, non_numeric_seen) for an attribute across links.
+
+    Used to validate intensity attributes. Skips ``None`` and missing entries.
+    """
+    values: List[float] = []
+    non_numeric: List[Any] = []
+    for link in links:
+        attrs = getattr(link, 'attributes', None) or {}
+        if attr_name not in attrs:
+            continue
+        v = attrs[attr_name]
+        if v is None:
+            continue
+        # bool is a subclass of int — reject explicitly so True doesn't count as 1.0
+        if isinstance(v, bool):
+            non_numeric.append(v)
+            continue
+        if isinstance(v, (int, float)):
+            if isinstance(v, float) and math.isnan(v):
+                continue
+            values.append(float(v))
+            continue
+        non_numeric.append(v)
+    return values, non_numeric
+
+
+def _validate_intensity_block(
+    icfg: Any,
+    links: List['Link'],
+    base_loc: str,
+) -> List[Dict[str, Any]]:
+    """Validate an IntensityCfg block. Returns list of error dicts."""
+    errors: List[Dict[str, Any]] = []
+    if icfg is None:
+        return errors
+
+    # Resolve effective fields for width and color (top-level shortcuts inherited).
+    width = getattr(icfg, 'width', None)
+    color = getattr(icfg, 'color', None)
+    if width is None and color is None:
+        # An IntensityCfg with neither width nor color set is a silent no-op.
+        return errors
+
+    top_attr = getattr(icfg, 'attribute', None)
+    top_scale = getattr(icfg, 'scale', None)
+    top_domain = getattr(icfg, 'domain', None)
+
+    # missing policy
+    missing = getattr(icfg, 'missing', None)
+    if missing is not None and missing not in _VALID_MISSING:
+        errors.append({
+            'type': ErrorType.INVALID_INTENSITY_CONFIG.value,
+            'message': f"intensity.missing must be one of {_VALID_MISSING}, got '{missing}'",
+            'location': f'{base_loc}.missing',
+        })
+
+    # legend_count >= 2 if set
+    lc = getattr(icfg, 'legend_count', None)
+    if lc is not None and (not isinstance(lc, int) or lc < 2):
+        errors.append({
+            'type': ErrorType.INVALID_INTENSITY_CONFIG.value,
+            'message': f"intensity.legend_count must be an int >= 2, got {lc!r}",
+            'location': f'{base_loc}.legend_count',
+        })
+
+    def _check_sub(sub: Any, sub_name: str) -> None:
+        sub_loc = f'{base_loc}.{sub_name}'
+        attr_name = getattr(sub, 'attribute', None) or top_attr
+        scale = getattr(sub, 'scale', None) or top_scale or 'sqrt'
+        domain = getattr(sub, 'domain', None)
+        if domain is None:
+            domain = top_domain
+        power = getattr(sub, 'power', None)
+
+        if not attr_name:
+            errors.append({
+                'type': ErrorType.INVALID_INTENSITY_ATTRIBUTE.value,
+                'message': f"intensity.{sub_name} requires 'attribute' (or top-level intensity.attribute)",
+                'location': f'{sub_loc}.attribute',
+            })
+            return
+
+        # scale validity
+        scale_str = _enum_val(scale) if hasattr(scale, 'value') else str(scale)
+        if scale_str not in _VALID_SCALES:
+            errors.append({
+                'type': ErrorType.INVALID_INTENSITY_CONFIG.value,
+                'message': f"intensity.{sub_name}.scale must be one of {_VALID_SCALES}, got '{scale_str}'",
+                'location': f'{sub_loc}.scale',
+            })
+            return
+
+        # threshold is reserved for a future release.
+        if scale_str == 'threshold':
+            errors.append({
+                'type': ErrorType.INVALID_INTENSITY_CONFIG.value,
+                'message': "intensity scale 'threshold' is reserved — not implemented in v1",
+                'location': f'{sub_loc}.scale',
+            })
+
+        # power scale needs a power value
+        if scale_str == 'power' and (power is None or not isinstance(power, (int, float)) or power <= 0):
+            errors.append({
+                'type': ErrorType.INVALID_INTENSITY_CONFIG.value,
+                'message': f"intensity.{sub_name}.scale='power' requires 'power' > 0",
+                'location': f'{sub_loc}.power',
+            })
+
+        # domain validation — accept None, 'robust', or [min, max]
+        if domain is not None and not (isinstance(domain, str) and domain == 'robust'):
+            if not (isinstance(domain, (list, tuple)) and len(domain) == 2):
+                errors.append({
+                    'type': ErrorType.INVALID_INTENSITY_DOMAIN.value,
+                    'message': f"intensity.{sub_name}.domain must be [min, max], 'robust', or omitted; got {domain!r}",
+                    'location': f'{sub_loc}.domain',
+                })
+            else:
+                a, b = domain
+                if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
+                    errors.append({
+                        'type': ErrorType.INVALID_INTENSITY_DOMAIN.value,
+                        'message': f"intensity.{sub_name}.domain values must be numeric, got [{a!r}, {b!r}]",
+                        'location': f'{sub_loc}.domain',
+                    })
+                elif a >= b:
+                    errors.append({
+                        'type': ErrorType.INVALID_INTENSITY_DOMAIN.value,
+                        'message': f"intensity.{sub_name}.domain[0] must be < domain[1], got [{a}, {b}]",
+                        'location': f'{sub_loc}.domain',
+                    })
+
+        # Attribute presence and numericity
+        values, non_numeric = _collect_numeric_attr_values(links, attr_name)
+        if non_numeric:
+            errors.append({
+                'type': ErrorType.INVALID_INTENSITY_ATTRIBUTE.value,
+                'message': (
+                    f"intensity.{sub_name}.attribute '{attr_name}' must be numeric on every link "
+                    f"that defines it; found {len(non_numeric)} non-numeric value(s) "
+                    f"(first: {non_numeric[0]!r})"
+                ),
+                'location': f'{sub_loc}.attribute',
+            })
+        # log scale needs all values > 0
+        if scale_str == 'log' and values and any(v <= 0 for v in values):
+            bad = [v for v in values if v <= 0]
+            errors.append({
+                'type': ErrorType.INVALID_INTENSITY_DOMAIN.value,
+                'message': (
+                    f"intensity.{sub_name}.scale='log' requires every value > 0 on attribute "
+                    f"'{attr_name}'; found {len(bad)} non-positive (first: {bad[0]})"
+                ),
+                'location': f'{sub_loc}.attribute',
+            })
+
+        # Sub-specific checks
+        if sub_name == 'width':
+            rng = getattr(sub, 'range', None)
+            if rng is None:
+                errors.append({
+                    'type': ErrorType.INVALID_INTENSITY_RANGE.value,
+                    'message': "intensity.width requires 'range' [min_width, max_width]",
+                    'location': f'{sub_loc}.range',
+                })
+            elif not (isinstance(rng, (list, tuple)) and len(rng) == 2):
+                errors.append({
+                    'type': ErrorType.INVALID_INTENSITY_RANGE.value,
+                    'message': f"intensity.width.range must be [min, max], got {rng!r}",
+                    'location': f'{sub_loc}.range',
+                })
+            else:
+                a, b = rng
+                if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
+                    errors.append({
+                        'type': ErrorType.INVALID_INTENSITY_RANGE.value,
+                        'message': f"intensity.width.range values must be numeric, got [{a!r}, {b!r}]",
+                        'location': f'{sub_loc}.range',
+                    })
+                elif a < 0 or b < 0:
+                    errors.append({
+                        'type': ErrorType.INVALID_INTENSITY_RANGE.value,
+                        'message': f"intensity.width.range values must be >= 0, got [{a}, {b}]",
+                        'location': f'{sub_loc}.range',
+                    })
+                elif a >= b:
+                    errors.append({
+                        'type': ErrorType.INVALID_INTENSITY_RANGE.value,
+                        'message': f"intensity.width.range[0] must be < range[1], got [{a}, {b}]",
+                        'location': f'{sub_loc}.range',
+                    })
+        else:  # color
+            ramp = getattr(sub, 'ramp', None)
+            if ramp is None:
+                errors.append({
+                    'type': ErrorType.INVALID_INTENSITY_RAMP.value,
+                    'message': "intensity.color requires 'ramp' with at least two colors",
+                    'location': f'{sub_loc}.ramp',
+                })
+            elif not isinstance(ramp, (list, tuple)) or len(ramp) < 2:
+                errors.append({
+                    'type': ErrorType.INVALID_INTENSITY_RAMP.value,
+                    'message': f"intensity.color.ramp must have at least two colors, got {ramp!r}",
+                    'location': f'{sub_loc}.ramp',
+                })
+            else:
+                for i_c, c in enumerate(ramp):
+                    if not _is_valid_color(c):
+                        errors.append({
+                            'type': ErrorType.INVALID_INTENSITY_RAMP.value,
+                            'message': f"intensity.color.ramp[{i_c}] is not a valid color: {c!r}",
+                            'location': f'{sub_loc}.ramp[{i_c}]',
+                        })
+                        break
+            space = getattr(sub, 'space', None)
+            if space is not None:
+                space_str = _enum_val(space) if hasattr(space, 'value') else str(space)
+                if space_str not in _VALID_SPACES:
+                    errors.append({
+                        'type': ErrorType.INVALID_INTENSITY_CONFIG.value,
+                        'message': f"intensity.color.space must be one of {_VALID_SPACES}, got '{space_str}'",
+                        'location': f'{sub_loc}.space',
+                    })
+            diverging = getattr(sub, 'diverging', None)
+            midpoint = getattr(sub, 'midpoint', None)
+            if diverging and midpoint is None:
+                errors.append({
+                    'type': ErrorType.INVALID_INTENSITY_CONFIG.value,
+                    'message': "intensity.color.diverging=true requires 'midpoint'",
+                    'location': f'{sub_loc}.midpoint',
+                })
+
+    if width is not None:
+        _check_sub(width, 'width')
+    if color is not None:
+        _check_sub(color, 'color')
+
+    return errors
+
+
+def _validate_categorical_block(
+    ccfg: Any,
+    links: List['Link'],
+    strength_names: Set[str],
+    base_loc: str,
+) -> List[Dict[str, Any]]:
+    """Validate a CategoricalCfg block. Returns list of error dicts."""
+    errors: List[Dict[str, Any]] = []
+    if ccfg is None:
+        return errors
+
+    attr_name = getattr(ccfg, 'attribute', None)
+    styles = getattr(ccfg, 'styles', None) or {}
+    default = getattr(ccfg, 'default', None)
+    missing = getattr(ccfg, 'missing', None)
+
+    if not attr_name:
+        errors.append({
+            'type': ErrorType.INVALID_CATEGORICAL_ATTRIBUTE.value,
+            'message': "categorical requires 'attribute'",
+            'location': f'{base_loc}.attribute',
+        })
+    if not styles:
+        errors.append({
+            'type': ErrorType.INVALID_CATEGORICAL_CONFIG.value,
+            'message': "categorical requires 'styles' with at least one entry",
+            'location': f'{base_loc}.styles',
+        })
+
+    if missing is not None and missing not in _VALID_MISSING:
+        errors.append({
+            'type': ErrorType.INVALID_CATEGORICAL_CONFIG.value,
+            'message': f"categorical.missing must be one of {_VALID_MISSING}, got '{missing}'",
+            'location': f'{base_loc}.missing',
+        })
+
+    def _check_style(s: Any, loc: str) -> None:
+        lc = getattr(s, 'line_color', None)
+        lw = getattr(s, 'line_width', None)
+        strn = getattr(s, 'strength', None)
+        if lc is None and lw is None and strn is None:
+            errors.append({
+                'type': ErrorType.INVALID_CATEGORICAL_STYLE.value,
+                'message': f"categorical style at {loc} has no settable fields (line_color/line_width/strength)",
+                'location': loc,
+            })
+        if lc is not None and not _is_valid_color(lc):
+            errors.append({
+                'type': ErrorType.INVALID_CATEGORICAL_STYLE.value,
+                'message': f"categorical style line_color is not a valid color: {lc!r}",
+                'location': f'{loc}.line_color',
+            })
+        if lw is not None and (not isinstance(lw, int) or lw < 0):
+            errors.append({
+                'type': ErrorType.INVALID_CATEGORICAL_STYLE.value,
+                'message': f"categorical style line_width must be a non-negative int, got {lw!r}",
+                'location': f'{loc}.line_width',
+            })
+        if strn is not None and strength_names and strn not in strength_names:
+            errors.append({
+                'type': ErrorType.INVALID_CATEGORICAL_STYLE.value,
+                'message': (
+                    f"categorical style strength '{strn}' is not registered "
+                    f"(use chart.add_strength to declare it)"
+                ),
+                'location': f'{loc}.strength',
+            })
+
+    for key, st in styles.items():
+        _check_style(st, f"{base_loc}.styles['{key}']")
+    if default is not None:
+        _check_style(default, f"{base_loc}.default")
+
+    # If missing == 'error', surface links that don't have the attribute
+    # at validate time so users get the full punch list pre-build.
+    if attr_name and missing == 'error':
+        for i, link in enumerate(links):
+            attrs = getattr(link, 'attributes', None) or {}
+            if attr_name not in attrs or attrs.get(attr_name) is None:
+                errors.append({
+                    'type': ErrorType.INVALID_CATEGORICAL_ATTRIBUTE.value,
+                    'message': (
+                        f"categorical.missing='error' and link[{i}] has no '{attr_name}' attribute"
+                    ),
+                    'location': f'links[{i}].attributes.{attr_name}',
+                })
+
+    return errors
+
+
+def validate_styling(
+    styling: Any,
+    links: List['Link'],
+    strength_names: Set[str],
+) -> List[Dict[str, Any]]:
+    """Validate ``extra_cfg.styling`` for link intensity and categorical config.
+
+    Accepts a ``StylingCfg`` dataclass or ``None``. Returns a list of error
+    dicts; empty list means valid.
+
+    Refuses to do data-driven styling if both ``intensity`` and ``categorical``
+    target the same attribute — that's ambiguous precedence the user should
+    resolve in their config.
+    """
+    errors: List[Dict[str, Any]] = []
+    if styling is None:
+        return errors
+
+    links_cfg = getattr(styling, 'links', None)
+    if links_cfg is None:
+        return errors
+
+    base = 'settings.extra_cfg.styling.links'
+    icfg = getattr(links_cfg, 'intensity', None)
+    ccfg = getattr(links_cfg, 'categorical', None)
+
+    errors.extend(_validate_intensity_block(icfg, links, f'{base}.intensity'))
+    errors.extend(_validate_categorical_block(ccfg, links, strength_names, f'{base}.categorical'))
+
+    # Conflict: both target the same attribute → ambiguous precedence.
+    if icfg is not None and ccfg is not None:
+        # Intensity attributes can come from width.attribute, color.attribute,
+        # or the top-level shortcut.
+        i_attrs: Set[str] = set()
+        top_attr = getattr(icfg, 'attribute', None)
+        if top_attr:
+            i_attrs.add(top_attr)
+        for sub_name in ('width', 'color'):
+            sub = getattr(icfg, sub_name, None)
+            if sub is not None:
+                a = getattr(sub, 'attribute', None)
+                if a:
+                    i_attrs.add(a)
+                elif top_attr:
+                    i_attrs.add(top_attr)
+        c_attr = getattr(ccfg, 'attribute', None)
+        if c_attr and c_attr in i_attrs:
+            errors.append({
+                'type': ErrorType.STYLING_CONFLICT.value,
+                'message': (
+                    f"intensity and categorical both target attribute '{c_attr}' — "
+                    f"pick one. Mixed numeric-and-lookup styling on the same attribute "
+                    f"has ambiguous precedence."
+                ),
+                'location': base,
+            })
+
+    return errors

@@ -58,3 +58,24 @@ def test_investigation_import_has_no_side_effects(tmp_path, monkeypatch):
         assert list(output_dir.iterdir()) == [], (
             "examples/investigation_chart.py executed a build at import time"
         )
+
+
+@pytest.fixture(scope="module")
+def link_styling_module():
+    sys.path.insert(0, str(EXAMPLES_DIR.parent))
+    try:
+        mod = importlib.import_module("examples.link_styling")
+    finally:
+        sys.path.pop(0)
+    return mod
+
+
+def test_link_styling_builds(link_styling_module, tmp_path, monkeypatch):
+    """The data-driven styling walkthrough builds clean."""
+    monkeypatch.chdir(tmp_path)
+
+    chart = link_styling_module.build()
+    path = chart.to_anx(tmp_path / "link_styling")
+
+    assert Path(path).exists(), f"Expected .anx file at {path}"
+    assert Path(path).stat().st_size > 0
