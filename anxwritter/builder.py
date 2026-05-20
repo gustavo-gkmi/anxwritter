@@ -2118,6 +2118,9 @@ class ANXBuilder:
                 ac_attrs['IsUser'] = _ac_bool(cfg_row.get('is_user'), 'true')
                 ac_attrs['UserCanAdd'] = _ac_bool(cfg_row.get('user_can_add'), 'true')
                 ac_attrs['UserCanRemove'] = _ac_bool(cfg_row.get('user_can_remove'), 'true')
+                # Always emit — ANB's silent default for ShowValue when omitted is false,
+                # but 99% of charts want the value visible. Set show_value=False explicitly to hide.
+                ac_attrs['ShowValue'] = _ac_bool(cfg_row.get('show_value'), 'true')
                 # Optional attributes — only emitted when explicitly set
                 if name in self._att_class_icons:
                     ac_attrs['IconFile'] = self._att_class_icons[name]
@@ -2135,8 +2138,6 @@ class ANXBuilder:
                     ac_attrs['ShowClassName'] = _ac_bool(cfg_row.get('show_class_name'), 'false')
                 if 'show_symbol' in cfg_row:
                     ac_attrs['ShowSymbol'] = _ac_bool(cfg_row.get('show_symbol'), 'true')
-                if 'show_value' in cfg_row:
-                    ac_attrs['ShowValue'] = _ac_bool(cfg_row.get('show_value'), 'true')
                 if 'show_date' in cfg_row:
                     ac_attrs['ShowDate'] = _ac_bool(cfg_row.get('show_date'), 'true' if att_type == 'AttTime' else 'false')
                 if 'show_time' in cfg_row:

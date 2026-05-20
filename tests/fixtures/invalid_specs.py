@@ -487,6 +487,51 @@ INVALID_SPECS: List[tuple] = [
         },
         {ErrorType.DATE_DISPLAY_NAME_COLLISION.value},
     ),
+
+    # ── display_templates: empty sources triggers structural error ──────────
+    (
+        "display_template_invalid_empty_sources",
+        {
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+            "settings": {
+                "extra_cfg": {
+                    "display_templates": [
+                        {
+                            "target": "attribute",
+                            "template": "hi",
+                            "sources": [],
+                        },
+                    ],
+                },
+            },
+        },
+        {ErrorType.DISPLAY_TEMPLATE_INVALID.value},
+    ),
+
+    # ── display_templates: synthesized name collides with explicit AC ───────
+    (
+        "display_template_name_collides_with_ac",
+        {
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+            "attribute_classes": [
+                {"name": "tx", "type": "number", "visible": False},
+                {"name": "Activity", "type": "text"},  # explicit AC
+            ],
+            "settings": {
+                "extra_cfg": {
+                    "display_templates": [
+                        {
+                            "target": "attribute",
+                            "attribute_name": "Activity",  # collision
+                            "template": "{tx}",
+                            "sources": [{"attribute": "tx"}],
+                        },
+                    ],
+                },
+            },
+        },
+        {ErrorType.DISPLAY_TEMPLATE_NAME_COLLISION.value},
+    ),
 ]
 
 

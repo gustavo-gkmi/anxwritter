@@ -10,6 +10,7 @@ import bisect
 import colorsys
 import json
 import math
+import string
 import yaml
 import unicodedata
 from collections import defaultdict
@@ -668,6 +669,251 @@ def expand_date_attribute_displays(
                     rendered = f"{left}{_sep}{right}"
 
                 ri.attributes.append(ResolvedAttr(_sib_name, _sib_ref_id, rendered))
+
+        _paint(resolved_entities)
+        _paint(resolved_links)
+
+
+# ── Multi-attribute display templates ───────────────────────────────────────
+
+_DT_PARSE_FMTS = (
+    '%Y-%m-%dT%H:%M:%S.%f',
+    '%Y-%m-%dT%H:%M:%S',
+    '%Y-%m-%d',
+)
+
+
+def _parse_datetime_value(raw):
+    """Parse a stringified datetime/date attribute value back to a datetime
+    object so f-string-style format specs like ``{d:%d/%m/%Y}`` work.
+
+    Returns the original string if no known format matches — the caller's
+    ``format_map`` will then raise ``ValueError`` and the transform's
+    fallback will surface it as a per-item runtime issue rather than a
+    silent miss.
+    """
+    from datetime import datetime as _dt
+    if not isinstance(raw, str):
+        return raw
+    for fmt in _DT_PARSE_FMTS:
+        try:
+            return _dt.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return raw
+
+
+class _SeparatorFormatter(string.Formatter):
+    """``str.Formatter`` subclass that swaps decimal/thousand separators in
+    numeric output.
+
+    Applied per-substitution, not globally on the final string — literal
+    commas and periods in the static template (``"qtd: {qty}, total"``) are
+    untouched, only the formatted *values* get the swap. Implementation: run
+    the standard format step first, detect whether the value is numeric, then
+    do a two-step rewrite via a non-conflicting sentinel character.
+    """
+
+    def __init__(self, decimal_sep: str = '.', thousand_sep: str = ','):
+        super().__init__()
+        self._dec = decimal_sep
+        self._thou = thousand_sep
+
+    def format_field(self, value, format_spec):
+        out = super().format_field(value, format_spec)
+        # Skip swap when value isn't numeric — `{qty:>10}` on a string
+        # shouldn't have its dots and commas mangled.
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return out
+        # Only swap if user picked non-default separators.
+        if self._dec == '.' and self._thou == ',':
+            return out
+        # Two-step swap via sentinel so the same chars don't collide.
+        # Python's `,` format spec always uses ',' for thousands and '.' for
+        # decimal regardless of locale, which is the contract we rely on.
+        SENT = '\x00'
+        return (
+            out.replace(',', SENT)
+               .replace('.', self._dec)
+               .replace(SENT, self._thou)
+        )
+
+
+def _display_template_target(disp: Any) -> str:
+    t = getattr(disp, 'target', None) or 'attribute'
+    return str(t).lower()
+
+
+def _display_template_attribute_name(disp: Any) -> Optional[str]:
+    """Effective synthesized AC name when ``target='attribute'``.
+
+    Defaults to ``'display'``. Returns ``None`` when ``target='label'`` since
+    no AC is synthesized in that mode.
+    """
+    if _display_template_target(disp) != 'attribute':
+        return None
+    name = getattr(disp, 'attribute_name', None)
+    return name if name else 'display'
+
+
+def expand_display_templates(
+    resolved_entities,
+    resolved_links,
+    displays,
+    attribute_classes,
+    builder,
+    att_class_config,
+):
+    """Apply each ``DisplayTemplate`` to every resolved entity/link.
+
+    For each entry:
+
+    1. Compute the per-source format-map dict from the item's
+       ``ResolvedAttr`` rows (matched by ``source.attribute``).
+    2. Apply the per-source ``missing`` policy: ``skip`` drops the item,
+       ``substitute`` uses ``placeholder``, ``error`` was already surfaced
+       at validate() time (defensive skip here).
+    3. Parse source values to ``datetime`` when their declared AC type is
+       ``datetime`` so format specs like ``{d:%d/%m/%Y}`` work.
+    4. Render via :class:`_SeparatorFormatter` so numeric format-spec
+       output honors ``decimal_separator`` / ``thousand_separator``.
+    5. Route the rendered string by ``target``:
+
+       - ``'attribute'``: register a text sibling AC named via
+         :func:`_display_template_attribute_name` and append a
+         ``ResolvedAttr`` to the item.
+       - ``'label'``: write to ``item.label`` when empty or when
+         ``override_existing`` is ``True``.
+
+    Source AC visibility is NOT mutated — validation already enforces
+    ``visible=False`` on source ACs when ``target='attribute'``.
+    """
+    from .resolved import ResolvedAttr
+
+    if not displays:
+        return
+
+    # Index AC types so we know which source values to parse as datetime.
+    ac_type_by_name: Dict[str, str] = {}
+    for ac in attribute_classes:
+        if not ac.name:
+            continue
+        t = getattr(ac, 'type', None)
+        if hasattr(t, 'value'):
+            t = t.value
+        if t is not None:
+            ac_type_by_name[ac.name] = str(t).lower()
+
+    for disp in displays:
+        template = getattr(disp, 'template', None)
+        sources = getattr(disp, 'sources', None) or []
+        if not template or not sources:
+            # Validation already flagged this entry.
+            continue
+
+        target = _display_template_target(disp)
+        sib_name = _display_template_attribute_name(disp)
+        sib_ref_id: Optional[str] = None
+        dec_sep = getattr(disp, 'decimal_separator', None) or '.'
+        thou_sep = getattr(disp, 'thousand_separator', None) or ','
+        override_existing = bool(getattr(disp, 'override_existing', False))
+
+        formatter = _SeparatorFormatter(dec_sep, thou_sep)
+
+        # For target='attribute': register the synthesized sibling AC.
+        if target == 'attribute' and sib_name:
+            sib_ref_id = builder._att_class_id(sib_name, 'AttText')
+            sibling_row: Dict[str, Any] = {
+                'type': 'text',
+                'visible': True,
+                'show_value': True,
+            }
+            inner = getattr(disp, 'attribute_class', None)
+            if inner is not None:
+                for fn in ('prefix', 'suffix', 'decimal_places', 'show_value',
+                           'show_date', 'show_time', 'show_seconds', 'show_if_set',
+                           'show_class_name', 'show_symbol', 'visible',
+                           'is_user', 'user_can_add', 'user_can_remove',
+                           'icon_file', 'semantic_type',
+                           'merge_behaviour', 'paste_behaviour'):
+                    v = getattr(inner, fn, None)
+                    if v is not None:
+                        sibling_row[fn] = v
+                inner_font = getattr(inner, 'font', None)
+                if inner_font is not None:
+                    sibling_row['font'] = inner_font
+            att_class_config[sib_name] = sibling_row
+
+        # Per-source resolution metadata cached once per display.
+        source_metas: List[Tuple[str, str, str, str, bool]] = []
+        # (attribute_name, alias_key, missing_policy, placeholder, is_datetime)
+        for src in sources:
+            attr_name = getattr(src, 'attribute', None)
+            if not attr_name:
+                continue
+            alias = getattr(src, 'alias', None) or attr_name
+            missing = getattr(src, 'missing', None) or 'skip'
+            placeholder = getattr(src, 'placeholder', None) or ''
+            is_dt = ac_type_by_name.get(attr_name) == 'datetime'
+            source_metas.append((attr_name, alias, missing, placeholder, is_dt))
+
+        def _paint(
+            items,
+            *,
+            _target=target, _sib_name=sib_name, _sib_ref_id=sib_ref_id,
+            _template=template, _sources=source_metas,
+            _formatter=formatter, _override=override_existing,
+        ):
+            for ri in items:
+                # Build attribute lookup once per item.
+                attr_lookup: Dict[str, str] = {}
+                for ra in ri.attributes:
+                    attr_lookup[ra.class_name] = ra.value_str
+
+                fmt_dict: Dict[str, Any] = {}
+                skip_item = False
+                for attr_name, alias, missing, placeholder, is_dt in _sources:
+                    raw = attr_lookup.get(attr_name)
+                    if raw is None:
+                        if missing == 'skip' or missing == 'error':
+                            skip_item = True
+                            break
+                        # 'substitute'
+                        fmt_dict[alias] = placeholder
+                        continue
+                    # Convert numeric strings back to int/float so {:,.2f}
+                    # spec works on the numeric value rather than the string.
+                    val: Any = raw
+                    if is_dt:
+                        val = _parse_datetime_value(raw)
+                    else:
+                        # Try int first (preserves integerness for `:d`),
+                        # then float; fall back to the raw string.
+                        try:
+                            val = int(raw)
+                        except (TypeError, ValueError):
+                            try:
+                                val = float(raw)
+                            except (TypeError, ValueError):
+                                val = raw
+                    fmt_dict[alias] = val
+
+                if skip_item:
+                    continue
+
+                try:
+                    rendered = _formatter.vformat(_template, (), fmt_dict)
+                except (ValueError, KeyError, IndexError, TypeError):
+                    # Defensive skip — validate() catches static template
+                    # syntax errors; this branch covers runtime corner cases
+                    # like a value whose type doesn't match its format spec.
+                    continue
+
+                if _target == 'attribute' and _sib_name and _sib_ref_id is not None:
+                    ri.attributes.append(ResolvedAttr(_sib_name, _sib_ref_id, rendered))
+                elif _target == 'label':
+                    if not ri.label or _override:
+                        ri.label = rendered
 
         _paint(resolved_entities)
         _paint(resolved_links)
