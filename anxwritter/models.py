@@ -521,6 +521,87 @@ class DateAttributeDisplay:
 
 
 @dataclass
+class DisplaySource:
+    """One source attribute referenced by a ``DisplayTemplate``.
+
+    The ``attribute`` field names the source AttributeClass; ``alias`` is the
+    name used to reference the value from inside ``DisplayTemplate.template``.
+    ``alias`` is required when ``attribute`` isn't a valid Python identifier
+    (e.g. contains spaces or non-ASCII characters), and is otherwise optional
+    (the attribute name is reused as the template key).
+
+    ``missing`` / ``placeholder`` override the library default ``'skip'``
+    behaviour per-source — different attributes can need different handling
+    in the same template.
+    """
+    attribute: Optional[str] = None        # Source AttributeClass name (required)
+    alias: Optional[str] = None            # Template key (required if attribute isn't a valid identifier)
+    missing: Optional[str] = None          # 'skip' (default) | 'substitute' | 'error'
+    placeholder: Optional[str] = None      # Used when missing='substitute'
+
+
+@dataclass
+class DisplayTemplate:
+    """Renders one or more source attribute values through a format template
+    and emits the result as either a synthesized text-sibling AttributeClass
+    or as the entity/link label.
+
+    Lives under ``extra_cfg.display_templates`` — a chart-level synthesizer
+    (same family as ``date_attribute_displays``, ``styling``, ``geo_map``).
+
+    ``template`` uses Python's f-string format-spec mini-language via
+    ``str.format_map`` (no code execution; only ``{name:format_spec}``
+    substitutions). The ``f`` prefix is Python source syntax, not part of the
+    template body — write just the string contents.
+
+    ``decimal_separator`` / ``thousand_separator`` post-process numeric
+    format-spec output (e.g. ``{x:,.2f}``) so Brazilian-style ``100.000,00``
+    formatting is one option swap away. Literal commas/periods in static
+    template text are untouched.
+
+    For ``target='attribute'``: source ACs must declare ``visible=False``
+    (same constraint as ``date_attribute_displays``) to avoid double-render
+    in the attribute stack. Validation enforces this.
+
+    For ``target='label'``: ``override_existing`` controls whether items
+    that already have a label get stomped. Default ``False`` — explicit
+    wins over calculated, matching the rest of the library.
+    """
+    target: Optional[str] = None                # 'attribute' (default) | 'label'
+    attribute_name: Optional[str] = None        # Synthesized AC name when target='attribute' (default 'display')
+    override_existing: Optional[bool] = None    # target='label' only — default False
+    template: Optional[str] = None              # f-string format spec body (required)
+    decimal_separator: Optional[str] = None     # default '.'
+    thousand_separator: Optional[str] = None    # default ','
+    sources: List[DisplaySource] = field(default_factory=list)
+    attribute_class: Optional['AttributeClass'] = None  # Styling template, target='attribute' only
+
+    def __post_init__(self):
+        # Coerce dict-form sources to DisplaySource (mirrors Card.coerce_list pattern).
+        if self.sources:
+            out: List[DisplaySource] = []
+            for s in self.sources:
+                if isinstance(s, DisplaySource):
+                    out.append(s)
+                elif isinstance(s, dict):
+                    out.append(DisplaySource(**{k: v for k, v in s.items() if v is not None}))
+                else:
+                    raise TypeError(
+                        f"DisplayTemplate.sources items must be DisplaySource "
+                        f"instances or dicts, got {type(s).__name__}."
+                    )
+            self.sources = out
+        # Coerce dict-form attribute_class to AttributeClass.
+        if isinstance(self.attribute_class, dict):
+            inner = {k: v for k, v in self.attribute_class.items() if v is not None}
+            if isinstance(inner.get('font'), dict):
+                inner['font'] = Font(**{
+                    k: v for k, v in inner['font'].items() if v is not None
+                })
+            self.attribute_class = AttributeClass(**inner)
+
+
+@dataclass
 class ExtraCfg:
     """ANXWritter-only knobs (not written to ANX XML)."""
     entity_auto_color: Optional[bool] = None       # Distribute HSV hues
@@ -531,6 +612,7 @@ class ExtraCfg:
     geo_map: Optional[GeoMapCfg] = None            # Geographic positioning
     styling: Optional[StylingCfg] = None           # Data-driven link styling (intensity + categorical)
     date_attribute_displays: List[DateAttributeDisplay] = field(default_factory=list)  # Datetime → text sibling synthesizers
+    display_templates: List[DisplayTemplate] = field(default_factory=list)  # Multi-attribute template → AC sibling or label
 
 
 # Forward references resolved after all classes defined — see bottom of Settings class

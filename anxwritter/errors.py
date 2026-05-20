@@ -94,6 +94,10 @@ class ErrorType(str, Enum):
     DATE_DISPLAY_INVALID = 'date_display_invalid'
     DATE_DISPLAY_NAME_COLLISION = 'date_display_name_collision'
 
+    # Multi-attribute display template errors
+    DISPLAY_TEMPLATE_INVALID = 'display_template_invalid'
+    DISPLAY_TEMPLATE_NAME_COLLISION = 'display_template_name_collision'
+
 
 class ANXValidationError(Exception):
     """Raised when chart data contains validation errors.

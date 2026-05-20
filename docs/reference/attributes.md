@@ -86,7 +86,7 @@ Every field is declared `Optional[...] = None` on the dataclass. The "ANB defaul
 | `type` | `Optional[AttributeType]` | `Type` | All | **required** on every declaration | Attribute data type. Use the `AttributeType` enum or one of the lowercase strings `'text'`, `'number'`, `'flag'`, `'datetime'`. Validation emits `missing_required` if omitted, and `type_conflict` if it disagrees with the inferred type from data. The library never infers the type for declared classes. |
 | `prefix` | `Optional[str]` | `Prefix` | All | `''` | Prefix string displayed before the value. When set to a non-empty string, `ShowPrefix="true"` is auto-emitted. |
 | `suffix` | `Optional[str]` | `Suffix` | All | `''` | Suffix string displayed after the value. When set to a non-empty string, `ShowSuffix="true"` is auto-emitted. |
-| `show_value` | `Optional[bool]` | `ShowValue` | All | `True` | Whether the attribute value is displayed. |
+| `show_value` | `Optional[bool]` | `ShowValue` | All | `True` -- always emitted | Whether the attribute value is displayed. Always emitted as `ShowValue="true"` when unset (ANB's silent default for omitted `ShowValue` is `false`; anxwritter forces `true` because the value is what analysts want to see in 99% of charts). Set `show_value=False` explicitly to hide. |
 | `decimal_places` | `Optional[int]` | `DecimalPlaces` | Number | `0` | Number of decimal places for Number attributes. |
 | `show_date` | `Optional[bool]` | `ShowDate` | DateTime | `True` | Whether the date part is displayed for DateTime attributes. |
 | `show_time` | `Optional[bool]` | `ShowTime` | DateTime | `True` | Whether the time part is displayed for DateTime attributes. |
@@ -268,6 +268,244 @@ removing `visible=False`). A future anxwritter release may add a deprecation
 warning and eventually remove the transform. **Existing configs will not
 break** -- the synthesizer will degrade gracefully to "redundant but
 harmless."
+
+---
+
+## Display templates {#display-templates}
+
+`extra_cfg.display_templates` is an opt-in chart-level synthesizer that
+takes one or more source attribute values, renders them through a Python
+`str.format_map`-style template, and emits the result either as a
+**synthesized text-sibling AttributeClass** (`target='attribute'`, default)
+or **directly into the entity/link label** (`target='label'`).
+
+Lives under `settings.extra_cfg.display_templates` -- same chart-level
+synthesizer family as [`date_attribute_displays`](#date-attribute-displays),
+`geo_map`, and `styling`. Coexists with `date_attribute_displays`; neither
+deprecates the other.
+
+### What it does
+
+ANB renders each AttributeClass on its own row in the attribute stack. A
+link with `transaction_count=5` plus `total_value=12345.67` shows as **two
+lines** stacked vertically. `display_templates` turns that into a single
+formatted string -- "5x R$ 12,345.67" -- and puts it where you want it:
+either as a new AC on its own row (replacing the source rows by setting
+those `visible=False`), or directly on the link label.
+
+The template is plain Python `str.format_map` syntax -- the same field
+spec mini-language used by f-strings, without the `f` prefix (which is
+Python source syntax, not part of the template). Examples: `{qty}`,
+`{amount:,.2f}`, `{when:%d/%m/%Y}`, `{x:>10}`.
+
+### target='attribute' (default)
+
+Synthesizes a new text AC, named via `attribute_name` (default
+`'display'`), with the rendered string as its per-item value. Source ACs
+**must** declare `visible=False` -- the synthesized sibling renders in
+place of the source rows in the attribute stack.
+
+```python
+from anxwritter import ANXChart, AttributeClass, DisplayTemplate, DisplaySource
+
+chart = ANXChart()
+chart.add_attribute_class(AttributeClass(
+    name='transaction_count', type='number', visible=False,
+))
+chart.add_attribute_class(AttributeClass(
+    name='total_value', type='number', visible=False,
+))
+chart.add_display_template(DisplayTemplate(
+    target='attribute',
+    attribute_name='Activity',
+    template='{qty}x R$ {amount:,.2f}',
+    sources=[
+        DisplaySource(attribute='transaction_count', alias='qty'),
+        DisplaySource(attribute='total_value', alias='amount'),
+    ],
+))
+```
+
+### target='label'
+
+Writes the rendered string into the entity/link `label` field. By default
+(`override_existing=False`), only items with an empty label are filled --
+manually-annotated labels are preserved. Source ACs have no visibility
+constraint in this mode; users can keep the structured data visible in the
+attribute stack AND show the formatted summary on the label.
+
+```python
+chart.add_display_template(DisplayTemplate(
+    target='label',
+    template='{qty}x R$ {amount:,.2f}',
+    sources=[
+        DisplaySource(attribute='transaction_count', alias='qty'),
+        DisplaySource(attribute='total_value', alias='amount'),
+    ],
+))
+```
+
+Set `override_existing=True` to stomp existing labels too. The default
+(`False`) keeps the library-wide convention that explicit values always
+win over calculated ones; the flag is for "I really want chart-wide
+consistency" cases where the user is fine with the synthesizer taking
+over.
+
+### Source aliases
+
+When a source attribute name isn't a valid Python identifier (contains
+spaces, accents, etc), you must give it an `alias` for use in the
+template:
+
+```yaml
+sources:
+  - attribute: "quantia em real"   # spaces -- not a valid identifier
+    alias: amount                   # use {amount} in template
+template: "R$ {amount:,.2f}"
+```
+
+When the attribute name is identifier-safe, the alias is optional --
+the attribute name is reused as the template key.
+
+### Decimal / thousand separators
+
+Python's standard `,.2f` format spec always renders US-style
+(`100,000.50`). For Brazilian (`100.000,50`) and other separator
+conventions, set `decimal_separator` and `thousand_separator` on the
+entry:
+
+```yaml
+decimal_separator: ','
+thousand_separator: '.'
+template: "R$ {amount:,.2f}"
+# 100000.50 → "R$ 100.000,50"
+```
+
+The swap is applied **only to formatted numeric values** -- literal
+commas/periods in the static template text are untouched, so
+`"qtd: {qty}, total"` keeps its literal comma after `{qty}`.
+
+### Datetime sources
+
+When a source AC declares `type: datetime`, the library parses the value
+back into a `datetime.datetime` before binding into the format dict, so
+strftime-style format specs work directly:
+
+```yaml
+attribute_classes:
+  - name: when
+    type: datetime
+    visible: false
+
+settings:
+  extra_cfg:
+    display_templates:
+      - target: attribute
+        attribute_name: When
+        template: "em {when:%d/%m/%Y}"
+        sources:
+          - attribute: when
+# datetime(2024, 3, 15) → "em 15/03/2024"
+```
+
+### Missing-value handling
+
+Per-source `missing` policy controls behaviour when an item is missing
+that source attribute. Default `'skip'`.
+
+| Policy | Behaviour |
+|---|---|
+| `skip` (default) | Drop the item -- no sibling AC emitted / no label change. |
+| `substitute` | Use the source's `placeholder` string in place of the missing value. |
+| `error` | Surface a `display_template_invalid` validation error per missing item at `validate()` time. |
+
+```yaml
+sources:
+  - attribute: tx
+    missing: substitute
+    placeholder: "0"
+```
+
+### YAML form
+
+```yaml
+attribute_classes:
+  - name: transaction_count
+    type: number
+    visible: false
+  - name: total_value
+    type: number
+    visible: false
+
+settings:
+  extra_cfg:
+    display_templates:
+      - target: attribute
+        attribute_name: Activity
+        template: "{qty}x R$ {amount:,.2f}"
+        decimal_separator: ','
+        thousand_separator: '.'
+        sources:
+          - attribute: transaction_count
+            alias: qty
+          - attribute: total_value
+            alias: amount
+```
+
+### `DisplayTemplate` fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `target` | `Optional[str]` | `'attribute'` | `'attribute'` or `'label'`. Picks the output slot. |
+| `attribute_name` | `Optional[str]` | `'display'` | Synthesized AC name when `target='attribute'`. Ignored for `'label'`. |
+| `override_existing` | `Optional[bool]` | `False` | `target='label'` only. Stomp existing labels when `True`. |
+| `template` | `Optional[str]` | -- (required) | f-string-style format body. Use `{alias}` and `{alias:format_spec}` substitutions. |
+| `decimal_separator` | `Optional[str]` | `'.'` | Applied to numeric format-spec output. Literal template text untouched. |
+| `thousand_separator` | `Optional[str]` | `','` | Same. |
+| `sources` | `List[DisplaySource]` | `[]` | At least one source required. |
+| `attribute_class` | `Optional[AttributeClass]` | `None` | Styling template for the synthesized AC (`target='attribute'` only). Inner `.name` and `.type` must be `None`. |
+
+### `DisplaySource` fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `attribute` | `Optional[str]` | -- (required) | Source AttributeClass name. |
+| `alias` | `Optional[str]` | `None` | Template key. Required when `attribute` isn't a valid Python identifier. |
+| `missing` | `Optional[str]` | `None` | Per-source override of the default `'skip'`. One of `'skip'`, `'substitute'`, `'error'`. |
+| `placeholder` | `Optional[str]` | `''` | Used when `missing='substitute'`. |
+
+### Validation rules
+
+| Error type | Condition |
+|---|---|
+| `display_template_invalid` | Missing/empty `template`; empty `sources`; undeclared source AC; source AC has `visible != False` when `target='attribute'`; invalid `target` or `missing` enum; alias collision within an entry; `alias` required (non-identifier attribute name) but omitted; `attribute_class.name` or `.type` set; template syntax error (unclosed brace, bad format spec); `missing='error'` triggered per item. |
+| `display_template_name_collision` | Synthesized `attribute_name` collides with an explicit AC, with another `display_templates` entry's name, or with any `date_attribute_displays` sibling name. |
+
+### Non-goals
+
+`display_templates` is intentionally a pure function of declared source
+attributes:
+
+- **No compound conditions / regex / multi-attribute rules.** Precompute
+  upstream as a synthetic attribute and reference it here.
+- **No arithmetic expressions in templates** (`{a + b}`). Only
+  `{alias:format_spec}` substitutions.
+- **No per-source `prefix` / `suffix` / `format` / separator overrides.**
+  All formatting lives in the template; per-source decoration is
+  intentionally not supported to keep one source of truth for the
+  rendered shape.
+- **No filter by entity/link type.** Applies to every item that has the
+  source ACs; use distinct AC names per type if you need scoping.
+
+### Coexists with `date_attribute_displays`
+
+The two synthesizers run independently. `date_attribute_displays` is the
+convenience form for the common single-AC date / two-AC range case (no
+template needed, just `start`/`end`/`format`/`separator`).
+`display_templates` is the general form for everything else (multiple
+sources, custom formatting, label target). Synthesized AC names share one
+namespace -- collisions across the two families are caught at
+`validate()` time.
 
 ---
 

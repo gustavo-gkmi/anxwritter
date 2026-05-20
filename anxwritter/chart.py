@@ -45,7 +45,8 @@ from .enums import DotStyle, Representation
 from .errors import ANXValidationError
 from ._i2_interop import LATITUDE_GUID, LONGITUDE_GUID, GRID_REFERENCE_GUID
 from .models import (
-    Card, Link, AttributeClass, DateAttributeDisplay, Strength, LegendItem,
+    Card, Link, AttributeClass, DateAttributeDisplay,
+    DisplayTemplate, Strength, LegendItem,
     EntityType, LinkType,
     Palette, PaletteAttributeEntry, DateTimeFormat,
     SemanticEntity, SemanticLink, SemanticProperty,
@@ -1099,6 +1100,8 @@ class ANXChart:
             self._semantic_properties.append(item)
         elif isinstance(item, DateAttributeDisplay):
             self.settings.extra_cfg.date_attribute_displays.append(item)
+        elif isinstance(item, DisplayTemplate):
+            self.settings.extra_cfg.display_templates.append(item)
         else:
             raise TypeError(f"Cannot add item of type {type(item).__name__}")
 
@@ -1243,6 +1246,23 @@ class ANXChart:
         else:
             self.settings.extra_cfg.date_attribute_displays.append(
                 DateAttributeDisplay(**kwargs)
+            )
+
+    def add_display_template(self, obj=None, **kwargs) -> None:
+        """Add a :class:`DisplayTemplate` to ``extra_cfg.display_templates``.
+
+        Pass a ``DisplayTemplate`` instance or keyword args matching its
+        fields (``target``, ``attribute_name``, ``override_existing``,
+        ``template``, ``decimal_separator``, ``thousand_separator``,
+        ``sources``, ``attribute_class``). Multiple templates can be added;
+        they are appended in order. Validation runs at :meth:`validate`
+        time.
+        """
+        if isinstance(obj, DisplayTemplate):
+            self.settings.extra_cfg.display_templates.append(obj)
+        else:
+            self.settings.extra_cfg.display_templates.append(
+                DisplayTemplate(**kwargs)
             )
 
     def add_entity_type(self, name_or_obj=None, **kwargs) -> None:
@@ -1556,13 +1576,33 @@ class ANXChart:
         ))
 
         # Validate date_attribute_displays (extra_cfg.date_attribute_displays)
-        from .validation import validate_date_attribute_displays
+        from .validation import (
+            validate_date_attribute_displays,
+            validate_display_templates,
+            _date_display_sibling_name,
+        )
         errors.extend(validate_date_attribute_displays(
             self.settings.extra_cfg.date_attribute_displays,
             self._attribute_classes,
             self._entities,
             self._links,
             ac_names,
+        ))
+
+        # Validate display_templates (extra_cfg.display_templates).
+        # Collect date_attribute_displays sibling names so the cross-family
+        # collision check can fire.
+        date_sib_names = [
+            _date_display_sibling_name(d) or ''
+            for d in self.settings.extra_cfg.date_attribute_displays
+        ]
+        errors.extend(validate_display_templates(
+            self.settings.extra_cfg.display_templates,
+            self._attribute_classes,
+            self._entities,
+            self._links,
+            ac_names,
+            date_sib_names,
         ))
 
         return errors
@@ -2036,6 +2076,20 @@ class ANXChart:
                 resolved_entities,
                 resolved_links,
                 self.settings.extra_cfg.date_attribute_displays,
+                self._attribute_classes,
+                builder,
+                att_class_config,
+            )
+
+        # ── Display template expansion ──────────────────────────────────
+        # Runs after date_attribute_displays so a date-display sibling AC
+        # could (in principle) be referenced by a display_template source.
+        with timer.phase("Display template expansion"):
+            from .transforms import expand_display_templates
+            expand_display_templates(
+                resolved_entities,
+                resolved_links,
+                self.settings.extra_cfg.display_templates,
                 self._attribute_classes,
                 builder,
                 att_class_config,

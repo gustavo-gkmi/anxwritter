@@ -2143,3 +2143,398 @@ def validate_date_attribute_displays(
                     })
 
     return errors
+
+
+# ── Multi-attribute display templates ───────────────────────────────────────
+
+_VALID_DISPLAY_TARGETS = frozenset({'attribute', 'label'})
+_VALID_DISPLAY_MISSING = frozenset({'skip', 'substitute', 'error'})
+
+
+def _is_valid_identifier(name: str) -> bool:
+    """True if ``name`` can be used as a Python format-spec field name.
+
+    Python's ``str.format`` accepts identifier-shaped field names plus dots
+    and brackets for attribute/index access. We restrict to plain
+    identifiers — alias-mode requires explicit ``alias`` for anything else.
+    """
+    return isinstance(name, str) and name.isidentifier()
+
+
+def _display_template_attribute_name(disp: Any) -> Optional[str]:
+    """Effective synthesized AC name (target='attribute' only).
+
+    Returns ``'display'`` by default; returns ``None`` for target='label'
+    (no AC is synthesized in that mode).
+    """
+    target = getattr(disp, 'target', None) or 'attribute'
+    if str(target).lower() != 'attribute':
+        return None
+    name = getattr(disp, 'attribute_name', None)
+    return name if name else 'display'
+
+
+class _AnyFormatProbe:
+    """Sentinel value for the validation dry-run that accepts any format
+    spec without raising.
+
+    Used when we can't statically infer the source AC's type (e.g. AC type
+    is text, or AC isn't declared). The validator's job is to catch
+    *template* errors, not type-mismatch errors that would only fire at
+    runtime when a specific value flows through — those are surfaced
+    defensively by the transform itself.
+    """
+    def __format__(self, format_spec):  # noqa: D401 - dunder
+        return ''
+
+
+def _try_format_static(template: str, sample: Dict[str, Any]) -> Optional[str]:
+    """Try ``template.format_map(sample)`` and return an error message if it
+    fails. Returns ``None`` on success.
+
+    The sample dict provides values for every declared alias so a syntactic
+    issue (mismatched brace, bad format spec) is the only thing that can
+    raise — KeyError means "alias used in template that wasn't in sources",
+    which we surface as a structural error.
+    """
+    try:
+        template.format_map(sample)
+    except KeyError as e:
+        return f"template references unknown key {e!s} (no matching source alias)."
+    except (ValueError, IndexError) as e:
+        return f"template format error: {e!s}"
+    except Exception as e:  # pragma: no cover - defensive
+        return f"template raised {type(e).__name__}: {e!s}"
+    return None
+
+
+def validate_display_templates(
+    displays: List[Any],
+    attribute_classes: List['AttributeClass'],
+    entities: List['_BaseEntity'],
+    links: List['Link'],
+    ac_names: Dict[str, str],
+    date_display_sibling_names: List[str],
+) -> List[Dict[str, Any]]:
+    """Validate ``extra_cfg.display_templates`` entries.
+
+    Each entry renders one or more source attribute values through a Python
+    ``str.format_map`` template and routes the output to either a
+    synthesized text-sibling AC (``target='attribute'``) or the item label
+    (``target='label'``).
+
+    Enforced rules:
+
+    - ``template`` is required and must be parseable as a Python format
+      string given the declared source aliases.
+    - ``sources`` is required and non-empty.
+    - Each source's ``attribute`` must reference a declared AttributeClass.
+    - When ``target='attribute'`` the source AC must have ``visible=False``
+      so the value isn't double-rendered (source value in the stack + the
+      synthesized one).
+    - ``alias`` is required when ``source.attribute`` isn't a valid
+      Python identifier (spaces, accents, etc).
+    - Per-source ``missing`` ∈ {``skip``, ``substitute``, ``error``}.
+    - ``target`` ∈ {``attribute``, ``label``}.
+    - ``attribute_class.name`` / ``.type`` must be ``None`` — the sibling
+      is auto-named (via ``attribute_name`` or default ``'display'``) and
+      auto-typed as text.
+    - Aliases declared within a single entry must be unique.
+    - When ``target='attribute'``, the effective ``attribute_name`` must
+      not collide with any explicit AC, with another
+      ``display_templates`` entry's name, or with any
+      ``date_attribute_displays`` sibling.
+    - When ``missing='error'``: every entity/link missing that source's
+      attribute surfaces a per-item error.
+
+    The ``date_display_sibling_names`` parameter is the list of already-
+    computed sibling names from ``validate_date_attribute_displays`` so
+    collisions across the two synthesizer families are caught.
+    """
+    errors: List[Dict[str, Any]] = []
+    if not displays:
+        return errors
+
+    ac_by_name: Dict[str, 'AttributeClass'] = {
+        ac.name: ac for ac in attribute_classes if ac.name
+    }
+
+    base_loc = 'settings.extra_cfg.display_templates'
+
+    # Per-display structural checks. Effective names tracked for collision
+    # detection in the second pass.
+    effective_names: List[Optional[str]] = []
+    for i, disp in enumerate(displays):
+        loc = f"{base_loc}[{i}]"
+        target_raw = getattr(disp, 'target', None) or 'attribute'
+        target = str(target_raw).lower()
+        template = getattr(disp, 'template', None)
+        sources = getattr(disp, 'sources', None) or []
+        inner = getattr(disp, 'attribute_class', None)
+
+        # Rule — target enum
+        if target not in _VALID_DISPLAY_TARGETS:
+            errors.append({
+                'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                'message': (
+                    f"display_templates[{i}].target {target_raw!r} is not "
+                    f"one of {sorted(_VALID_DISPLAY_TARGETS)}."
+                ),
+                'location': f"{loc}.target",
+            })
+            effective_names.append(None)
+            continue
+
+        # Rule — template required
+        if not template or not isinstance(template, str):
+            errors.append({
+                'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                'message': (
+                    f"display_templates[{i}]: 'template' is required and "
+                    f"must be a non-empty string."
+                ),
+                'location': f"{loc}.template",
+            })
+            effective_names.append(None)
+            continue
+
+        # Rule — sources required
+        if not sources:
+            errors.append({
+                'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                'message': (
+                    f"display_templates[{i}]: 'sources' is required and "
+                    f"must be a non-empty list."
+                ),
+                'location': f"{loc}.sources",
+            })
+            effective_names.append(None)
+            continue
+
+        # Per-source checks: attribute existence, type for datetime path,
+        # alias requirement, missing enum, visible=False when target=attribute.
+        aliases_seen: Dict[str, int] = {}
+        alias_sample: Dict[str, Any] = {}
+        for j, src in enumerate(sources):
+            attr_name = getattr(src, 'attribute', None)
+            if not attr_name:
+                errors.append({
+                    'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                    'message': (
+                        f"display_templates[{i}].sources[{j}]: 'attribute' "
+                        f"is required."
+                    ),
+                    'location': f"{loc}.sources[{j}].attribute",
+                })
+                continue
+
+            src_ac = ac_by_name.get(attr_name)
+            if src_ac is None:
+                errors.append({
+                    'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                    'message': (
+                        f"display_templates[{i}].sources[{j}].attribute "
+                        f"{attr_name!r} doesn't reference any declared "
+                        f"AttributeClass."
+                    ),
+                    'location': f"{loc}.sources[{j}].attribute",
+                })
+
+            alias = getattr(src, 'alias', None)
+            if alias is None:
+                # No alias — must derive from attribute name, which must be
+                # a valid Python identifier.
+                if not _is_valid_identifier(attr_name):
+                    errors.append({
+                        'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                        'message': (
+                            f"display_templates[{i}].sources[{j}]: "
+                            f"attribute {attr_name!r} isn't a valid Python "
+                            f"identifier, so 'alias' is required for "
+                            f"template substitution."
+                        ),
+                        'location': f"{loc}.sources[{j}].alias",
+                    })
+                    alias_key = None
+                else:
+                    alias_key = attr_name
+            else:
+                if not _is_valid_identifier(alias):
+                    errors.append({
+                        'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                        'message': (
+                            f"display_templates[{i}].sources[{j}].alias "
+                            f"{alias!r} must be a valid Python identifier."
+                        ),
+                        'location': f"{loc}.sources[{j}].alias",
+                    })
+                    alias_key = None
+                else:
+                    alias_key = alias
+
+            # Alias uniqueness within the entry
+            if alias_key is not None:
+                if alias_key in aliases_seen:
+                    errors.append({
+                        'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                        'message': (
+                            f"display_templates[{i}]: alias {alias_key!r} "
+                            f"used by sources[{aliases_seen[alias_key]}] "
+                            f"and sources[{j}]."
+                        ),
+                        'location': f"{loc}.sources[{j}].alias",
+                    })
+                else:
+                    aliases_seen[alias_key] = j
+                    # Sample value for the dry-run format check. Use a type
+                    # that matches the source AC so format specs intended
+                    # for that type validate cleanly (e.g. ``{d:%Y-%m-%d}``
+                    # on a datetime source). Falls back to the universal
+                    # ``_AnyFormatProbe`` sentinel when the source AC isn't
+                    # declared or has no type — sentinel accepts every
+                    # format spec without raising.
+                    src_type = (
+                        _enum_val(src_ac.type).lower()
+                        if src_ac is not None and src_ac.type is not None
+                        else None
+                    )
+                    if src_type == 'datetime':
+                        alias_sample[alias_key] = _STRFTIME_PROBE_DT
+                    elif src_type in ('number',):
+                        alias_sample[alias_key] = 0
+                    else:
+                        alias_sample[alias_key] = _AnyFormatProbe()
+
+            # target=attribute → source AC must be visible=False
+            if target == 'attribute' and src_ac is not None:
+                if src_ac.visible is not False:
+                    errors.append({
+                        'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                        'message': (
+                            f"AC {attr_name!r} is referenced by "
+                            f"display_templates[{i}] (target='attribute') "
+                            f"and must have visible=False so its value "
+                            f"isn't double-rendered alongside the "
+                            f"synthesized sibling."
+                        ),
+                        'location': f"{loc}.sources[{j}].attribute",
+                    })
+
+            # missing enum
+            missing = getattr(src, 'missing', None)
+            if missing is not None and missing not in _VALID_DISPLAY_MISSING:
+                errors.append({
+                    'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                    'message': (
+                        f"display_templates[{i}].sources[{j}].missing "
+                        f"{missing!r} is not one of "
+                        f"{sorted(_VALID_DISPLAY_MISSING)}."
+                    ),
+                    'location': f"{loc}.sources[{j}].missing",
+                })
+
+        # Template dry-run (after sample dict built)
+        if alias_sample:
+            err_msg = _try_format_static(template, alias_sample)
+            if err_msg:
+                errors.append({
+                    'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                    'message': (
+                        f"display_templates[{i}].template: {err_msg}"
+                    ),
+                    'location': f"{loc}.template",
+                })
+
+        # attribute_class sanity (target=attribute only; for label the field
+        # is silently ignored since no AC is synthesized).
+        if target == 'attribute' and inner is not None:
+            if getattr(inner, 'name', None):
+                errors.append({
+                    'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                    'message': (
+                        f"display_templates[{i}].attribute_class.name must "
+                        f"be None — the synthesized AC is auto-named via "
+                        f"'attribute_name' (default 'display')."
+                    ),
+                    'location': f"{loc}.attribute_class.name",
+                })
+            if getattr(inner, 'type', None) is not None:
+                errors.append({
+                    'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                    'message': (
+                        f"display_templates[{i}].attribute_class.type must "
+                        f"be None — the synthesized AC is auto-typed as "
+                        f"text."
+                    ),
+                    'location': f"{loc}.attribute_class.type",
+                })
+
+        effective_names.append(_display_template_attribute_name(disp))
+
+    # Cross-entry name-collision checks (target=attribute only).
+    explicit = dict(ac_names)
+    sibling_to_index: Dict[str, int] = {}
+    date_sibling_set = set(n for n in date_display_sibling_names if n)
+    for i, sib_name in enumerate(effective_names):
+        if not sib_name:
+            continue
+        loc = f"{base_loc}[{i}]"
+        if sib_name in explicit:
+            errors.append({
+                'type': ErrorType.DISPLAY_TEMPLATE_NAME_COLLISION.value,
+                'message': (
+                    f"display_templates[{i}] synthesized AC name "
+                    f"{sib_name!r} collides with explicit AttributeClass "
+                    f"at {explicit[sib_name]}."
+                ),
+                'location': f"{loc}.attribute_name",
+            })
+            continue
+        if sib_name in date_sibling_set:
+            errors.append({
+                'type': ErrorType.DISPLAY_TEMPLATE_NAME_COLLISION.value,
+                'message': (
+                    f"display_templates[{i}] synthesized AC name "
+                    f"{sib_name!r} collides with a "
+                    f"date_attribute_displays sibling of the same name."
+                ),
+                'location': f"{loc}.attribute_name",
+            })
+            continue
+        if sib_name in sibling_to_index:
+            errors.append({
+                'type': ErrorType.DISPLAY_TEMPLATE_NAME_COLLISION.value,
+                'message': (
+                    f"display_templates[{i}] synthesized AC name "
+                    f"{sib_name!r} collides with "
+                    f"display_templates[{sibling_to_index[sib_name]}]."
+                ),
+                'location': f"{loc}.attribute_name",
+            })
+            continue
+        sibling_to_index[sib_name] = i
+
+    # Per-item walk for any source with missing='error'.
+    for i, disp in enumerate(displays):
+        sources = getattr(disp, 'sources', None) or []
+        for j, src in enumerate(sources):
+            if getattr(src, 'missing', None) != 'error':
+                continue
+            attr_name = getattr(src, 'attribute', None)
+            if not attr_name:
+                continue
+            for kind, items in (('entities', entities), ('links', links)):
+                for k, it in enumerate(items):
+                    attrs = getattr(it, 'attributes', None) or {}
+                    if attr_name not in attrs or attrs[attr_name] is None:
+                        errors.append({
+                            'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                            'message': (
+                                f"display_templates[{i}].sources[{j}].missing="
+                                f"'error' and {kind}[{k}] has no "
+                                f"{attr_name!r} attribute."
+                            ),
+                            'location': f"{kind}[{k}].attributes.{attr_name}",
+                        })
+
+    return errors

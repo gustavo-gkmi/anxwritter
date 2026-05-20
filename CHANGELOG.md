@@ -5,6 +5,85 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-05-20
+
+### Added
+
+- **`extra_cfg.display_templates`** — multi-attribute synthesizer that
+  renders one or more source attribute values through a Python
+  `str.format_map`-style template and emits the result either as a
+  synthesized text-sibling `AttributeClass` (`target='attribute'`,
+  default) or directly into the entity/link label (`target='label'`).
+  Sister synthesizer to `date_attribute_displays`; both coexist (neither
+  deprecates the other).
+  - **Template syntax**: Python f-string format-spec mini-language via
+    `str.format_map`. No code execution; supports `{alias}`,
+    `{alias:format_spec}` including `{x:,.2f}`, `{x:>10}`,
+    `{d:%d/%m/%Y}`. Write the body of an f-string without the `f` prefix
+    (which is Python source syntax, not part of the template).
+  - **Two target slots, picked per entry**:
+    `target='attribute'` synthesizes a text AC named via `attribute_name`
+    (default `'display'`); source ACs must declare `visible=False`.
+    `target='label'` writes to the entity/link label; default
+    `override_existing=False` preserves manually-set labels (consistent
+    with the library convention that explicit wins over calculated; flip
+    to `True` for chart-wide consistency).
+  - **Source aliases** via `DisplaySource.alias`: required when an AC
+    name isn't a valid Python identifier (spaces, accents, etc).
+    Optional otherwise — the attribute name is reused as the template key.
+  - **Per-source missing policy** (`'skip'` default / `'substitute'` /
+    `'error'`) with per-source `placeholder` for `substitute`.
+  - **Number formatting**: top-level `decimal_separator` /
+    `thousand_separator` swap separators in numeric format-spec output
+    only. Static template text (e.g. literal commas) is untouched. Useful
+    for Brazilian-style `100.000,50` formatting without any locale
+    machinery.
+  - **Datetime sources**: source ACs declaring `type='datetime'` are
+    auto-parsed back to `datetime.datetime` before binding so
+    `{d:%d/%m/%Y}` style specs work directly.
+  - New dataclasses: `DisplayTemplate`, `DisplaySource`. New enum
+    `DisplayTarget` (`'attribute'` | `'label'`). New top-level exports.
+  - New chart method: `chart.add_display_template(target=..., template=...,
+    sources=[...], ...)`. Generic `chart.add(DisplayTemplate(...))`
+    dispatch also routes here.
+  - New `ErrorType` members: `DISPLAY_TEMPLATE_INVALID` (structural
+    issues + per-item `missing='error'`) and
+    `DISPLAY_TEMPLATE_NAME_COLLISION` (synthesized name collides with
+    an explicit AC, with another `display_templates` entry, or with any
+    `date_attribute_displays` sibling).
+  - New example `examples/display_templates_example.py` covering both
+    targets, datetime sources, BR separators, and mixed-target charts.
+  - **Note for users coming from "stacked attributes look messy on the
+    canvas"**: declare a `display_templates` entry that combines the
+    relevant source ACs into one formatted string and either set source
+    ACs `visible=False` (so the synthesized sibling replaces the stack)
+    or pick `target='label'` to get the summary onto the link's label
+    line. See `docs/reference/attributes.md` § Display templates.
+
+## [1.10.2] - 2026-05-19
+
+### Changed
+
+- **`AttributeClass.ShowValue` is now always emitted, defaulting to `"true"`.**
+  Previously omitted from the XML when `show_value` was unset, leaving ANB to
+  apply its own default. The default was assumed to be `true` (and documented
+  as such), but ANB's silent fallback for an omitted `ShowValue` is actually
+  `false` — so any attribute class that didn't explicitly set `show_value=True`
+  rendered with no visible value on the canvas. The library now emits
+  `ShowValue="true"` by default, matching what 99% of charts want. To hide a
+  value, set `show_value=False` explicitly (emits `ShowValue="false"`).
+  Behavioural impact: attribute values that previously rendered blank on the
+  canvas will now render. Charts that intentionally relied on the silent-hide
+  behaviour (none known) need to add `show_value: false` to the affected ACs.
+
+### Documentation
+
+- Added gotcha #11 to the YAML/JSON guide: quote `prefix:` / `suffix:` (and
+  `separator:` on `extra_cfg.date_attribute_displays`) when leading or
+  trailing whitespace is meaningful. YAML's plain-scalar parsing strips
+  whitespace, so an unquoted `prefix: R$ ` silently becomes `'R$'`. JSON and
+  the Python API are unaffected.
+
 ## [1.10.1] - 2026-05-19
 
 ### Breaking

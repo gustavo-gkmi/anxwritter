@@ -461,6 +461,59 @@ settings:
 
 See [attributes.md → Date attribute displays](../reference/attributes.md#date-attribute-displays).
 
+#### Multi-attribute display templates
+
+`extra_cfg.display_templates` is the general synthesizer: combine N source
+attribute values into one formatted string via a Python f-string-style
+template, and route the output to either a synthesized text-sibling AC
+(`target: attribute`) or the entity/link label (`target: label`).
+
+```yaml
+attribute_classes:
+  - name: transaction_count
+    type: number
+    visible: false
+  - name: total_value
+    type: number
+    visible: false
+
+settings:
+  extra_cfg:
+    display_templates:
+      # Sibling AC: replaces the two-row attribute stack with one row.
+      - target: attribute
+        attribute_name: Activity
+        template: "{qty}x R$ {amount:,.2f}"
+        decimal_separator: ','            # BR: "100.000,50"
+        thousand_separator: '.'
+        sources:
+          - attribute: transaction_count
+            alias: qty
+          - attribute: total_value
+            alias: amount
+
+      # Label: same formatted string on the link's label instead.
+      # Manual labels are preserved (override_existing: false default).
+      - target: label
+        template: "{qty}x R$ {amount:,.2f}"
+        sources:
+          - attribute: transaction_count
+            alias: qty
+          - attribute: total_value
+            alias: amount
+```
+
+Template syntax: exactly what you'd write inside a Python f-string,
+without the `f` prefix (the `f` is Python source syntax, not part of the
+template). Supports format specs like `{x:,.2f}`, `{x:>10}`, and
+`{d:%d/%m/%Y}` for datetime sources.
+
+The `alias` field on each source is required when the attribute name
+isn't a valid Python identifier (e.g. `"quantia em real"` with spaces).
+For identifier-shaped names, alias defaults to the attribute name.
+
+See [attributes.md → Display templates](../reference/attributes.md#display-templates).
+
 ---
 
 ## Grades, source types, strengths
@@ -982,6 +1035,33 @@ Validation catches this with the `unregistered_datetime_format` error.
 
 ANB rejects `ordered=True` if either end isn't a ThemeLine; validation
 catches this as `invalid_ordered`. The constraint doesn't apply to entities.
+
+### 11. Quote `prefix:` / `suffix:` when they have leading or trailing whitespace
+
+YAML strips leading and trailing whitespace from unquoted plain scalars. A
+prefix like `R$ ` (currency symbol plus separator space) loses the space
+silently if you don't quote it:
+
+```yaml
+attribute_classes:
+  # Wrong — YAML strips the trailing space → prefix becomes "R$"
+  - name: Balance
+    type: number
+    prefix: R$
+    decimal_places: 2
+
+  # Right — quote to preserve the space
+  - name: Balance
+    type: number
+    prefix: 'R$ '
+    decimal_places: 2
+```
+
+Same applies to `suffix:`, and to any other string field where leading or
+trailing whitespace is meaningful (`separator:` on
+`extra_cfg.date_attribute_displays`, etc). The Python API preserves the
+space verbatim — this is a YAML parsing quirk, not anxwritter behaviour.
+JSON is unaffected: `"prefix": "R$ "` round-trips correctly.
 
 ---
 
