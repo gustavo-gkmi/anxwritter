@@ -452,52 +452,17 @@ INVALID_SPECS: List[tuple] = [
         {ErrorType.DATETIME_AC_FORBIDS_VISIBLE.value},
     ),
 
-    # ── date_attribute_displays: start references undeclared AC ─────────────
+    # ── display_attribute: empty sources triggers structural error ──────────
     (
-        "date_display_start_undeclared",
+        "display_invalid_empty_sources",
         {
             "entities": {"icons": [{"id": "A", "type": "Person"}]},
             "settings": {
                 "extra_cfg": {
-                    "date_attribute_displays": [
-                        {"start": "missing_ac"},
-                    ],
-                },
-            },
-        },
-        {ErrorType.DATE_DISPLAY_INVALID.value},
-    ),
-
-    # ── date_attribute_displays: sibling name collides with explicit AC ─────
-    (
-        "date_display_name_collides_with_ac",
-        {
-            "entities": {"icons": [{"id": "A", "type": "Person"}]},
-            "attribute_classes": [
-                {"name": "EventDate", "type": "datetime", "visible": False},
-                {"name": "EventDate (display)", "type": "text"},
-            ],
-            "settings": {
-                "extra_cfg": {
-                    "date_attribute_displays": [
-                        {"start": "EventDate"},
-                    ],
-                },
-            },
-        },
-        {ErrorType.DATE_DISPLAY_NAME_COLLISION.value},
-    ),
-
-    # ── display_templates: empty sources triggers structural error ──────────
-    (
-        "display_template_invalid_empty_sources",
-        {
-            "entities": {"icons": [{"id": "A", "type": "Person"}]},
-            "settings": {
-                "extra_cfg": {
-                    "display_templates": [
+                    "display_attribute": [
                         {
-                            "target": "attribute",
+                            "key": "d1",
+                            "attribute_name": "Activity",
                             "template": "hi",
                             "sources": [],
                         },
@@ -505,12 +470,12 @@ INVALID_SPECS: List[tuple] = [
                 },
             },
         },
-        {ErrorType.DISPLAY_TEMPLATE_INVALID.value},
+        {ErrorType.DISPLAY_INVALID.value},
     ),
 
-    # ── display_templates: synthesized name collides with explicit AC ───────
+    # ── display_attribute: synthesized name collides with explicit AC ───────
     (
-        "display_template_name_collides_with_ac",
+        "display_name_collides_with_ac",
         {
             "entities": {"icons": [{"id": "A", "type": "Person"}]},
             "attribute_classes": [
@@ -519,9 +484,9 @@ INVALID_SPECS: List[tuple] = [
             ],
             "settings": {
                 "extra_cfg": {
-                    "display_templates": [
+                    "display_attribute": [
                         {
-                            "target": "attribute",
+                            "key": "d1",
                             "attribute_name": "Activity",  # collision
                             "template": "{tx}",
                             "sources": [{"attribute": "tx"}],
@@ -530,7 +495,29 @@ INVALID_SPECS: List[tuple] = [
                 },
             },
         },
-        {ErrorType.DISPLAY_TEMPLATE_NAME_COLLISION.value},
+        {ErrorType.DISPLAY_NAME_COLLISION.value},
+    ),
+
+    # ── display_label: two untyped entries overlap on the label slot ────────
+    (
+        "display_overlap_conflict",
+        {
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+            "attribute_classes": [
+                {"name": "x", "type": "text"},
+            ],
+            "settings": {
+                "extra_cfg": {
+                    "display_label": [
+                        {"key": "a", "template": "{x}",
+                         "sources": [{"attribute": "x"}]},
+                        {"key": "b", "template": "{x}",
+                         "sources": [{"attribute": "x"}]},
+                    ],
+                },
+            },
+        },
+        {ErrorType.DISPLAY_OVERLAP_CONFLICT.value},
     ),
 ]
 

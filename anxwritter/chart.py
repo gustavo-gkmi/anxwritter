@@ -42,11 +42,11 @@ from .builder import ANXBuilder
 from .colors import color_to_colorref
 from .entities import _BaseEntity, Icon, Box, Circle, ThemeLine, EventFrame, TextBlock, Label
 from .enums import DotStyle, Representation
-from .errors import ANXValidationError
+from .errors import ANXValidationError, ErrorType
 from ._i2_interop import LATITUDE_GUID, LONGITUDE_GUID, GRID_REFERENCE_GUID
 from .models import (
-    Card, Link, AttributeClass, DateAttributeDisplay,
-    DisplayTemplate, Strength, LegendItem,
+    Card, Link, AttributeClass,
+    DisplayAttribute, DisplayLabel, Strength, LegendItem,
     EntityType, LinkType,
     Palette, PaletteAttributeEntry, DateTimeFormat,
     SemanticEntity, SemanticLink, SemanticProperty,
@@ -71,6 +71,12 @@ from .transforms import (
     apply_link_intensity,
     generate_styling_legend,
 )
+
+
+# Sentinel for "key absent" (distinct from an explicit None value) in the
+# config-layering engine — a delete layer uses ``key: null`` to mean "remove",
+# so None and absent must be distinguishable.
+_UNSET = object()
 
 
 # ── Helper functions ──────────────────────────────────────────────────────────
@@ -249,6 +255,15 @@ class ANXChart:
         self._config_conflicts: List[Dict[str, Any]] = []
         self._has_config: bool = False
 
+        # Config-vs-config leaf locks (set only by lock=True layers). Keyed at
+        # LEAF granularity: (section, identity_or_None, dotted_leaf) -> value.
+        #   named/synth: ('attribute_classes', 'Person', 'font.bold') -> True
+        #   settings:    ('settings', None, 'view.time_bar') -> True
+        #   grades:      ('grades_one', None, 'default') / (..., 'item:High')
+        # A later config layer changing a locked leaf gets a locked_override
+        # error and the locked value is preserved (fail-safe).
+        self._config_locked_leaves: Dict[tuple, Any] = {}
+
         # Source provenance — maps config entries back to the layer that set them.
         # Populated by `_apply_config` when a `source_name` is supplied (explicit
         # kwarg, or auto-derived from the path in `apply_config_file`).
@@ -293,83 +308,741 @@ class ANXChart:
         """Convert a dataclass to a dict with None values removed."""
         return {k: v for k, v in dataclasses.asdict(obj).items() if v is not None}
 
+    # ------------------------------------------------------------------
+    # Config-layering engine: field-merge / lock / delete / wipe_previous
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _walk_leaves(d: dict, prefix: str = ''):
+        """Yield ``(dotted_path, value)`` for every non-dict leaf of ``d``.
+
+        Dict-valued entries are recursed; list- and scalar-valued entries are
+        leaves. Used to enumerate the leaves a config layer explicitly
+        declared (lock recording / checking, settings-leaf delete).
+        """
+        for k, v in d.items():
+            path = f"{prefix}.{k}" if prefix else k
+            if isinstance(v, dict):
+                yield from ANXChart._walk_leaves(v, path)
+            else:
+                yield path, v
+
+    @staticmethod
+    def _deep_merge_dicts(base: dict, incoming: dict) -> dict:
+        """Return a new dict: ``incoming`` merged onto ``base``; dict-valued
+        keys merge recursively, scalars/lists replace wholesale."""
+        out = dict(base)
+        for k, v in incoming.items():
+            if isinstance(v, dict) and isinstance(out.get(k), dict):
+                out[k] = ANXChart._deep_merge_dicts(out[k], v)
+            else:
+                out[k] = v
+        return out
+
+    @staticmethod
+    def _deep_delete(d: dict, dotted: str) -> None:
+        """Remove the leaf at ``dotted`` from nested dict ``d`` in place."""
+        parts = dotted.split('.')
+        cur = d
+        for p in parts[:-1]:
+            nxt = cur.get(p)
+            if not isinstance(nxt, dict):
+                return
+            cur = nxt
+        cur.pop(parts[-1], None)
+
+    @staticmethod
+    def _strip_none_deep(obj):
+        """Recursively drop ``None`` values from dicts (and dict items inside
+        lists). Used to turn ``dataclasses.asdict`` output into a 'declared
+        leaves only' view for Settings-instance config layers."""
+        if isinstance(obj, dict):
+            return {
+                k: ANXChart._strip_none_deep(v)
+                for k, v in obj.items() if v is not None
+            }
+        if isinstance(obj, list):
+            return [ANXChart._strip_none_deep(v) for v in obj]
+        return obj
+
+    @staticmethod
+    def _field_default(obj, fname):
+        """Return the declared default for field ``fname`` of dataclass ``obj``."""
+        for f in dataclasses.fields(obj):
+            if f.name == fname:
+                if f.default is not dataclasses.MISSING:
+                    return f.default
+                if f.default_factory is not dataclasses.MISSING:  # type: ignore[misc]
+                    return f.default_factory()  # type: ignore[misc]
+                return None
+        return None
+
+    def _check_leaf_lock(self, section, idv, leaf, value, source_name) -> bool:
+        """Return True (and record a ``locked_override`` conflict) when writing
+        ``value`` to ``(section, idv, leaf)`` is blocked by a config-vs-config
+        lock. The locked value is left in place by the caller (fail-safe)."""
+        key = (section, idv, leaf)
+        locked = self._config_locked_leaves.get(key, _UNSET)
+        if locked is not _UNSET and locked != value:
+            where = f"{section}{('.' + idv) if idv else ''}.{leaf}"
+            err = {
+                'type': ErrorType.LOCKED_OVERRIDE.value,
+                'section': section,
+                'name': idv,
+                'field': leaf,
+                'message': (
+                    f"config layer{(' ' + repr(source_name)) if source_name else ''} "
+                    f"tried to change locked {where} from {locked!r} to "
+                    f"{value!r}; the locked value is kept."
+                ),
+                'locked_value': locked,
+                'attempted_value': value,
+            }
+            csrc = self._source_for(section, idv)
+            if csrc is not None:
+                err['config_source'] = csrc
+            self._config_conflicts.append(err)
+            return True
+        return False
+
+    def _drop_entry_leaf_locks(self, section, idv) -> None:
+        """Forget every leaf lock recorded for one ``(section, idv)`` entry."""
+        self._config_locked_leaves = {
+            k: v for k, v in self._config_locked_leaves.items()
+            if not (k[0] == section and k[1] == idv)
+        }
+
+    def _entry_is_locked(self, section, idv) -> bool:
+        """True when any leaf lock exists for ``(section, idv)``."""
+        return any(
+            k[0] == section and k[1] == idv
+            for k in self._config_locked_leaves
+        )
+
+    def _merge_keyed_section(self, *, section, backing, cls, identity, incoming,
+                             operation, lock, wipe_previous, source_name,
+                             coerce_nested=None) -> None:
+        """Field-merge / delete / lock one keyed list (named registries +
+        the two ``extra_cfg`` synthesizer lists). ``backing`` is mutated in
+        place; ``identity`` is ``'name'`` or ``'key'``."""
+        if operation == 'merge' and wipe_previous:
+            backing.clear()
+            self._config_locked.pop(section, None)
+            self._drop_section_state(section)
+
+        by_id = {
+            getattr(e, identity): i
+            for i, e in enumerate(backing) if getattr(e, identity, None)
+        }
+        locked_data = self._config_locked.get(section, {})
+
+        for raw in incoming:
+            is_obj = dataclasses.is_dataclass(raw) and not isinstance(raw, type)
+            if is_obj:
+                idv = getattr(raw, identity, None)
+            elif isinstance(raw, dict):
+                idv = raw.get(identity)
+            else:
+                continue
+
+            if operation == 'delete':
+                self._delete_keyed_entry(
+                    section, backing, by_id, identity, raw, idv, source_name,
+                )
+                continue
+
+            # ── merge ──
+            if is_obj:
+                clean = self._dc_to_clean_dict(raw)
+            else:
+                clean = {k: v for k, v in raw.items() if v is not None}
+
+            if not idv:
+                # No identity — append as-is; validate() flags it later.
+                obj = raw if is_obj else cls(**(coerce_nested(clean) if coerce_nested else clean))
+                backing.append(obj)
+                continue
+
+            # Lock-check each declared non-identity leaf; drop blocked ones.
+            blocked = []
+            for leaf, value in self._walk_leaves(clean):
+                if leaf == identity:
+                    continue
+                if self._check_leaf_lock(section, idv, leaf, value, source_name):
+                    blocked.append(leaf)
+            for leaf in blocked:
+                self._deep_delete(clean, leaf)
+
+            if idv in by_id:
+                existing = backing[by_id[idv]]
+                merged = self._deep_merge_dicts(self._dc_to_clean_dict(existing), clean)
+                backing[by_id[idv]] = cls(**(coerce_nested(merged) if coerce_nested else merged))
+            else:
+                backing.append(cls(**(coerce_nested(clean) if coerce_nested else clean)))
+                by_id[idv] = len(backing) - 1
+
+            if lock:
+                for leaf, value in self._walk_leaves(clean):
+                    self._config_locked_leaves[(section, idv, leaf)] = value
+
+            # Snapshot for the config-vs-data conflict path + source tag.
+            locked_data[idv] = self._dc_to_clean_dict(backing[by_id[idv]])
+            if source_name is not None:
+                self._config_sources[(section, idv)] = source_name
+
+        if locked_data:
+            self._config_locked[section] = locked_data
+
+    def _delete_keyed_entry(self, section, backing, by_id, identity, raw, idv,
+                            source_name) -> None:
+        """Apply a delete-layer entry to one keyed section (subtract by shape)."""
+        if not idv:
+            return  # nothing to address
+        # Determine which non-identity fields the layer mentioned, and whether
+        # any carry a (forbidden) non-null value.
+        if isinstance(raw, dict):
+            mentioned = {k: v for k, v in raw.items() if k != identity}
+        else:
+            mentioned = {}  # dataclass instance → whole-entry delete only
+        non_null = [k for k, v in mentioned.items() if v is not None]
+        if non_null:
+            self._config_conflicts.append({
+                'type': ErrorType.DELETE_CONTRACT.value,
+                'section': section,
+                'name': idv,
+                'message': (
+                    f"delete layer entry {section}.{idv} carries a non-null "
+                    f"value on non-identity field(s) {non_null}; write "
+                    f"'field:' (null) to remove a field, or list only the "
+                    f"identity to remove the whole entry."
+                ),
+            })
+            return
+
+        if mentioned:
+            # Field-unset delete — revert each mentioned field to its default.
+            if idv not in by_id:
+                return  # absent → idempotent no-op
+            existing = backing[by_id[idv]]
+            for fname in mentioned:
+                locked_here = any(
+                    k[0] == section and k[1] == idv
+                    and (k[2] == fname or k[2].startswith(fname + '.'))
+                    for k in self._config_locked_leaves
+                )
+                if locked_here:
+                    self._check_leaf_lock(section, idv, fname, None, source_name)
+                    continue
+                if hasattr(existing, fname):
+                    setattr(existing, fname, self._field_default(existing, fname))
+            if idv in self._config_locked.get(section, {}):
+                self._config_locked[section][idv] = self._dc_to_clean_dict(existing)
+            return
+
+        # Whole-entry delete.
+        if idv not in by_id:
+            return  # absent → idempotent no-op
+        if self._entry_is_locked(section, idv):
+            self._config_conflicts.append({
+                'type': ErrorType.LOCKED_OVERRIDE.value,
+                'section': section,
+                'name': idv,
+                'message': (
+                    f"cannot delete {section}.{idv}: it has locked leaves "
+                    f"(set by a lock=True layer)."
+                ),
+            })
+            return
+        del backing[by_id[idv]]
+        by_id.clear()
+        by_id.update({
+            getattr(e, identity): i
+            for i, e in enumerate(backing) if getattr(e, identity, None)
+        })
+        self._config_locked.get(section, {}).pop(idv, None)
+        self._config_sources.pop((section, idv), None)
+
+    def _drop_section_state(self, section) -> None:
+        """Drop per-name sources + leaf locks for a section (wipe_previous)."""
+        self._config_sources = {
+            k: v for k, v in self._config_sources.items() if k[0] != section
+        }
+        self._config_locked_leaves = {
+            k: v for k, v in self._config_locked_leaves.items() if k[0] != section
+        }
+
+    def _apply_settings_layer(self, incoming, *, operation, lock, wipe_previous,
+                              source_name) -> None:
+        """Apply a config layer's ``settings`` block (config mode).
+
+        Extracts the two ``extra_cfg`` synthesizer keyed-lists and routes them
+        through :meth:`_merge_keyed_section`; the remaining settings deep-merge
+        (with per-leaf lock recording / checking) or, in delete mode, revert
+        mentioned leaves to their defaults.
+        """
+        if isinstance(incoming, Settings):
+            sdict = self._strip_none_deep(dataclasses.asdict(incoming))
+        elif isinstance(incoming, dict):
+            sdict = dict(incoming)
+        else:
+            raise TypeError(
+                f"config['settings'] must be a Settings instance or dict, "
+                f"got {type(incoming).__name__}"
+            )
+
+        # wipe_previous (merge only): reset settings to this layer's values.
+        if operation == 'merge' and wipe_previous:
+            self.settings = Settings.from_dict(sdict)
+            self._drop_section_state('settings')
+            self._config_section_sources.pop('settings', None)
+            if lock:
+                for dotted, value in self._walk_leaves(sdict):
+                    self._config_locked_leaves[('settings', None, dotted)] = value
+                if source_name is not None:
+                    self._config_section_sources['settings'] = source_name
+            return
+
+        # Extract the synthesizer keyed-lists before the generic settings step.
+        extra = sdict.get('extra_cfg')
+        da = dl = _UNSET
+        if isinstance(extra, dict):
+            extra = dict(extra)
+            da = extra.pop('display_attribute', _UNSET)
+            dl = extra.pop('display_label', _UNSET)
+            sdict = dict(sdict)
+            sdict['extra_cfg'] = extra
+        if da is not _UNSET:
+            self._merge_keyed_section(
+                section='extra_cfg.display_attribute',
+                backing=self.settings.extra_cfg.display_attribute,
+                cls=DisplayAttribute, identity='key', incoming=(da or []),
+                operation=operation, lock=lock, wipe_previous=wipe_previous,
+                source_name=source_name,
+            )
+        if dl is not _UNSET:
+            self._merge_keyed_section(
+                section='extra_cfg.display_label',
+                backing=self.settings.extra_cfg.display_label,
+                cls=DisplayLabel, identity='key', incoming=(dl or []),
+                operation=operation, lock=lock, wipe_previous=wipe_previous,
+                source_name=source_name,
+            )
+
+        if operation == 'delete':
+            for dotted, value in self._walk_leaves(sdict):
+                if value is not None:
+                    self._config_conflicts.append({
+                        'type': ErrorType.DELETE_CONTRACT.value,
+                        'section': 'settings',
+                        'name': None,
+                        'message': (
+                            f"delete layer settings.{dotted} carries a "
+                            f"non-null value; write '{dotted.split('.')[-1]}:' "
+                            f"(null) to reset a setting to its default."
+                        ),
+                    })
+                    continue
+                if self._check_leaf_lock('settings', None, dotted, None, source_name):
+                    continue
+                self._set_settings_leaf_default(dotted)
+                self._config_locked_leaves.pop(('settings', None, dotted), None)
+            return
+
+        # merge mode: lock-check, prune blocked leaves, then deep-merge.
+        declared = sdict
+        blocked = []
+        for dotted, value in self._walk_leaves(declared):
+            if self._check_leaf_lock('settings', None, dotted, value, source_name):
+                blocked.append(dotted)
+        for dotted in blocked:
+            self._deep_delete(declared, dotted)
+        self.settings.merge_from_dict(declared)
+        if lock:
+            for dotted, value in self._walk_leaves(declared):
+                self._config_locked_leaves[('settings', None, dotted)] = value
+            if source_name is not None:
+                self._config_section_sources['settings'] = source_name
+
+    def _set_settings_leaf_default(self, dotted: str) -> None:
+        """Reset a ``settings`` leaf (dotted path) to its dataclass default."""
+        parts = dotted.split('.')
+        obj = self.settings
+        for p in parts[:-1]:
+            obj = getattr(obj, p, None)
+            if obj is None:
+                return
+        last = parts[-1]
+        if hasattr(obj, last) and dataclasses.is_dataclass(obj):
+            setattr(obj, last, self._field_default(obj, last))
+
     def _apply_config(
         self,
         data: dict,
         *,
         is_config: bool = True,
-        replace: bool = False,
+        operation: str = 'merge',
+        wipe_previous: bool = False,
+        lock: bool = False,
         source_name: Optional[str] = None,
     ) -> None:
         """Apply config sections from a dict to this chart.
 
-        When *is_config* is True, names are registered into ``_config_locked``
-        so that subsequent data-file loading can detect conflicts.
-        When *is_config* is False and ``_has_config`` is True, incoming names
-        are checked against the locked set — identical entries are silently
-        skipped, differing entries are recorded as conflicts. *replace* is
-        ignored in data mode.
+        Config mode (*is_config* True) supports three orthogonal knobs:
 
-        When *replace* is True and *is_config* is True, every section the
-        layer mentions is replaced wholesale instead of merged. Sections the
-        layer does not mention survive untouched. This is the per-section
-        opt-in for the rare "narrow the list" case.
+        - ``operation``: ``'merge'`` (default, field-merge per identity) or
+          ``'delete'`` (subtract by shape).
+        - ``wipe_previous``: clear each mentioned section before merging
+          (merge only).
+        - ``lock``: freeze exactly the leaves this layer declares; a later
+          layer changing one yields a ``locked_override`` error (merge only).
 
-        *source_name*, when set, tags every entry this layer contributes
-        (named-upsert sections via ``_config_sources``, list sections via
-        ``_config_section_sources``). Subsequent validators surface the tag
-        as an optional ``source`` key on each error dict so layered configs
-        can be debugged.
+        Data mode (*is_config* False) ignores those knobs and runs the
+        config-vs-data conflict checks (unchanged).
 
-        ``entities`` and ``links`` keys are silently ignored.
+        *source_name* tags this layer's entries so ``validate()`` surfaces an
+        optional ``source`` key. ``entities`` / ``links`` keys are ignored.
         """
-        # ── settings: deep merge into Settings dataclass ──
+        if operation not in ('merge', 'delete'):
+            raise ValueError(
+                f"operation must be 'merge' or 'delete', got {operation!r}"
+            )
+        if operation == 'delete' and lock:
+            raise ValueError(
+                "operation='delete' cannot be combined with lock=True"
+            )
+        if operation == 'delete' and wipe_previous:
+            raise ValueError(
+                "operation='delete' cannot be combined with wipe_previous=True"
+            )
+
+        if is_config:
+            self._apply_config_layer(
+                data, operation=operation, wipe_previous=wipe_previous,
+                lock=lock, source_name=source_name,
+            )
+            self._has_config = True
+        else:
+            self._apply_data_layer(data)
+
+    # Named registry sections: (dataclass, backing-attr, coerce-callback).
+    _NAMED_SECTIONS = {
+        'entity_types': (EntityType, '_entity_types', None),
+        'link_types': (LinkType, '_link_types', None),
+        'attribute_classes': (AttributeClass, '_attribute_classes', '_coerce_ac'),
+        'datetime_formats': (DateTimeFormat, '_datetime_formats', None),
+        'semantic_entities': (SemanticEntity, '_semantic_entities', None),
+        'semantic_links': (SemanticLink, '_semantic_links', None),
+        'semantic_properties': (SemanticProperty, '_semantic_properties', None),
+    }
+
+    @staticmethod
+    def _coerce_ac(d: dict) -> dict:
+        """Convert a nested ``font`` dict to a ``Font`` before AttributeClass()."""
+        if isinstance(d.get('font'), dict):
+            d = dict(d)
+            d['font'] = Font(**{k: v for k, v in d['font'].items() if v is not None})
+        return d
+
+    def _apply_config_layer(self, data, *, operation, wipe_previous, lock,
+                            source_name) -> None:
+        """Apply one config layer (is_config=True path)."""
+        # ── settings (+ extra_cfg synthesizer keyed-lists) ──
+        if data.get('settings') is not None:
+            self._apply_settings_layer(
+                data['settings'], operation=operation, lock=lock,
+                wipe_previous=wipe_previous, source_name=source_name,
+            )
+
+        # ── strengths (default + named items) ──
+        if data.get('strengths') is not None:
+            self._apply_strengths_layer(
+                data['strengths'], operation=operation, lock=lock,
+                wipe_previous=wipe_previous, source_name=source_name,
+            )
+
+        # ── named registry sections ──
+        for section, (cls, attr_name, coerce_name) in self._NAMED_SECTIONS.items():
+            if section not in data:
+                continue
+            coerce = getattr(self, coerce_name) if coerce_name else None
+            self._merge_keyed_section(
+                section=section, backing=getattr(self, attr_name), cls=cls,
+                identity='name', incoming=(data.get(section) or []),
+                operation=operation, lock=lock, wipe_previous=wipe_previous,
+                source_name=source_name, coerce_nested=coerce,
+            )
+
+        # ── palettes / legend_items: append-only (whole-section ops only) ──
+        if 'palettes' in data:
+            self._apply_appendonly_layer(
+                'palettes', self._palettes, data.get('palettes'),
+                operation=operation, wipe_previous=wipe_previous,
+                build=self._build_palette,
+            )
+        if 'legend_items' in data:
+            self._apply_appendonly_layer(
+                'legend_items', self._legend_items, data.get('legend_items'),
+                operation=operation, wipe_previous=wipe_previous,
+                build=self._build_legend_item,
+            )
+
+        # ── grades ──
+        for key in ('grades_one', 'grades_two', 'grades_three'):
+            if key not in data:
+                continue
+            self._apply_grade_layer(
+                key, data.get(key), operation=operation, lock=lock,
+                wipe_previous=wipe_previous, source_name=source_name,
+            )
+
+        # ── source_types ──
+        if 'source_types' in data:
+            self._apply_source_types_layer(
+                data.get('source_types'), operation=operation, lock=lock,
+                wipe_previous=wipe_previous, source_name=source_name,
+            )
+
+    # -- per-section config-layer helpers -------------------------------------
+
+    def _apply_strengths_layer(self, raw_strengths, *, operation, lock,
+                               wipe_previous, source_name) -> None:
+        if isinstance(raw_strengths, StrengthCollection):
+            incoming_default = raw_strengths.default
+            items = raw_strengths.items
+            default_mentioned_null = False
+        elif isinstance(raw_strengths, dict):
+            incoming_default = raw_strengths.get('default')
+            items = raw_strengths.get('items', []) or []
+            default_mentioned_null = (
+                'default' in raw_strengths and raw_strengths['default'] is None
+            )
+        else:
+            return
+
+        if operation == 'delete':
+            self._merge_keyed_section(
+                section='strengths', backing=self.strengths.items, cls=Strength,
+                identity='name', incoming=items, operation='delete', lock=False,
+                wipe_previous=False, source_name=source_name,
+            )
+            if default_mentioned_null and not self._check_leaf_lock(
+                'strengths', None, 'default', None, source_name,
+            ):
+                self.strengths.default = None
+                self._config_locked_leaves.pop(('strengths', None, 'default'), None)
+            return
+
+        if wipe_previous:
+            self.strengths = StrengthCollection()
+            self._config_locked.pop('strengths', None)
+            self._drop_section_state('strengths')
+            self._config_section_sources.pop('strengths', None)
+
+        if incoming_default is not None and not self._check_leaf_lock(
+            'strengths', None, 'default', incoming_default, source_name,
+        ):
+            self.strengths.default = incoming_default
+            if lock:
+                self._config_locked_leaves[('strengths', None, 'default')] = incoming_default
+                if source_name is not None:
+                    self._config_section_sources['strengths'] = source_name
+
+        self._merge_keyed_section(
+            section='strengths', backing=self.strengths.items, cls=Strength,
+            identity='name', incoming=items, operation='merge', lock=lock,
+            wipe_previous=False, source_name=source_name,
+        )
+
+    @staticmethod
+    def _build_palette(raw):
+        if isinstance(raw, Palette):
+            return raw
+        if isinstance(raw, dict):
+            d = {k: v for k, v in raw.items() if v is not None}
+            ae = d.get('attribute_entries')
+            if ae and isinstance(ae, list):
+                d['attribute_entries'] = [
+                    PaletteAttributeEntry(**e) if isinstance(e, dict) else e
+                    for e in ae
+                ]
+            return Palette(**d)
+        return None
+
+    @staticmethod
+    def _build_legend_item(raw):
+        if isinstance(raw, LegendItem):
+            return raw
+        if isinstance(raw, dict):
+            li = {k: v for k, v in raw.items() if v is not None}
+            if 'label' in li and 'name' not in li:
+                li['name'] = li.pop('label')
+            if 'font' in li and isinstance(li['font'], dict):
+                li['font'] = Font(**{k: v for k, v in li['font'].items() if v is not None})
+            return LegendItem(**li)
+        return None
+
+    def _apply_appendonly_layer(self, section, backing, raw, *, operation,
+                                wipe_previous, build) -> None:
+        """palettes / legend_items: append (merge), clear (wipe), or
+        clear-on-null (delete). No per-row identity, so per-row delete and
+        per-leaf lock are not supported (documented)."""
+        if operation == 'delete':
+            if raw is None:
+                backing.clear()
+            return
+        if wipe_previous:
+            backing.clear()
+        for item in (raw or []):
+            obj = build(item)
+            if obj is not None:
+                backing.append(obj)
+
+    def _apply_grade_layer(self, key, val, *, operation, lock, wipe_previous,
+                           source_name) -> None:
+        current: GradeCollection = getattr(self, key)
+        if operation == 'delete':
+            if val is None:
+                if self._entry_is_locked(key, None):
+                    self._config_conflicts.append({
+                        'type': ErrorType.LOCKED_OVERRIDE.value,
+                        'section': key, 'name': None,
+                        'message': f"cannot delete {key}: it has locked leaves.",
+                    })
+                    return
+                setattr(self, key, GradeCollection())
+                self._config_locked_grades.pop(key, None)
+                self._config_section_sources.pop(key, None)
+                self._drop_section_state(key)
+                return
+            if isinstance(val, GradeCollection):
+                items = list(val.items); default_null = val.default is None
+            elif isinstance(val, dict):
+                items = list(val.get('items', []) or [])
+                default_null = 'default' in val and val['default'] is None
+            else:
+                return
+            for item in items:
+                if self._check_leaf_lock(key, None, 'item:' + item, None, source_name):
+                    continue
+                if item in current.items:
+                    current.items.remove(item)
+            if default_null and not self._check_leaf_lock(key, None, 'default', None, source_name):
+                current.default = None
+            self._config_locked_grades[key] = GradeCollection(
+                default=current.default, items=list(current.items),
+            )
+            return
+
+        if val is None:
+            return
+        if isinstance(val, GradeCollection):
+            incoming_default = val.default; incoming_items = list(val.items)
+        elif isinstance(val, dict):
+            incoming_default = val.get('default')
+            incoming_items = list(val.get('items', []) or [])
+        else:
+            return
+
+        if wipe_previous:
+            setattr(self, key, GradeCollection())
+            self._config_locked_grades.pop(key, None)
+            self._config_section_sources.pop(key, None)
+            self._drop_section_state(key)
+            current = getattr(self, key)
+
+        existing = set(current.items)
+        for item in incoming_items:
+            if item not in existing:
+                current.items.append(item)
+                existing.add(item)
+            if lock:
+                self._config_locked_leaves[(key, None, 'item:' + item)] = item
+        if incoming_default is not None and not self._check_leaf_lock(
+            key, None, 'default', incoming_default, source_name,
+        ):
+            current.default = incoming_default
+            if lock:
+                self._config_locked_leaves[(key, None, 'default')] = incoming_default
+        self._config_locked_grades[key] = GradeCollection(
+            default=current.default, items=list(current.items),
+        )
+        if source_name is not None:
+            self._config_section_sources[key] = source_name
+
+    def _apply_source_types_layer(self, val, *, operation, lock, wipe_previous,
+                                  source_name) -> None:
+        if operation == 'delete':
+            if val is None:
+                if self._entry_is_locked('source_types', None):
+                    self._config_conflicts.append({
+                        'type': ErrorType.LOCKED_OVERRIDE.value,
+                        'section': 'source_types', 'name': None,
+                        'message': "cannot delete source_types: it has locked leaves.",
+                    })
+                    return
+                self.source_types = []
+                self._config_locked_source_types = None
+                self._config_section_sources.pop('source_types', None)
+                self._drop_section_state('source_types')
+                return
+            for item in list(val):
+                if self._check_leaf_lock('source_types', None, 'item:' + item, None, source_name):
+                    continue
+                if item in self.source_types:
+                    self.source_types.remove(item)
+            self._config_locked_source_types = list(self.source_types)
+            return
+
+        if val is None:
+            return
+        val = list(val)
+        if wipe_previous:
+            self.source_types = []
+            self._config_section_sources.pop('source_types', None)
+            self._drop_section_state('source_types')
+        existing = set(self.source_types)
+        for item in val:
+            if item not in existing:
+                self.source_types.append(item)
+                existing.add(item)
+            if lock:
+                self._config_locked_leaves[('source_types', None, 'item:' + item)] = item
+        self._config_locked_source_types = list(self.source_types)
+        if source_name is not None:
+            self._config_section_sources['source_types'] = source_name
+
+    def _apply_data_layer(self, data) -> None:
+        """Apply config sections from a DATA file (is_config=False).
+
+        Runs the config-vs-data conflict checks against locked config entries;
+        unchanged from the pre-1.12 behaviour.
+        """
+        # ── settings: deep merge (data wins) ──
         incoming_settings = data.get('settings')
         if incoming_settings is not None:
             if isinstance(incoming_settings, Settings):
-                if is_config and replace:
-                    # Replace mode: discard existing settings, keep only what
-                    # this layer specifies.
-                    self.settings = incoming_settings
-                else:
-                    # Merge so we don't replace nested defaults wholesale.
-                    self.settings.merge_from_dict(dataclasses.asdict(incoming_settings))
+                self.settings.merge_from_dict(dataclasses.asdict(incoming_settings))
             elif isinstance(incoming_settings, dict):
-                if is_config and replace:
-                    self.settings = Settings.from_dict(incoming_settings)
-                else:
-                    self.settings.merge_from_dict(incoming_settings)
+                self.settings.merge_from_dict(incoming_settings)
             else:
                 raise TypeError(
                     f"config['settings'] must be a Settings instance or dict, "
                     f"got {type(incoming_settings).__name__}"
                 )
 
-        # ── Strengths (handles new dict format with default/items) ──
+        # ── strengths ──
         raw_strengths = data.get('strengths')
         if raw_strengths is not None:
-            strength_items: list = []
-            if is_config and replace:
-                # Wipe pre-populated 'Default' + any earlier-layer strengths
-                # so this layer fully replaces the section.
-                self.strengths = StrengthCollection()
-                self._config_locked.pop('strengths', None)
-            if is_config and replace:
-                # Wipe per-name sources for this section before re-populating.
-                self._config_sources = {
-                    k: v for k, v in self._config_sources.items() if k[0] != 'strengths'
-                }
-                self._config_section_sources.pop('strengths', None)
             if isinstance(raw_strengths, StrengthCollection):
-                # Default: later wins if non-None, else keep earlier's.
                 if raw_strengths.default is not None:
                     self.strengths.default = raw_strengths.default
                 strength_items = raw_strengths.items
             elif isinstance(raw_strengths, dict):
                 if raw_strengths.get('default') is not None:
                     self.strengths.default = raw_strengths['default']
-                strength_items = raw_strengths.get('items', [])
-            # Parse and add each strength item
+                strength_items = raw_strengths.get('items', []) or []
+            else:
+                strength_items = []
             locked = self._config_locked.get('strengths', {})
             for raw in strength_items:
                 if isinstance(raw, dict):
@@ -380,279 +1053,125 @@ class ANXChart:
                     continue
                 name = obj.name
                 clean = self._dc_to_clean_dict(obj)
-                if is_config:
-                    self.add_strength(obj)
-                    if name:
-                        locked[name] = clean
-                        if source_name is not None:
-                            self._config_sources[('strengths', name)] = source_name
+                if self._has_config and name and name in locked:
+                    if clean != locked[name]:
+                        self._append_data_conflict('strengths', name, locked[name], clean)
                 else:
-                    if self._has_config and name and name in locked:
-                        if clean != locked[name]:
-                            err = {
-                                'type': 'config_conflict',
-                                'section': 'strengths',
-                                'name': name,
-                                'message': (
-                                    f"Data redefines '{name}' in strengths with different "
-                                    f"specs than config. Remove from data file or match config."
-                                ),
-                                'config_value': locked[name],
-                                'data_value': clean,
-                            }
-                            src = self._source_for('strengths', name)
-                            if src is not None:
-                                err['config_source'] = src
-                            self._config_conflicts.append(err)
-                    else:
-                        self.add_strength(obj)
-            if is_config and locked:
-                self._config_locked['strengths'] = locked
+                    self.add_strength(obj)
 
-        # ── Helper for named-object sections ──
-        # Every adder performs upsert-by-name (later wins), so layered
-        # configs cleanly override earlier definitions of the same entity
-        # type / link type / attribute class / etc.
-        _NAMED_SECTIONS = {
-            'entity_types': (EntityType, self.add_entity_type, '_entity_types'),
-            'link_types': (LinkType, self.add_link_type, '_link_types'),
-            'attribute_classes': (AttributeClass, self.add_attribute_class, '_attribute_classes'),
-            'datetime_formats': (DateTimeFormat, self.add_datetime_format, '_datetime_formats'),
-            'semantic_entities': (SemanticEntity, self.add_semantic_entity, '_semantic_entities'),
-            'semantic_links': (SemanticLink, self.add_semantic_link, '_semantic_links'),
-            'semantic_properties': (SemanticProperty, self.add_semantic_property, '_semantic_properties'),
-        }
-
-        # Sections whose dataclasses contain a `font: Font` field — when the
-        # source is a raw dict (YAML/JSON), convert the nested dict to a
-        # Font instance before constructing the parent dataclass.
-        _SECTIONS_WITH_FONT = {'attribute_classes'}
-
-        for section, (cls, adder, attr_name) in _NAMED_SECTIONS.items():
+        # ── named registry sections ──
+        for section, (cls, attr_name, coerce_name) in self._NAMED_SECTIONS.items():
             if section not in data:
                 continue
-            items = data.get(section, [])
-            if is_config and replace:
-                # Wipe the section before processing this layer's entries.
-                getattr(self, attr_name).clear()
-                self._config_locked.pop(section, None)
-                self._config_sources = {
-                    k: v for k, v in self._config_sources.items() if k[0] != section
-                }
+            coerce = getattr(self, coerce_name) if coerce_name else None
             locked = self._config_locked.get(section, {})
-
-            for raw in items:
+            for raw in (data.get(section) or []):
                 if isinstance(raw, dict):
                     cleaned = {k: v for k, v in raw.items() if v is not None}
-                    if section in _SECTIONS_WITH_FONT and 'font' in cleaned:
-                        if isinstance(cleaned['font'], dict):
-                            cleaned['font'] = Font(**{
-                                k: v for k, v in cleaned['font'].items() if v is not None
-                            })
+                    if coerce:
+                        cleaned = coerce(cleaned)
                     obj = cls(**cleaned)
                 elif isinstance(raw, cls):
                     obj = raw
                 else:
                     continue
-
                 name = obj.name
                 if not name:
-                    # Will be caught by validate() later
-                    adder(obj)
+                    getattr(self, attr_name).append(obj)
                     continue
-
                 clean = self._dc_to_clean_dict(obj)
-
-                if is_config:
-                    # Config mode: upsert (later wins per name) and lock
-                    adder(obj)
-                    locked[name] = clean
-                    if source_name is not None:
-                        self._config_sources[(section, name)] = source_name
+                if self._has_config and name in locked:
+                    if clean != locked[name]:
+                        self._append_data_conflict(section, name, locked[name], clean)
                 else:
-                    # Data mode: check against locked names
-                    if self._has_config and name in locked:
-                        if clean != locked[name]:
-                            err = {
-                                'type': 'config_conflict',
-                                'section': section,
-                                'name': name,
-                                'message': (
-                                    f"Data redefines '{name}' in {section} with different "
-                                    f"specs than config. Remove from data file or match config."
-                                ),
-                                'config_value': locked[name],
-                                'data_value': clean,
-                            }
-                            src = self._source_for(section, name)
-                            if src is not None:
-                                err['config_source'] = src
-                            self._config_conflicts.append(err)
-                        # else: identical → silent skip
-                    else:
-                        adder(obj)
+                    self._upsert_by_name(getattr(self, attr_name), obj)
 
-            if is_config and locked:
-                self._config_locked[section] = locked
-
-        # ── palettes: always append (no natural key) ──
-        if 'palettes' in data:
-            if is_config and replace:
-                self._palettes.clear()
-            for raw in data.get('palettes', []):
-                if isinstance(raw, dict):
-                    d = {k: v for k, v in raw.items() if v is not None}
-                    ae = d.get('attribute_entries')
-                    if ae and isinstance(ae, list):
-                        d['attribute_entries'] = [
-                            PaletteAttributeEntry(**e) if isinstance(e, dict) else e
-                            for e in ae
-                        ]
-                    self._palettes.append(Palette(**d))
-                elif isinstance(raw, Palette):
-                    self._palettes.append(raw)
-
-        # ── legend_items: always append (no natural key) ──
-        if 'legend_items' in data and is_config and replace:
-            self._legend_items.clear()
-        for raw in data.get('legend_items', []):
-            if isinstance(raw, dict):
-                # Map 'label' to 'name' for backward compat with YAML configs
-                li_dict = {k: v for k, v in raw.items() if v is not None}
-                if 'label' in li_dict and 'name' not in li_dict:
-                    li_dict['name'] = li_dict.pop('label')
-                # Convert font dict (YAML/JSON path) to Font instance
-                if 'font' in li_dict and isinstance(li_dict['font'], dict):
-                    li_dict['font'] = Font(**{
-                        k: v for k, v in li_dict['font'].items() if v is not None
-                    })
-                self._legend_items.append(LegendItem(**li_dict))
-            elif isinstance(raw, LegendItem):
-                self._legend_items.append(raw)
+        # ── palettes / legend_items: append ──
+        for raw in (data.get('palettes') or []):
+            obj = self._build_palette(raw)
+            if obj is not None:
+                self._palettes.append(obj)
+        for raw in (data.get('legend_items') or []):
+            obj = self._build_legend_item(raw)
+            if obj is not None:
+                self._legend_items.append(obj)
 
         # ── grades ──
-        # Default behavior: append items with case-sensitive exact-text dedup;
-        # `default` field follows "later wins if non-None, else keep earlier's".
-        # replace=True replaces the whole GradeCollection wholesale.
         for key in ('grades_one', 'grades_two', 'grades_three'):
             if key not in data:
                 continue
             val = data.get(key)
             if val is None:
                 continue
-
             if isinstance(val, GradeCollection):
-                incoming_default = val.default
-                incoming_items = list(val.items)
+                gc = GradeCollection(default=val.default, items=list(val.items))
             elif isinstance(val, dict):
-                incoming_default = val.get('default')
-                incoming_items = list(val.get('items', []))
-            else:
-                continue
-
-            if is_config and replace:
-                # Replace mode: the layer's GradeCollection becomes the
-                # whole section. Wipe existing items + locked entry first.
-                gc = GradeCollection(default=incoming_default, items=incoming_items)
-                setattr(self, key, gc)
-                self._config_locked_grades[key] = gc
-                if source_name is not None:
-                    self._config_section_sources[key] = source_name
-                else:
-                    self._config_section_sources.pop(key, None)
-                continue
-
-            if is_config:
-                # Append + dedup mode: extend existing items, preserve order,
-                # skip exact-text matches already present.
-                current: GradeCollection = getattr(self, key)
-                existing = set(current.items)
-                for item in incoming_items:
-                    if item not in existing:
-                        current.items.append(item)
-                        existing.add(item)
-                if incoming_default is not None:
-                    current.default = incoming_default
-                # Re-lock with the merged state so conflict detection sees
-                # what the data file will be compared against.
-                self._config_locked_grades[key] = GradeCollection(
-                    default=current.default, items=list(current.items),
+                gc = GradeCollection(
+                    default=val.get('default'), items=list(val.get('items', []) or []),
                 )
-                if source_name is not None:
-                    self._config_section_sources[key] = source_name
             else:
-                # Data mode: keep existing config-vs-data conflict semantics.
-                gc = GradeCollection(default=incoming_default, items=incoming_items)
-                if self._has_config and key in self._config_locked_grades:
-                    locked = self._config_locked_grades[key]
-                    if gc.items != locked.items or gc.default != locked.default:
-                        err = {
-                            'type': 'config_conflict',
-                            'section': key,
-                            'name': key,
-                            'message': (
-                                f"Data redefines '{key}' with different values than config. "
-                                f"Remove from data file or match config."
-                            ),
-                            'config_value': {'default': locked.default, 'items': locked.items},
-                            'data_value': {'default': gc.default, 'items': gc.items},
-                        }
-                        src = self._config_section_sources.get(key)
-                        if src is not None:
-                            err['config_source'] = src
-                        self._config_conflicts.append(err)
-                    # else: identical → silent skip
-                else:
-                    setattr(self, key, gc)
+                continue
+            if self._has_config and key in self._config_locked_grades:
+                locked_gc = self._config_locked_grades[key]
+                if gc.items != locked_gc.items or gc.default != locked_gc.default:
+                    err = {
+                        'type': 'config_conflict', 'section': key, 'name': key,
+                        'message': (
+                            f"Data redefines '{key}' with different values than "
+                            f"config. Remove from data file or match config."
+                        ),
+                        'config_value': {'default': locked_gc.default, 'items': locked_gc.items},
+                        'data_value': {'default': gc.default, 'items': gc.items},
+                    }
+                    src = self._config_section_sources.get(key)
+                    if src is not None:
+                        err['config_source'] = src
+                    self._config_conflicts.append(err)
+            else:
+                setattr(self, key, gc)
 
         # ── source_types ──
-        # Default behavior: append with case-sensitive exact-text dedup.
-        # replace=True replaces the list wholesale.
         if 'source_types' in data:
             val = data.get('source_types')
             if val is not None:
                 val = list(val)
-
-                if is_config and replace:
-                    self.source_types = val
-                    self._config_locked_source_types = list(val)
-                    if source_name is not None:
-                        self._config_section_sources['source_types'] = source_name
-                    else:
-                        self._config_section_sources.pop('source_types', None)
-                elif is_config:
-                    existing = set(self.source_types)
-                    for item in val:
-                        if item not in existing:
-                            self.source_types.append(item)
-                            existing.add(item)
-                    self._config_locked_source_types = list(self.source_types)
-                    if source_name is not None:
-                        self._config_section_sources['source_types'] = source_name
+                if self._has_config and self._config_locked_source_types is not None:
+                    if val != self._config_locked_source_types:
+                        err = {
+                            'type': 'config_conflict', 'section': 'source_types',
+                            'name': 'source_types',
+                            'message': (
+                                "Data redefines 'source_types' with different "
+                                "values than config. Remove from data file or "
+                                "match config."
+                            ),
+                            'config_value': self._config_locked_source_types,
+                            'data_value': val,
+                        }
+                        src = self._config_section_sources.get('source_types')
+                        if src is not None:
+                            err['config_source'] = src
+                        self._config_conflicts.append(err)
                 else:
-                    if self._has_config and self._config_locked_source_types is not None:
-                        if val != self._config_locked_source_types:
-                            err = {
-                                'type': 'config_conflict',
-                                'section': 'source_types',
-                                'name': 'source_types',
-                                'message': (
-                                    "Data redefines 'source_types' with different values than config. "
-                                    "Remove from data file or match config."
-                                ),
-                                'config_value': self._config_locked_source_types,
-                                'data_value': val,
-                            }
-                            src = self._config_section_sources.get('source_types')
-                            if src is not None:
-                                err['config_source'] = src
-                            self._config_conflicts.append(err)
-                        # else: identical → silent skip
-                    else:
-                        self.source_types = val
+                    self.source_types = val
 
-        if is_config:
-            self._has_config = True
+    def _append_data_conflict(self, section, name, config_value, data_value) -> None:
+        """Record a config-vs-data ``config_conflict`` for a named section."""
+        err = {
+            'type': 'config_conflict',
+            'section': section,
+            'name': name,
+            'message': (
+                f"Data redefines '{name}' in {section} with different specs "
+                f"than config. Remove from data file or match config."
+            ),
+            'config_value': config_value,
+            'data_value': data_value,
+        }
+        src = self._source_for(section, name)
+        if src is not None:
+            err['config_source'] = src
+        self._config_conflicts.append(err)
 
     def _apply_data(self, data: dict) -> None:
         """Apply a full data dict (config sections + entities + links).
@@ -807,88 +1326,113 @@ class ANXChart:
         self,
         data: dict,
         *,
-        replace: bool = False,
+        operation: str = 'merge',
+        wipe_previous: bool = False,
+        lock: bool = False,
         source_name: Optional[str] = None,
     ) -> None:
-        """Apply a config dict to this chart. Locks names for conflict detection.
+        """Apply a config dict to this chart (one config layer).
 
         Only config sections are applied (settings, entity_types, link_types,
-        attribute_classes, strengths, legend_items, grades, source_types).
-        ``entities`` and ``links`` keys are silently ignored.
+        attribute_classes, strengths, datetime_formats, semantic_*, palettes,
+        legend_items, grades, source_types). ``entities`` / ``links`` keys are
+        silently ignored.
 
-        Layering rules (when this is the second-or-later config layer):
+        Layering rules (``operation='merge'``, the default):
 
-        - ``settings``: deep merge — only fields the layer sets overwrite.
+        - ``settings``: deep merge per leaf — only leaves the layer sets
+          overwrite.
         - ``entity_types``, ``link_types``, ``attribute_classes``,
-          ``datetime_formats``, ``semantic_*``, ``strengths.items``:
-          upsert by ``name`` — same name in a later layer replaces the entry,
-          new names are appended.
-        - ``strengths.default``, ``grades_*.default``: later wins if non-None,
-          otherwise the earlier layer's default is kept.
-        - ``source_types``, ``grades_one/two/three.items``: append with
-          case-sensitive exact-text dedup. ``'Witness'`` and ``'witness'``
-          both end up in the merged list — normalize strings if you layer
-          across teams.
-        - ``legend_items``, ``palettes``: append (no natural key, multiple
-          rows with the same name are valid).
+          ``datetime_formats``, ``semantic_*``, ``strengths.items``,
+          ``extra_cfg.display_attribute`` / ``display_label``: **field-merge**
+          by identity (``name`` / ``key``) — a later layer's declared fields
+          merge into the same-identity entry; omitted fields are retained; new
+          identities are appended.
+        - ``strengths.default``, ``grades_*.default``: later wins if non-None.
+        - ``source_types``, ``grades_*.items``: append with case-sensitive
+          exact-text dedup.
+        - ``legend_items``, ``palettes``: append (no natural key).
 
-        When *replace* is True, every section the layer mentions is replaced
-        wholesale instead of merged. Sections the layer does not mention
-        survive untouched. Use this for the rare "narrow the list" case.
+        ``operation='delete'`` subtracts by shape (the mirror of merge): a key
+        with a null/empty value removes the whole section/entry; a list entry
+        with only its identity removes that entry; an entry naming fields
+        (which must be ``null``) unsets those fields. A non-null value on a
+        non-identity field in a delete layer is a ``delete_contract`` error.
+        Deleting an absent target is a no-op.
+
+        ``wipe_previous=True`` (merge only) clears each section the layer
+        mentions before merging — the "narrow the list" case.
+
+        ``lock=True`` (merge only) freezes exactly the leaves this layer
+        declares. A later config layer that changes a locked leaf records a
+        ``locked_override`` error and the locked value is preserved. Surfaced
+        through :meth:`validate` like any other conflict.
+
+        ``operation='delete'`` combined with ``lock`` or ``wipe_previous`` is a
+        ``ValueError`` (contradictory).
 
         When *source_name* is supplied, every entry this layer contributes is
-        tagged with that string. ``validate()`` then surfaces the tag as an
-        optional ``source`` key on error dicts (and a ``config_source`` key on
-        ``config_conflict`` errors), and ``ANXValidationError`` appends
-        ``(source: X)`` to the per-error message line. Pass it when you want
-        layered-config errors to identify which layer set the offending entry.
-        ``apply_config_file`` auto-derives this from the file's basename.
+        tagged so :meth:`validate` errors carry an optional ``source`` key.
+        ``apply_config_file`` auto-derives it from the file's basename.
 
-        No validation runs at load time. Call :meth:`validate` to lint the
-        config (bad colors, duplicate names, malformed timezones, palette
-        references to unknown attribute classes, etc.) without building XML —
-        ``validate()`` walks every declared entity type, link type, attribute
-        class, etc. regardless of whether any entity or link uses them.
+        No validation runs at load time. Call :meth:`validate` afterwards.
         """
-        self._apply_config(data, is_config=True, replace=replace, source_name=source_name)
+        self._apply_config(
+            data, is_config=True, operation=operation,
+            wipe_previous=wipe_previous, lock=lock, source_name=source_name,
+        )
 
     def apply_config_file(
         self,
         path: Union[str, Path],
         *,
-        replace: bool = False,
+        operation: str = 'merge',
+        wipe_previous: bool = False,
+        lock: bool = False,
         source_name: Optional[str] = None,
     ) -> None:
-        """Load a config file (JSON or YAML) and apply it to this chart.
+        """Load a config file (JSON or YAML) and apply it as one config layer.
 
-        See :meth:`apply_config` for the full layering rules and the
-        meaning of *replace*. Call :meth:`validate` after loading to
-        catch schema errors before feeding the chart any data.
+        See :meth:`apply_config` for the layering rules and the meaning of
+        *operation* / *wipe_previous* / *lock*. Call :meth:`validate` after
+        loading to catch schema errors before feeding the chart any data.
 
-        *source_name* defaults to the file's basename (``Path(path).name``)
-        so layered-config errors attribute to the right file out of the box.
-        Pass an explicit value to override (e.g. a logical layer name like
-        ``'org_defaults'`` instead of the on-disk filename).
+        *source_name* defaults to the file's basename (``Path(path).name``).
         """
         data = self._load_file(path)
         if source_name is None:
             source_name = Path(path).name
-        self.apply_config(data, replace=replace, source_name=source_name)
+        self.apply_config(
+            data, operation=operation, wipe_previous=wipe_previous,
+            lock=lock, source_name=source_name,
+        )
 
     @classmethod
-    def from_config(cls, source: str, *, source_name: Optional[str] = None) -> "ANXChart":
+    def from_config(
+        cls,
+        source: str,
+        *,
+        operation: str = 'merge',
+        wipe_previous: bool = False,
+        lock: bool = False,
+        source_name: Optional[str] = None,
+    ) -> "ANXChart":
         """Create an ANXChart pre-loaded with config from a JSON or YAML string.
 
         Tries JSON first; falls back to YAML if JSON parsing fails.
 
-        See :meth:`apply_config` for a note on validation and *source_name*.
+        See :meth:`apply_config` for *operation* / *wipe_previous* / *lock* /
+        *source_name*.
         """
         try:
             data = json.loads(source)
         except (json.JSONDecodeError, ValueError):
             data = yaml.safe_load(source)
         chart = cls()
-        chart.apply_config(data, source_name=source_name)
+        chart.apply_config(
+            data, operation=operation, wipe_previous=wipe_previous,
+            lock=lock, source_name=source_name,
+        )
         return chart
 
     @classmethod
@@ -896,17 +1440,23 @@ class ANXChart:
         cls,
         path: Union[str, Path],
         *,
+        operation: str = 'merge',
+        wipe_previous: bool = False,
+        lock: bool = False,
         source_name: Optional[str] = None,
     ) -> "ANXChart":
         """Create an ANXChart pre-loaded with config from a JSON or YAML file.
 
         Format detected by extension (.yaml/.yml -> YAML, else JSON).
 
-        See :meth:`apply_config` for a note on validation and *source_name*
-        (defaults to ``Path(path).name`` for file-loaded configs).
+        See :meth:`apply_config` for *operation* / *wipe_previous* / *lock* /
+        *source_name* (the latter defaults to ``Path(path).name``).
         """
         chart = cls()
-        chart.apply_config_file(path, source_name=source_name)
+        chart.apply_config_file(
+            path, operation=operation, wipe_previous=wipe_previous,
+            lock=lock, source_name=source_name,
+        )
         return chart
 
     @staticmethod
@@ -1098,10 +1648,10 @@ class ANXChart:
             self._semantic_links.append(item)
         elif isinstance(item, SemanticProperty):
             self._semantic_properties.append(item)
-        elif isinstance(item, DateAttributeDisplay):
-            self.settings.extra_cfg.date_attribute_displays.append(item)
-        elif isinstance(item, DisplayTemplate):
-            self.settings.extra_cfg.display_templates.append(item)
+        elif isinstance(item, DisplayAttribute):
+            self.settings.extra_cfg.display_attribute.append(item)
+        elif isinstance(item, DisplayLabel):
+            self.settings.extra_cfg.display_label.append(item)
         else:
             raise TypeError(f"Cannot add item of type {type(item).__name__}")
 
@@ -1231,38 +1781,36 @@ class ANXChart:
                 kwargs['name'] = name_or_obj
             self._legend_items.append(LegendItem(**kwargs))
 
-    def add_date_attribute_display(self, obj=None, **kwargs) -> None:
-        """Add a :class:`DateAttributeDisplay` to ``extra_cfg.date_attribute_displays``.
+    def add_display_attribute(self, obj=None, **kwargs) -> None:
+        """Add a :class:`DisplayAttribute` to ``extra_cfg.display_attribute``.
 
-        Pass a ``DateAttributeDisplay`` instance or keyword args matching its
-        fields (``start``, ``end``, ``name``, ``suffix``, ``format``,
-        ``separator``, ``missing``, ``start_placeholder``,
-        ``end_placeholder``, ``attribute_class``). Multiple displays can be
-        added; they are appended in order. Validation runs at
-        :meth:`validate` time.
+        Pass a ``DisplayAttribute`` instance or keyword args matching its
+        fields (``key``, ``attribute_name``, ``kind``, ``type``, ``template``,
+        ``decimal_separator``, ``thousand_separator``, ``sources``,
+        ``attribute_class``). Multiple entries can be added; they are appended
+        in order. Validation runs at :meth:`validate` time.
         """
-        if isinstance(obj, DateAttributeDisplay):
-            self.settings.extra_cfg.date_attribute_displays.append(obj)
+        if isinstance(obj, DisplayAttribute):
+            self.settings.extra_cfg.display_attribute.append(obj)
         else:
-            self.settings.extra_cfg.date_attribute_displays.append(
-                DateAttributeDisplay(**kwargs)
+            self.settings.extra_cfg.display_attribute.append(
+                DisplayAttribute(**kwargs)
             )
 
-    def add_display_template(self, obj=None, **kwargs) -> None:
-        """Add a :class:`DisplayTemplate` to ``extra_cfg.display_templates``.
+    def add_display_label(self, obj=None, **kwargs) -> None:
+        """Add a :class:`DisplayLabel` to ``extra_cfg.display_label``.
 
-        Pass a ``DisplayTemplate`` instance or keyword args matching its
-        fields (``target``, ``attribute_name``, ``override_existing``,
-        ``template``, ``decimal_separator``, ``thousand_separator``,
-        ``sources``, ``attribute_class``). Multiple templates can be added;
-        they are appended in order. Validation runs at :meth:`validate`
-        time.
+        Pass a ``DisplayLabel`` instance or keyword args matching its fields
+        (``key``, ``kind``, ``type``, ``template``, ``decimal_separator``,
+        ``thousand_separator``, ``sources``, ``override_existing``). Multiple
+        entries can be added; they are appended in order. Validation runs at
+        :meth:`validate` time.
         """
-        if isinstance(obj, DisplayTemplate):
-            self.settings.extra_cfg.display_templates.append(obj)
+        if isinstance(obj, DisplayLabel):
+            self.settings.extra_cfg.display_label.append(obj)
         else:
-            self.settings.extra_cfg.display_templates.append(
-                DisplayTemplate(**kwargs)
+            self.settings.extra_cfg.display_label.append(
+                DisplayLabel(**kwargs)
             )
 
     def add_entity_type(self, name_or_obj=None, **kwargs) -> None:
@@ -1575,34 +2123,25 @@ class ANXChart:
             strength_names,
         ))
 
-        # Validate date_attribute_displays (extra_cfg.date_attribute_displays)
+        # Validate the display synthesizers (extra_cfg.display_attribute /
+        # display_label).
         from .validation import (
-            validate_date_attribute_displays,
-            validate_display_templates,
-            _date_display_sibling_name,
+            validate_display_attribute,
+            validate_display_label,
         )
-        errors.extend(validate_date_attribute_displays(
-            self.settings.extra_cfg.date_attribute_displays,
+        errors.extend(validate_display_attribute(
+            self.settings.extra_cfg.display_attribute,
             self._attribute_classes,
             self._entities,
             self._links,
             ac_names,
         ))
-
-        # Validate display_templates (extra_cfg.display_templates).
-        # Collect date_attribute_displays sibling names so the cross-family
-        # collision check can fire.
-        date_sib_names = [
-            _date_display_sibling_name(d) or ''
-            for d in self.settings.extra_cfg.date_attribute_displays
-        ]
-        errors.extend(validate_display_templates(
-            self.settings.extra_cfg.display_templates,
+        errors.extend(validate_display_label(
+            self.settings.extra_cfg.display_label,
             self._attribute_classes,
             self._entities,
             self._links,
             ac_names,
-            date_sib_names,
         ))
 
         return errors
@@ -2067,32 +2606,29 @@ class ANXChart:
         # ── Store resolved links for lazy emit in build() ───────────────
         builder._resolved_items.extend(resolved_links)
 
-        # ── Date attribute display expansion ────────────────────────────
+        # ── Display synthesizer expansion ───────────────────────────────
         # Must run after both entity AND link resolution and before
-        # builder.build() consumes att_class_config.
-        with timer.phase("Date attribute display expansion"):
-            from .transforms import expand_date_attribute_displays
-            expand_date_attribute_displays(
+        # builder.build() consumes att_class_config. Attribute siblings are
+        # expanded first so a synthesized AC could (in principle) be
+        # referenced by a label source.
+        with timer.phase("Display synthesizer expansion"):
+            from .transforms import (
+                expand_display_attributes,
+                expand_display_labels,
+            )
+            expand_display_attributes(
                 resolved_entities,
                 resolved_links,
-                self.settings.extra_cfg.date_attribute_displays,
+                self.settings.extra_cfg.display_attribute,
                 self._attribute_classes,
                 builder,
                 att_class_config,
             )
-
-        # ── Display template expansion ──────────────────────────────────
-        # Runs after date_attribute_displays so a date-display sibling AC
-        # could (in principle) be referenced by a display_template source.
-        with timer.phase("Display template expansion"):
-            from .transforms import expand_display_templates
-            expand_display_templates(
+            expand_display_labels(
                 resolved_entities,
                 resolved_links,
-                self.settings.extra_cfg.display_templates,
+                self.settings.extra_cfg.display_label,
                 self._attribute_classes,
-                builder,
-                att_class_config,
             )
 
         # ── Build configs ─────────────────────────────────────────────────

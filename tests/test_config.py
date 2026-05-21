@@ -555,10 +555,10 @@ class TestCLIConfig:
                 os.unlink(out_path)
 
 
-# ── Append + dedup defaults & replace=True opt-in (added with new layering model) ──
+# ── Append + dedup defaults & wipe_previous=True opt-in (added with new layering model) ──
 
 class TestAppendDedupAndReplace:
-    """Default merge behavior is additive across all sections; replace=True
+    """Default merge behavior is additive across all sections; wipe_previous=True
     is a per-section opt-out for the rare 'narrow the list' case."""
 
     # ── source_types: append + exact-text dedup ──
@@ -585,7 +585,7 @@ class TestAppendDedupAndReplace:
     def test_source_types_replace_wipes_previous(self):
         chart = ANXChart()
         chart.apply_config({'source_types': ['Witness', 'Informant']})
-        chart.apply_config({'source_types': ['Officer']}, replace=True)
+        chart.apply_config({'source_types': ['Officer']}, wipe_previous=True)
         assert chart.source_types == ['Officer']
 
     # ── grades: append + exact-text dedup ──
@@ -619,11 +619,11 @@ class TestAppendDedupAndReplace:
     def test_grades_replace_wipes_previous(self):
         chart = ANXChart()
         chart.apply_config({'grades_one': {'default': 'A', 'items': ['A', 'B']}})
-        chart.apply_config({'grades_one': {'items': ['X', 'Y']}}, replace=True)
+        chart.apply_config({'grades_one': {'items': ['X', 'Y']}}, wipe_previous=True)
         assert chart.grades_one.items == ['X', 'Y']
         assert chart.grades_one.default is None  # replaced wholesale
 
-    # ── replace=True is per-section, not per-config ──
+    # ── wipe_previous=True is per-section, not per-config ──
 
     def test_replace_only_touches_sections_the_layer_mentions(self):
         chart = ANXChart()
@@ -634,7 +634,7 @@ class TestAppendDedupAndReplace:
         })
         # Replace layer only mentions source_types — entity_types and
         # grades_one must survive.
-        chart.apply_config({'source_types': ['Officer']}, replace=True)
+        chart.apply_config({'source_types': ['Officer']}, wipe_previous=True)
         assert chart.source_types == ['Officer']
         assert [et.name for et in chart._entity_types] == ['Person']
         assert chart.grades_one.items == ['A', 'B']
@@ -647,10 +647,10 @@ class TestAppendDedupAndReplace:
                 'grid': {'snap': True},
             },
         })
-        # replace=True swaps settings entirely with what the layer specifies.
+        # wipe_previous=True swaps settings entirely with what the layer specifies.
         chart.apply_config({
             'settings': {'extra_cfg': {'arrange': 'circle'}},
-        }, replace=True)
+        }, wipe_previous=True)
         assert chart.settings.extra_cfg.arrange == 'circle'
         # entity_auto_color and grid.snap are gone (back to defaults)
         assert chart.settings.extra_cfg.entity_auto_color is None
@@ -664,7 +664,7 @@ class TestAppendDedupAndReplace:
         ]})
         chart.apply_config({'entity_types': [
             {'name': 'Building', 'color': 'Green'},
-        ]}, replace=True)
+        ]}, wipe_previous=True)
         names = [et.name for et in chart._entity_types]
         assert names == ['Building']
 
@@ -676,7 +676,7 @@ class TestAppendDedupAndReplace:
         ]})
         chart.apply_config({'legend_items': [
             {'name': 'Org', 'item_type': 'Icon'},
-        ]}, replace=True)
+        ]}, wipe_previous=True)
         names = [li.name for li in chart._legend_items]
         assert names == ['Org']
 
@@ -685,7 +685,7 @@ class TestAppendDedupAndReplace:
         # Pre-populated 'Default' is gone after replace.
         chart.apply_config({'strengths': {'items': [
             {'name': 'Confirmed', 'dot_style': 'solid'},
-        ]}}, replace=True)
+        ]}}, wipe_previous=True)
         names = [s.name for s in chart.strengths.items]
         assert names == ['Confirmed']
 
@@ -739,7 +739,7 @@ class TestCLIConfigReplaceInterleaving:
             rc, stdout, stderr = self._run_cli(
                 '--show-config',
                 '--config', cfg_a,
-                '--config-replace', cfg_b,
+                '--config-wipe', cfg_b,
                 '--config', cfg_c,
             )
             assert rc == 0, f"CLI failed: {stderr}"
@@ -755,7 +755,7 @@ class TestCLIConfigReplaceInterleaving:
         cfg = _write_json({'source_types': ['Only']})
         try:
             rc, stdout, stderr = self._run_cli(
-                '--show-config', '--config-replace', cfg,
+                '--show-config', '--config-wipe', cfg,
             )
             assert rc == 0, f"CLI failed: {stderr}"
             assert 'Only' in stdout

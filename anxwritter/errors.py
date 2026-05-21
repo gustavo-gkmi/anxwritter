@@ -89,14 +89,20 @@ class ErrorType(str, Enum):
     INVALID_CATEGORICAL_STYLE = 'invalid_categorical_style'
     STYLING_CONFLICT = 'styling_conflict'
 
-    # Date attribute display (ANB v9 AttTime canvas-render workaround) errors
+    # Datetime AC canvas-render guard (ANB v9: datetime values never render on
+    # the canvas, so a visible datetime AC is rejected — synthesize a
+    # display_attribute text sibling instead). Independent of any synthesizer
+    # entry point.
     DATETIME_AC_FORBIDS_VISIBLE = 'datetime_ac_forbids_visible'
-    DATE_DISPLAY_INVALID = 'date_display_invalid'
-    DATE_DISPLAY_NAME_COLLISION = 'date_display_name_collision'
 
-    # Multi-attribute display template errors
-    DISPLAY_TEMPLATE_INVALID = 'display_template_invalid'
-    DISPLAY_TEMPLATE_NAME_COLLISION = 'display_template_name_collision'
+    # Display synthesizer errors (extra_cfg.display_attribute / display_label)
+    DISPLAY_INVALID = 'display_invalid'
+    DISPLAY_NAME_COLLISION = 'display_name_collision'
+    DISPLAY_OVERLAP_CONFLICT = 'display_overlap_conflict'
+
+    # Config-layering errors (config-vs-config leaf locking + delete operation)
+    LOCKED_OVERRIDE = 'locked_override'
+    DELETE_CONTRACT = 'delete_contract'
 
 
 class ANXValidationError(Exception):

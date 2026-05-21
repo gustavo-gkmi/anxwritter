@@ -338,37 +338,43 @@ Common options:
 ANB v9 does not render datetime attribute values on the canvas after import —
 they show up in the properties panel and work for time-wheel, sort, and
 filter, but the canvas only shows the surrounding chrome (symbol, prefix,
-suffix). `extra_cfg.date_attribute_displays` is the workaround: anxwritter
+suffix). `extra_cfg.display_attribute` is the workaround: anxwritter
 synthesises a text-sibling AttributeClass whose value is the parent
-datetime(s) formatted via `strftime`. The canvas renders the text sibling;
-the original datetime stays available for everything else. Range displays
-(start + end into one rendered string) are also supported.
+datetime(s) rendered through a template (datetime sources auto-parse, so
+`{d:%d/%m/%Y}` works directly). The canvas renders the text sibling; the
+original datetime stays available for everything else. A two-source template
+handles ranges.
 
 ```python
-from anxwritter import AttributeClass, DateAttributeDisplay, Font
+from anxwritter import AttributeClass, Font
 
 # Single-date workaround
 chart.add_attribute_class(name='EventDate', type='datetime', visible=False)
-chart.add_date_attribute_display(
-    start='EventDate',
-    format='%d/%m/%Y',
-    attribute_class=AttributeClass(prefix='Call: ', font=Font(italic=True)),
+chart.add_display_attribute(
+    key='event_date', attribute_name='Event Date',
+    template='Call: {d:%d/%m/%Y}',
+    sources=[{'attribute': 'EventDate', 'alias': 'd'}],
+    attribute_class=AttributeClass(font=Font(italic=True)),
 )
 
 # Range with substitute policy for open-ended investigations
 chart.add_attribute_class(name='inv_start', type='datetime', visible=False)
 chart.add_attribute_class(name='inv_end',   type='datetime', visible=False)
-chart.add_date_attribute_display(
-    start='inv_start', end='inv_end', name='Period',
-    format='%Y-%m-%d', separator=' – ',
-    missing='substitute', end_placeholder='ongoing',
+chart.add_display_attribute(
+    key='period', attribute_name='Period',
+    template='{s:%Y-%m-%d} – {e:%Y-%m-%d}',
+    sources=[
+        {'attribute': 'inv_start', 'alias': 's'},
+        {'attribute': 'inv_end', 'alias': 'e',
+         'missing': 'substitute', 'placeholder': 'ongoing'},
+    ],
 )
 ```
 
-Both source ACs **must** have `visible=False` — validation rejects
-`visible=True` on any datetime AC, and any AC referenced by a
-`date_attribute_displays` entry must explicitly opt out of canvas
-rendering. See [reference/attributes.md → Date attribute displays](../reference/attributes.md#date-attribute-displays).
+Source datetime ACs **must** have `visible=False` — validation rejects
+`visible=True` on any datetime AC, and a `display_attribute` source AC must
+opt out of canvas rendering. See
+[reference/attributes.md → Display synthesizers](../reference/attributes.md#display-synthesizers).
 
 ### Merge and paste behaviour
 

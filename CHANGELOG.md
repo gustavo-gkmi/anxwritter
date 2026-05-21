@@ -5,6 +5,118 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+> **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
+> changes ship in minor releases with notes here, as below.
+
+## [1.12.0] - 2026-05-20
+
+Config-layering overhaul + display-synthesizer unification. Several
+**breaking** changes (acceptable under the pre-2.0 stability note above).
+
+### Changed (breaking)
+
+- **Layered configs now FIELD-MERGE by default.** When a later config layer
+  declares an entry with the same identity (`name` / `key`) as an earlier
+  layer, only the fields it sets overwrite; omitted fields are retained
+  (previously the whole entry was replaced, which silently dropped fields and
+  often tripped `missing_required`). Applies to `entity_types`, `link_types`,
+  `attribute_classes`, `datetime_formats`, `semantic_*`, `strengths.items`,
+  and the new `extra_cfg.display_attribute` / `display_label`. The public
+  single-call `add_*` methods are unchanged (still whole-replace).
+- **`replace=` → `wipe_previous=`** on `apply_config` / `apply_config_file` /
+  `from_config` / `from_config_file`; CLI `--config-replace` → `--config-wipe`.
+  Same "clear the mentioned sections, then merge" behaviour, clearer name.
+- **`extra_cfg.display_templates` → `extra_cfg.display_attribute` +
+  `extra_cfg.display_label`.** The old single section with a `target` field is
+  split into two keyed lists. Each entry now requires an explicit `key`
+  (identity for layering / lock / delete) and supports `kind`
+  (`entity` | `link` | `both`, default `both`) + optional `type` filters.
+  `attribute_name` is now **required** on `display_attribute` (the old
+  `'display'` default is gone). Removed dataclass `DisplayTemplate` and the
+  `DisplayTarget` enum; added `DisplayAttribute` / `DisplayLabel`
+  (`DisplaySource` unchanged). Builder methods: `add_display_attribute` /
+  `add_display_label` replace `add_display_template`.
+- **Removed `extra_cfg.date_attribute_displays`** (and `DateAttributeDisplay`,
+  `add_date_attribute_display`). It is fully subsumed by `display_attribute`
+  with datetime auto-parsing — see the migration below. The independent
+  `datetime_ac_forbids_visible` guard (a `datetime` AC may not be
+  `visible=True`) is **kept**. The `missing: truncate` policy has **no
+  replacement** — use `substitute` with a placeholder.
+- Error-type renames: `display_template_invalid` → `display_invalid`,
+  `display_template_name_collision` → `display_name_collision`. Removed
+  `date_display_invalid` / `date_display_name_collision`.
+
+### Added
+
+- **`operation='delete'`** on `apply_config*` (CLI `--config-delete`) — subtract
+  by shape (mirror of merge): a key with a null/empty value removes the whole
+  section/entry; a list entry with only its identity removes that entry; an
+  entry naming fields (which must be `null`) unsets those fields (revert to
+  default). A non-null value on a non-identity field in a delete layer is a
+  `delete_contract` error. Deleting an absent target is a no-op.
+- **`lock=True`** on `apply_config*` (CLI `--config-lock`) — freeze exactly the
+  leaves the layer declares. A later config layer changing a locked leaf
+  records a `locked_override` error (surfaced through `validate()`; the locked
+  value is preserved). Built for the "user preset layered after an immutable
+  org config" use case. `operation='delete'` combined with `lock` or
+  `wipe_previous` is a `ValueError`.
+- **`kind` / `type` scoping** on display entries (see above). Scope policy:
+  `kind`/`type` filter by *structural metadata* only; conditioning on
+  attribute *values* stays out of scope — precompute a synthetic attribute or
+  type upstream. Overlap is resolved by specificity (a `type`-scoped entry
+  beats an untyped one); a genuine tie is a `display_overlap_conflict` error.
+- New `ErrorType` members: `locked_override`, `delete_contract`,
+  `display_overlap_conflict`.
+- New example `examples/display_synthesizers_example.py` (attribute combo,
+  single-date, date range, per-type labels).
+
+### Migration: `date_attribute_displays` → `display_attribute`
+
+Source ACs stay `type=datetime`, `visible=false` (datetime still won't render
+on the canvas; the synthesized text sibling does).
+
+```yaml
+# --- Single date ---
+# BEFORE
+extra_cfg:
+  date_attribute_displays:
+    - start: EventDate            # auto-named "EventDate (display)"
+      format: "%Y-%m-%d"
+# AFTER
+extra_cfg:
+  display_attribute:
+    - key: event_date
+      attribute_name: "Event Date"
+      template: "{d:%Y-%m-%d}"
+      sources:
+        - {attribute: EventDate, alias: d}
+
+# --- Date range ---
+# BEFORE
+extra_cfg:
+  date_attribute_displays:
+    - start: investigation_start
+      end: investigation_end
+      name: "Investigation Period"
+      separator: " - "
+      missing: substitute
+      end_placeholder: ongoing
+# AFTER
+extra_cfg:
+  display_attribute:
+    - key: investigation_period
+      attribute_name: "Investigation Period"
+      template: "{s:%Y-%m-%d} - {e:%Y-%m-%d}"
+      sources:
+        - {attribute: investigation_start, alias: s}
+        - {attribute: investigation_end,   alias: e, missing: substitute, placeholder: ongoing}
+```
+
+> The old `missing: truncate` policy (drop the separator + show only the
+> present bound) has no equivalent — it required a conditional, which the
+> synthesizer scope policy excludes. Use `missing: substitute` with a
+> placeholder (e.g. `"?"` / `"ongoing"`) instead.
+
 ## [1.11.0] - 2026-05-20
 
 ### Added

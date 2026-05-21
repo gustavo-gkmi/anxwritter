@@ -30,6 +30,10 @@ from tests.fixtures.invalid_specs import INVALID_SPECS
 KNOWN_DEAD_ERROR_TYPES = {
     ErrorType.CONFIG_CONFLICT,
     ErrorType.INVALID_DATETIME_FORMAT,
+    # Emitted from chart.py (_apply_config), not validation.py — the regex
+    # scan below only reads validation.py, so these read as "dead" here.
+    ErrorType.LOCKED_OVERRIDE,
+    ErrorType.DELETE_CONTRACT,
 }
 
 
