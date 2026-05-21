@@ -23,19 +23,28 @@ def _force_utf8_stdio() -> None:
             pass
 
 
-class _ConfigAppendAction(argparse.Action):
-    """--config: append a (path, replace=False) layer in CLI order."""
-    def __call__(self, parser, namespace, values, option_string=None):
-        layers = getattr(namespace, self.dest, None) or []
-        layers.append((values, False))
-        setattr(namespace, self.dest, layers)
+class _ConfigLayerAction(argparse.Action):
+    """Append a ``(path, operation, wipe_previous, lock)`` layer in CLI order.
 
+    The flag name selects the layer mode so cross-flag order is preserved
+    (all four flags share ``dest='config_layers'``):
 
-class _ConfigReplaceAction(argparse.Action):
-    """--config-replace: append a (path, replace=True) layer in CLI order."""
+      --config         -> merge
+      --config-wipe    -> merge + wipe_previous (clear mentioned sections first)
+      --config-delete  -> delete (subtract by shape)
+      --config-lock    -> merge + lock (freeze this layer's declared leaves)
+    """
+    _MODES = {
+        '--config': ('merge', False, False),
+        '--config-wipe': ('merge', True, False),
+        '--config-delete': ('delete', False, False),
+        '--config-lock': ('merge', False, True),
+    }
+
     def __call__(self, parser, namespace, values, option_string=None):
+        op, wipe, lock = self._MODES.get(option_string, ('merge', False, False))
         layers = getattr(namespace, self.dest, None) or []
-        layers.append((values, True))
+        layers.append((values, op, wipe, lock))
         setattr(namespace, self.dest, layers)
 
 
@@ -222,24 +231,43 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--config",
         dest="config_layers",
-        action=_ConfigAppendAction,
+        action=_ConfigLayerAction,
         default=[],
         help="Config file path (JSON or YAML). Repeatable. Layers apply "
-             "left-to-right; can be interleaved with --config-replace; "
-             "the rule applies per-layer at the moment that layer is "
-             "processed. Default behavior: merge sections (upsert by name "
-             "for named registries; append + exact-text dedup for grades / "
-             "source_types; deep-merge for settings).",
+             "left-to-right and can be interleaved with --config-wipe / "
+             "--config-delete / --config-lock; the rule applies per-layer at "
+             "the moment that layer is processed. Default: field-merge by "
+             "identity (name/key); append + exact-text dedup for grades / "
+             "source_types; deep-merge for settings.",
     )
     parser.add_argument(
-        "--config-replace",
+        "--config-wipe",
         dest="config_layers",
-        action=_ConfigReplaceAction,
+        action=_ConfigLayerAction,
         default=[],
-        help="Like --config, but every section this layer mentions REPLACES "
-             "the chart's current state for that section wholesale. Sections "
-             "the layer does not mention survive untouched. Use for the rare "
-             "'narrow the list' case.",
+        help="Like --config, but clear each section this layer mentions before "
+             "merging (the 'narrow the list' case). Sections the layer does "
+             "not mention survive untouched.",
+    )
+    parser.add_argument(
+        "--config-delete",
+        dest="config_layers",
+        action=_ConfigLayerAction,
+        default=[],
+        help="Delete layer (subtract by shape): a key with a null/empty value "
+             "removes the whole section/entry; a list entry with only its "
+             "identity removes that entry; an entry naming fields (which must "
+             "be null) unsets those fields. Deleting an absent target is a "
+             "no-op.",
+    )
+    parser.add_argument(
+        "--config-lock",
+        dest="config_layers",
+        action=_ConfigLayerAction,
+        default=[],
+        help="Like --config, but freeze exactly the leaves this layer "
+             "declares. A later config layer changing a locked leaf is a "
+             "locked_override validation error (the locked value is kept).",
     )
     parser.add_argument(
         "--validate-only",
@@ -274,13 +302,15 @@ def main(argv: list[str] | None = None) -> None:
     # Apply config layers in CLI order. Each layer is a (path, replace) tuple
     # collected by the _ConfigAppendAction / _ConfigReplaceAction actions, which
     # share the same `config_layers` dest so cross-flag order is preserved.
-    for cfg_path, replace in args.config_layers:
+    for cfg_path, op, wipe, lock in args.config_layers:
         p = Path(cfg_path)
         if not p.exists():
             print(f"Error: config file not found: {cfg_path}", file=sys.stderr)
             sys.exit(1)
         try:
-            chart.apply_config_file(cfg_path, replace=replace)
+            chart.apply_config_file(
+                cfg_path, operation=op, wipe_previous=wipe, lock=lock,
+            )
         except (json.JSONDecodeError, ValueError) as exc:
             print(json.dumps({"error": f"Failed to parse config {cfg_path}: {exc}"}),
                   file=sys.stderr)

@@ -469,63 +469,11 @@ class StylingCfg:
 
 
 @dataclass
-class DateAttributeDisplay:
-    """Synthesises a text-sibling AttributeClass that renders one or two
-    datetime attribute values on the canvas, as a workaround for ANB v9 not
-    rendering ``AttTime`` values directly.
-
-    Lives under ``extra_cfg.date_attribute_displays`` — a chart-level
-    synthesizer (same family as ``styling`` and ``geo_map``), not a property
-    of any single ``AttributeClass``.
-
-    Single-date mode:
-        ``start`` names a declared ``datetime`` AC. The sibling AC name is
-        auto-derived as ``f"{start}{suffix}"`` (suffix defaults to
-        ``' (display)'``) unless ``name`` is set explicitly.
-
-    Range mode:
-        ``start`` and ``end`` each name a declared ``datetime`` AC. ``name``
-        is required. Per-item value is
-        ``f"{fmt(start)}{separator}{fmt(end)}"`` when both bounds are set;
-        when one is missing the ``missing`` policy applies (``skip`` |
-        ``substitute`` | ``truncate`` | ``error``), with placeholder strings
-        used by ``substitute`` mode.
-
-    Both referenced ACs MUST have ``visible=False`` — validation errors out
-    otherwise with a fix-it message. The transform does not silently mutate
-    user-declared ACs.
-
-    Sibling AC styling comes from ``attribute_class`` (no inheritance from
-    the source ACs). Inner ``attribute_class.name`` and ``.type`` must be
-    ``None`` — the sibling is auto-named and auto-typed as text.
-    """
-    start: Optional[str] = None             # Required: source AC name (single-date or range start)
-    end: Optional[str] = None               # Optional: present = range mode; must differ from start
-    name: Optional[str] = None              # Sibling AC name; required in range mode
-    suffix: Optional[str] = None            # Used only for auto-derived single-date name (default ' (display)')
-    format: Optional[str] = None            # strftime (default '%Y-%m-%d')
-    separator: Optional[str] = None         # Range mode only (default ' - ')
-    missing: Optional[str] = None           # 'skip' (default) | 'substitute' | 'truncate' | 'error'
-    start_placeholder: Optional[str] = None # substitute mode: text for missing start bound (default '')
-    end_placeholder: Optional[str] = None   # substitute mode: text for missing end bound (default '')
-    attribute_class: Optional['AttributeClass'] = None  # Sibling AC styling template (inner .name/.type must be None)
-
-    def __post_init__(self):
-        if isinstance(self.attribute_class, dict):
-            inner = {k: v for k, v in self.attribute_class.items() if v is not None}
-            if isinstance(inner.get('font'), dict):
-                inner['font'] = Font(**{
-                    k: v for k, v in inner['font'].items() if v is not None
-                })
-            self.attribute_class = AttributeClass(**inner)
-
-
-@dataclass
 class DisplaySource:
-    """One source attribute referenced by a ``DisplayTemplate``.
+    """One source attribute referenced by a ``DisplayAttribute`` / ``DisplayLabel``.
 
     The ``attribute`` field names the source AttributeClass; ``alias`` is the
-    name used to reference the value from inside ``DisplayTemplate.template``.
+    name used to reference the value from inside the entry's ``template``.
     ``alias`` is required when ``attribute`` isn't a valid Python identifier
     (e.g. contains spaces or non-ASCII characters), and is otherwise optional
     (the attribute name is reused as the template key).
@@ -540,65 +488,114 @@ class DisplaySource:
     placeholder: Optional[str] = None      # Used when missing='substitute'
 
 
-@dataclass
-class DisplayTemplate:
-    """Renders one or more source attribute values through a format template
-    and emits the result as either a synthesized text-sibling AttributeClass
-    or as the entity/link label.
+def _coerce_display_sources(obj) -> None:
+    """Coerce dict-form ``sources`` items to ``DisplaySource`` in place.
 
-    Lives under ``extra_cfg.display_templates`` — a chart-level synthesizer
-    (same family as ``date_attribute_displays``, ``styling``, ``geo_map``).
-
-    ``template`` uses Python's f-string format-spec mini-language via
-    ``str.format_map`` (no code execution; only ``{name:format_spec}``
-    substitutions). The ``f`` prefix is Python source syntax, not part of the
-    template body — write just the string contents.
-
-    ``decimal_separator`` / ``thousand_separator`` post-process numeric
-    format-spec output (e.g. ``{x:,.2f}``) so Brazilian-style ``100.000,00``
-    formatting is one option swap away. Literal commas/periods in static
-    template text are untouched.
-
-    For ``target='attribute'``: source ACs must declare ``visible=False``
-    (same constraint as ``date_attribute_displays``) to avoid double-render
-    in the attribute stack. Validation enforces this.
-
-    For ``target='label'``: ``override_existing`` controls whether items
-    that already have a label get stomped. Default ``False`` — explicit
-    wins over calculated, matching the rest of the library.
+    Mirrors ``Card.coerce_list`` — accepts ``DisplaySource`` instances or
+    dicts; anything else is a ``TypeError``.
     """
-    target: Optional[str] = None                # 'attribute' (default) | 'label'
-    attribute_name: Optional[str] = None        # Synthesized AC name when target='attribute' (default 'display')
-    override_existing: Optional[bool] = None    # target='label' only — default False
-    template: Optional[str] = None              # f-string format spec body (required)
+    if not obj.sources:
+        return
+    out: List[DisplaySource] = []
+    for s in obj.sources:
+        if isinstance(s, DisplaySource):
+            out.append(s)
+        elif isinstance(s, dict):
+            out.append(DisplaySource(**{k: v for k, v in s.items() if v is not None}))
+        else:
+            raise TypeError(
+                f"{type(obj).__name__}.sources items must be DisplaySource "
+                f"instances or dicts, got {type(s).__name__}."
+            )
+    obj.sources = out
+
+
+def _coerce_inner_attribute_class(obj) -> None:
+    """Coerce a dict-form ``attribute_class`` to ``AttributeClass`` in place."""
+    if isinstance(obj.attribute_class, dict):
+        inner = {k: v for k, v in obj.attribute_class.items() if v is not None}
+        if isinstance(inner.get('font'), dict):
+            inner['font'] = Font(**{
+                k: v for k, v in inner['font'].items() if v is not None
+            })
+        obj.attribute_class = AttributeClass(**inner)
+
+
+@dataclass
+class DisplayAttribute:
+    """Synthesizes a text-sibling AttributeClass from one or more source
+    attribute values rendered through a format template.
+
+    Lives under ``extra_cfg.display_attribute`` — a chart-level synthesizer
+    keyed-list (same family as ``styling`` / ``geo_map``). Each entry is
+    addressed for config layering / lock / delete by its required ``key``.
+
+    ``template`` uses Python's ``str.format_map`` format-spec mini-language
+    (no code execution; only ``{alias:format_spec}`` substitutions). Write
+    just the string body — the ``f`` prefix is Python syntax, not part of it.
+    ``decimal_separator`` / ``thousand_separator`` post-process numeric
+    format-spec output (e.g. ``{x:,.2f}`` → ``100.000,00``); literal
+    separators in static template text are untouched.
+
+    ``attribute_name`` (required) names the synthesized sibling AC. Multiple
+    entries may target the same ``attribute_name`` as long as they apply to
+    disjoint ``(kind, type)`` slots (e.g. one formatter per entity type).
+
+    ``kind`` (``'entity'`` | ``'link'`` | ``'both'``, default ``'both'``) and
+    optional ``type`` (a registered entity/link type name) SCOPE which items
+    this entry paints. Scoping is by structural metadata only — conditioning
+    on attribute *values* is out of scope (precompute a synthetic attribute
+    or type upstream).
+
+    Source ACs must declare ``visible=False`` (validation enforces) to avoid
+    a double-render in the attribute stack. Sibling AC styling comes from
+    ``attribute_class`` (inner ``.name`` / ``.type`` must be ``None`` — the
+    sibling is auto-named from ``attribute_name`` and auto-typed as text).
+    """
+    key: Optional[str] = None                   # Identity for layering / lock / delete (required)
+    attribute_name: Optional[str] = None        # Synthesized sibling AC name (required)
+    kind: Optional[str] = None                  # 'entity' | 'link' | 'both' (default 'both')
+    type: Optional[str] = None                  # Optional entity/link type-name filter
+    template: Optional[str] = None              # format-spec body (required)
     decimal_separator: Optional[str] = None     # default '.'
     thousand_separator: Optional[str] = None    # default ','
     sources: List[DisplaySource] = field(default_factory=list)
-    attribute_class: Optional['AttributeClass'] = None  # Styling template, target='attribute' only
+    attribute_class: Optional['AttributeClass'] = None  # Sibling AC styling template
 
     def __post_init__(self):
-        # Coerce dict-form sources to DisplaySource (mirrors Card.coerce_list pattern).
-        if self.sources:
-            out: List[DisplaySource] = []
-            for s in self.sources:
-                if isinstance(s, DisplaySource):
-                    out.append(s)
-                elif isinstance(s, dict):
-                    out.append(DisplaySource(**{k: v for k, v in s.items() if v is not None}))
-                else:
-                    raise TypeError(
-                        f"DisplayTemplate.sources items must be DisplaySource "
-                        f"instances or dicts, got {type(s).__name__}."
-                    )
-            self.sources = out
-        # Coerce dict-form attribute_class to AttributeClass.
-        if isinstance(self.attribute_class, dict):
-            inner = {k: v for k, v in self.attribute_class.items() if v is not None}
-            if isinstance(inner.get('font'), dict):
-                inner['font'] = Font(**{
-                    k: v for k, v in inner['font'].items() if v is not None
-                })
-            self.attribute_class = AttributeClass(**inner)
+        _coerce_display_sources(self)
+        _coerce_inner_attribute_class(self)
+
+
+@dataclass
+class DisplayLabel:
+    """Renders one or more source attribute values through a format template
+    directly into the entity/link label.
+
+    Lives under ``extra_cfg.display_label`` — a chart-level synthesizer
+    keyed-list. Each entry is addressed for config layering / lock / delete
+    by its required ``key``.
+
+    ``kind`` / ``type`` scope which items this entry paints (see
+    ``DisplayAttribute``). ``override_existing`` (default ``False``) controls
+    whether items that already have a label get stomped — explicit wins over
+    calculated, matching the rest of the library.
+
+    Per ``(kind, type)`` at most one label entry may apply to a given item; a
+    type-scoped entry beats an untyped one (specificity). A genuine tie is a
+    ``display_overlap_conflict`` validation error.
+    """
+    key: Optional[str] = None                   # Identity for layering / lock / delete (required)
+    kind: Optional[str] = None                  # 'entity' | 'link' | 'both' (default 'both')
+    type: Optional[str] = None                  # Optional entity/link type-name filter
+    template: Optional[str] = None              # format-spec body (required)
+    decimal_separator: Optional[str] = None     # default '.'
+    thousand_separator: Optional[str] = None    # default ','
+    sources: List[DisplaySource] = field(default_factory=list)
+    override_existing: Optional[bool] = None    # default False
+
+    def __post_init__(self):
+        _coerce_display_sources(self)
 
 
 @dataclass
@@ -611,8 +608,8 @@ class ExtraCfg:
     link_arc_offset: Optional[int] = None          # Parallel-link arc offset
     geo_map: Optional[GeoMapCfg] = None            # Geographic positioning
     styling: Optional[StylingCfg] = None           # Data-driven link styling (intensity + categorical)
-    date_attribute_displays: List[DateAttributeDisplay] = field(default_factory=list)  # Datetime → text sibling synthesizers
-    display_templates: List[DisplayTemplate] = field(default_factory=list)  # Multi-attribute template → AC sibling or label
+    display_attribute: List[DisplayAttribute] = field(default_factory=list)  # Template → synthesized text-sibling AC
+    display_label: List[DisplayLabel] = field(default_factory=list)  # Template → entity/link label
 
 
 # Forward references resolved after all classes defined — see bottom of Settings class

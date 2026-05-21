@@ -516,165 +516,7 @@ def inject_geo_attributes(
             re.attributes.append(ResolvedAttr('Longitude', lon_ref_id, str(lon)))
 
 
-# ── Date attribute displays: workaround for unrendered datetime values ──────
-
-_DATE_DISPLAY_RESOLVED_FMT = '%Y-%m-%dT%H:%M:%S.%f'
-_DATE_DISPLAY_RESOLVED_FMT_NO_MS = '%Y-%m-%dT%H:%M:%S'
-
-
-def _date_display_sibling_name(disp: Any) -> Optional[str]:
-    """Mirror of validation._date_display_sibling_name — kept here to avoid
-    importing the validation module from transforms."""
-    name = getattr(disp, 'name', None)
-    if name:
-        return name
-    start = getattr(disp, 'start', None)
-    end = getattr(disp, 'end', None)
-    if not start or end:
-        return None
-    suffix = getattr(disp, 'suffix', None)
-    if suffix is None:
-        suffix = ' (display)'
-    return f"{start}{suffix}"
-
-
-def expand_date_attribute_displays(
-    resolved_entities,
-    resolved_links,
-    displays,
-    attribute_classes,
-    builder,
-    att_class_config,
-):
-    """Synthesise text-sibling AttributeClasses from datetime sources and
-    paint per-item sibling values onto every resolved entity/link.
-
-    For each ``DateAttributeDisplay``:
-
-    1. Compute the effective sibling name (explicit ``name`` or
-       ``f"{start}{suffix}"``).
-    2. Register the sibling as a text AC on the builder + ``att_class_config``,
-       defaulting ``visible=True`` + ``show_value=True``. The display's
-       ``attribute_class`` template overrides those defaults.
-    3. Walk every resolved entity/link. For each item, look up start/end
-       values from its existing ``ResolvedAttr`` rows, branch on the
-       ``missing`` policy, and append a ``ResolvedAttr(sibling_name, ...)``
-       with the rendered text (or skip).
-
-    Visibility of the source ACs is NOT mutated — validation already requires
-    the user to set ``visible=False`` on referenced ACs.
-    """
-    from .resolved import ResolvedAttr
-    from datetime import datetime as _dt
-
-    if not displays:
-        return
-
-    def _parse(value_str: str):
-        try:
-            return _dt.strptime(value_str, _DATE_DISPLAY_RESOLVED_FMT)
-        except ValueError:
-            try:
-                return _dt.strptime(value_str, _DATE_DISPLAY_RESOLVED_FMT_NO_MS)
-            except ValueError:
-                return None
-
-    for disp in displays:
-        sib_name = _date_display_sibling_name(disp)
-        if not sib_name:
-            # Validation already flagged this entry; emit nothing.
-            continue
-        start = getattr(disp, 'start', None)
-        end = getattr(disp, 'end', None)
-        if not start:
-            continue
-        fmt = getattr(disp, 'format', None) or '%Y-%m-%d'
-        sep = getattr(disp, 'separator', None)
-        if sep is None:
-            sep = ' - '
-        missing = getattr(disp, 'missing', None) or 'skip'
-        start_ph = getattr(disp, 'start_placeholder', None) or ''
-        end_ph = getattr(disp, 'end_placeholder', None) or ''
-
-        # Register sibling AC + config row.
-        sib_ref_id = builder._att_class_id(sib_name, 'AttText')
-        sibling_row: Dict[str, Any] = {
-            'type': 'text',
-            'visible': True,
-            'show_value': True,
-        }
-        inner = getattr(disp, 'attribute_class', None)
-        if inner is not None:
-            for fn in ('prefix', 'suffix', 'decimal_places', 'show_value',
-                       'show_date', 'show_time', 'show_seconds', 'show_if_set',
-                       'show_class_name', 'show_symbol', 'visible',
-                       'is_user', 'user_can_add', 'user_can_remove',
-                       'icon_file', 'semantic_type',
-                       'merge_behaviour', 'paste_behaviour'):
-                v = getattr(inner, fn, None)
-                if v is not None:
-                    sibling_row[fn] = v
-            inner_font = getattr(inner, 'font', None)
-            if inner_font is not None:
-                sibling_row['font'] = inner_font
-        att_class_config[sib_name] = sibling_row
-
-        # Bind per-display loop variables as default args so each closure
-        # captures the values rather than the names — ruff B023 / late-binding
-        # hazard if _paint were ever called after the loop iterates further.
-        def _paint(
-            items,
-            *,
-            _sib_name=sib_name, _sib_ref_id=sib_ref_id,
-            _start=start, _end=end, _fmt=fmt, _sep=sep, _missing=missing,
-            _start_ph=start_ph, _end_ph=end_ph,
-        ):
-            for ri in items:
-                start_attr = None
-                end_attr = None
-                for ra in ri.attributes:
-                    if ra.class_name == _start:
-                        start_attr = ra
-                    elif _end is not None and ra.class_name == _end:
-                        end_attr = ra
-                    if start_attr is not None and (_end is None or end_attr is not None):
-                        break
-
-                start_dt = _parse(start_attr.value_str) if start_attr is not None else None
-                end_dt = _parse(end_attr.value_str) if end_attr is not None else None
-
-                # Single-date mode
-                if _end is None:
-                    if start_dt is None:
-                        continue
-                    ri.attributes.append(ResolvedAttr(
-                        _sib_name, _sib_ref_id, start_dt.strftime(_fmt)
-                    ))
-                    continue
-
-                # Range mode
-                if start_dt is not None and end_dt is not None:
-                    rendered = f"{start_dt.strftime(_fmt)}{_sep}{end_dt.strftime(_fmt)}"
-                elif start_dt is None and end_dt is None:
-                    continue  # both missing → always skip
-                elif _missing == 'skip' or _missing == 'error':
-                    # 'error' was already surfaced at validate time; defensive skip here.
-                    continue
-                elif _missing == 'truncate':
-                    bound_dt = start_dt if start_dt is not None else end_dt
-                    rendered = bound_dt.strftime(_fmt)
-                else:  # 'substitute'
-                    left = start_dt.strftime(_fmt) if start_dt is not None else _start_ph
-                    right = end_dt.strftime(_fmt) if end_dt is not None else _end_ph
-                    rendered = f"{left}{_sep}{right}"
-
-                ri.attributes.append(ResolvedAttr(_sib_name, _sib_ref_id, rendered))
-
-        _paint(resolved_entities)
-        _paint(resolved_links)
-
-
-# ── Multi-attribute display templates ───────────────────────────────────────
+# ── Multi-attribute display synthesizers (attribute sibling + label) ─────────
 
 _DT_PARSE_FMTS = (
     '%Y-%m-%dT%H:%M:%S.%f',
@@ -739,62 +581,9 @@ class _SeparatorFormatter(string.Formatter):
         )
 
 
-def _display_template_target(disp: Any) -> str:
-    t = getattr(disp, 'target', None) or 'attribute'
-    return str(t).lower()
-
-
-def _display_template_attribute_name(disp: Any) -> Optional[str]:
-    """Effective synthesized AC name when ``target='attribute'``.
-
-    Defaults to ``'display'``. Returns ``None`` when ``target='label'`` since
-    no AC is synthesized in that mode.
-    """
-    if _display_template_target(disp) != 'attribute':
-        return None
-    name = getattr(disp, 'attribute_name', None)
-    return name if name else 'display'
-
-
-def expand_display_templates(
-    resolved_entities,
-    resolved_links,
-    displays,
-    attribute_classes,
-    builder,
-    att_class_config,
-):
-    """Apply each ``DisplayTemplate`` to every resolved entity/link.
-
-    For each entry:
-
-    1. Compute the per-source format-map dict from the item's
-       ``ResolvedAttr`` rows (matched by ``source.attribute``).
-    2. Apply the per-source ``missing`` policy: ``skip`` drops the item,
-       ``substitute`` uses ``placeholder``, ``error`` was already surfaced
-       at validate() time (defensive skip here).
-    3. Parse source values to ``datetime`` when their declared AC type is
-       ``datetime`` so format specs like ``{d:%d/%m/%Y}`` work.
-    4. Render via :class:`_SeparatorFormatter` so numeric format-spec
-       output honors ``decimal_separator`` / ``thousand_separator``.
-    5. Route the rendered string by ``target``:
-
-       - ``'attribute'``: register a text sibling AC named via
-         :func:`_display_template_attribute_name` and append a
-         ``ResolvedAttr`` to the item.
-       - ``'label'``: write to ``item.label`` when empty or when
-         ``override_existing`` is ``True``.
-
-    Source AC visibility is NOT mutated — validation already enforces
-    ``visible=False`` on source ACs when ``target='attribute'``.
-    """
-    from .resolved import ResolvedAttr
-
-    if not displays:
-        return
-
-    # Index AC types so we know which source values to parse as datetime.
-    ac_type_by_name: Dict[str, str] = {}
+def _ac_type_index(attribute_classes) -> Dict[str, str]:
+    """Map AC name → lowercased type string (for datetime source detection)."""
+    out: Dict[str, str] = {}
     for ac in attribute_classes:
         if not ac.name:
             continue
@@ -802,121 +591,222 @@ def expand_display_templates(
         if hasattr(t, 'value'):
             t = t.value
         if t is not None:
-            ac_type_by_name[ac.name] = str(t).lower()
+            out[ac.name] = str(t).lower()
+    return out
 
+
+def _display_kind(disp: Any) -> str:
+    return (getattr(disp, 'kind', None) or 'both').lower()
+
+
+def _item_kind_matches(kind: str, is_link: bool) -> bool:
+    """True when a ``kind`` filter ('entity'|'link'|'both') applies to an item."""
+    return kind != 'entity' if is_link else kind != 'link'
+
+
+def _display_source_metas(sources, ac_type_by_name):
+    """Cache per-source resolution tuples for one display entry.
+
+    Each tuple: ``(attribute_name, alias_key, missing_policy, placeholder, is_datetime)``.
+    """
+    metas: List[Tuple[str, str, str, str, bool]] = []
+    for src in sources:
+        attr_name = getattr(src, 'attribute', None)
+        if not attr_name:
+            continue
+        alias = getattr(src, 'alias', None) or attr_name
+        missing = getattr(src, 'missing', None) or 'skip'
+        placeholder = getattr(src, 'placeholder', None) or ''
+        is_dt = ac_type_by_name.get(attr_name) == 'datetime'
+        metas.append((attr_name, alias, missing, placeholder, is_dt))
+    return metas
+
+
+def _render_display(ri, template, source_metas, formatter) -> Optional[str]:
+    """Render one item through a template; return ``None`` to skip the item.
+
+    Applies per-source missing policy (``skip``/``error`` → skip the item,
+    ``substitute`` → placeholder), parses datetime sources, and coerces
+    numeric strings so format specs operate on the numeric value.
+    """
+    attr_lookup: Dict[str, str] = {ra.class_name: ra.value_str for ra in ri.attributes}
+    fmt_dict: Dict[str, Any] = {}
+    for attr_name, alias, missing, placeholder, is_dt in source_metas:
+        raw = attr_lookup.get(attr_name)
+        if raw is None:
+            if missing == 'skip' or missing == 'error':
+                # 'error' was already surfaced at validate time; defensive skip.
+                return None
+            fmt_dict[alias] = placeholder  # 'substitute'
+            continue
+        if is_dt:
+            val: Any = _parse_datetime_value(raw)
+        else:
+            # int first (preserves `:d`), then float, else the raw string.
+            try:
+                val = int(raw)
+            except (TypeError, ValueError):
+                try:
+                    val = float(raw)
+                except (TypeError, ValueError):
+                    val = raw
+        fmt_dict[alias] = val
+    try:
+        return formatter.vformat(template, (), fmt_dict)
+    except (ValueError, KeyError, IndexError, TypeError):
+        # Defensive — validate() catches static template syntax errors; this
+        # covers runtime corner cases like a value/format-spec type mismatch.
+        return None
+
+
+def expand_display_attributes(
+    resolved_entities,
+    resolved_links,
+    displays,
+    attribute_classes,
+    builder,
+    att_class_config,
+):
+    """Synthesize text-sibling AttributeClasses from ``display_attribute`` entries.
+
+    Each entry renders its template into a sibling AC named ``attribute_name``.
+    Entries are scoped by ``kind`` (entity/link/both) and optional ``type``;
+    for a given item and ``attribute_name`` a type-scoped entry wins over an
+    untyped one (genuine ties are rejected by validation).
+
+    Source AC visibility is NOT mutated — validation enforces ``visible=False``
+    on source ACs.
+    """
+    from .resolved import ResolvedAttr
+
+    if not displays:
+        return
+
+    ac_type = _ac_type_index(attribute_classes)
+    # (kind, type_filter, attr_name, sib_ref_id, template, source_metas, formatter)
+    metas: List[tuple] = []
+    for disp in displays:
+        template = getattr(disp, 'template', None)
+        sources = getattr(disp, 'sources', None) or []
+        attr_name = getattr(disp, 'attribute_name', None)
+        if not template or not sources or not attr_name:
+            # Validation already flagged this entry.
+            continue
+
+        sib_ref_id = builder._att_class_id(attr_name, 'AttText')
+        sibling_row: Dict[str, Any] = {'type': 'text', 'visible': True, 'show_value': True}
+        inner = getattr(disp, 'attribute_class', None)
+        if inner is not None:
+            for fn in ('prefix', 'suffix', 'decimal_places', 'show_value',
+                       'show_date', 'show_time', 'show_seconds', 'show_if_set',
+                       'show_class_name', 'show_symbol', 'visible',
+                       'is_user', 'user_can_add', 'user_can_remove',
+                       'icon_file', 'semantic_type',
+                       'merge_behaviour', 'paste_behaviour'):
+                v = getattr(inner, fn, None)
+                if v is not None:
+                    sibling_row[fn] = v
+            inner_font = getattr(inner, 'font', None)
+            if inner_font is not None:
+                sibling_row['font'] = inner_font
+        att_class_config[attr_name] = sibling_row
+
+        formatter = _SeparatorFormatter(
+            getattr(disp, 'decimal_separator', None) or '.',
+            getattr(disp, 'thousand_separator', None) or ',',
+        )
+        metas.append((
+            _display_kind(disp), getattr(disp, 'type', None), attr_name,
+            sib_ref_id, template, _display_source_metas(sources, ac_type), formatter,
+        ))
+
+    def _paint(items, is_link):
+        for ri in items:
+            item_type = ri.link_type if is_link else ri.entity_type
+            # Most-specific applicable entry per attribute_name (typed > untyped).
+            best: Dict[str, Tuple[int, tuple]] = {}
+            for kind, tfilter, attr_name, sib_ref_id, template, smetas, fmt in metas:
+                if not _item_kind_matches(kind, is_link):
+                    continue
+                if tfilter is not None and tfilter != item_type:
+                    continue
+                spec = 1 if tfilter is not None else 0
+                cur = best.get(attr_name)
+                if cur is None or spec > cur[0]:
+                    best[attr_name] = (spec, (attr_name, sib_ref_id, template, smetas, fmt))
+            for _attr_name, (_spec, (an, sib_ref_id, template, smetas, fmt)) in best.items():
+                rendered = _render_display(ri, template, smetas, fmt)
+                if rendered is not None:
+                    ri.attributes.append(ResolvedAttr(an, sib_ref_id, rendered))
+
+    _paint(resolved_entities, False)
+    _paint(resolved_links, True)
+
+
+def expand_display_labels(
+    resolved_entities,
+    resolved_links,
+    displays,
+    attribute_classes,
+):
+    """Render ``display_label`` entries into entity/link labels.
+
+    Entries are scoped by ``kind`` / ``type``; for a given item the
+    most-specific applicable entry wins (type-scoped over untyped; genuine
+    ties are rejected by validation). ``override_existing`` controls whether a
+    pre-existing label is replaced (default keeps the explicit label).
+    """
+    if not displays:
+        return
+
+    ac_type = _ac_type_index(attribute_classes)
+    # (kind, type_filter, template, source_metas, formatter, override_existing)
+    metas: List[tuple] = []
     for disp in displays:
         template = getattr(disp, 'template', None)
         sources = getattr(disp, 'sources', None) or []
         if not template or not sources:
             # Validation already flagged this entry.
             continue
+        formatter = _SeparatorFormatter(
+            getattr(disp, 'decimal_separator', None) or '.',
+            getattr(disp, 'thousand_separator', None) or ',',
+        )
+        metas.append((
+            _display_kind(disp), getattr(disp, 'type', None), template,
+            _display_source_metas(sources, ac_type), formatter,
+            bool(getattr(disp, 'override_existing', False)),
+        ))
 
-        target = _display_template_target(disp)
-        sib_name = _display_template_attribute_name(disp)
-        sib_ref_id: Optional[str] = None
-        dec_sep = getattr(disp, 'decimal_separator', None) or '.'
-        thou_sep = getattr(disp, 'thousand_separator', None) or ','
-        override_existing = bool(getattr(disp, 'override_existing', False))
-
-        formatter = _SeparatorFormatter(dec_sep, thou_sep)
-
-        # For target='attribute': register the synthesized sibling AC.
-        if target == 'attribute' and sib_name:
-            sib_ref_id = builder._att_class_id(sib_name, 'AttText')
-            sibling_row: Dict[str, Any] = {
-                'type': 'text',
-                'visible': True,
-                'show_value': True,
-            }
-            inner = getattr(disp, 'attribute_class', None)
-            if inner is not None:
-                for fn in ('prefix', 'suffix', 'decimal_places', 'show_value',
-                           'show_date', 'show_time', 'show_seconds', 'show_if_set',
-                           'show_class_name', 'show_symbol', 'visible',
-                           'is_user', 'user_can_add', 'user_can_remove',
-                           'icon_file', 'semantic_type',
-                           'merge_behaviour', 'paste_behaviour'):
-                    v = getattr(inner, fn, None)
-                    if v is not None:
-                        sibling_row[fn] = v
-                inner_font = getattr(inner, 'font', None)
-                if inner_font is not None:
-                    sibling_row['font'] = inner_font
-            att_class_config[sib_name] = sibling_row
-
-        # Per-source resolution metadata cached once per display.
-        source_metas: List[Tuple[str, str, str, str, bool]] = []
-        # (attribute_name, alias_key, missing_policy, placeholder, is_datetime)
-        for src in sources:
-            attr_name = getattr(src, 'attribute', None)
-            if not attr_name:
+    def _paint(items, is_link):
+        for ri in items:
+            item_type = ri.link_type if is_link else ri.entity_type
+            best = None  # (spec, template, source_metas, formatter, override)
+            for kind, tfilter, template, smetas, fmt, override in metas:
+                if not _item_kind_matches(kind, is_link):
+                    continue
+                if tfilter is not None and tfilter != item_type:
+                    continue
+                spec = 1 if tfilter is not None else 0
+                if best is None or spec > best[0]:
+                    best = (spec, template, smetas, fmt, override)
+            if best is None:
                 continue
-            alias = getattr(src, 'alias', None) or attr_name
-            missing = getattr(src, 'missing', None) or 'skip'
-            placeholder = getattr(src, 'placeholder', None) or ''
-            is_dt = ac_type_by_name.get(attr_name) == 'datetime'
-            source_metas.append((attr_name, alias, missing, placeholder, is_dt))
+            _spec, template, smetas, fmt, override = best
+            # A resolved entity label defaults to its identity (id) and a link
+            # label defaults to ''. Treat either as "not explicitly set" so a
+            # display_label fills it; a genuinely user-set label is preserved
+            # unless override_existing.
+            identity = getattr(ri, 'identity', None)
+            explicit = bool(ri.label) and ri.label != identity
+            if explicit and not override:
+                continue
+            rendered = _render_display(ri, template, smetas, fmt)
+            if rendered is not None:
+                ri.label = rendered
 
-        def _paint(
-            items,
-            *,
-            _target=target, _sib_name=sib_name, _sib_ref_id=sib_ref_id,
-            _template=template, _sources=source_metas,
-            _formatter=formatter, _override=override_existing,
-        ):
-            for ri in items:
-                # Build attribute lookup once per item.
-                attr_lookup: Dict[str, str] = {}
-                for ra in ri.attributes:
-                    attr_lookup[ra.class_name] = ra.value_str
-
-                fmt_dict: Dict[str, Any] = {}
-                skip_item = False
-                for attr_name, alias, missing, placeholder, is_dt in _sources:
-                    raw = attr_lookup.get(attr_name)
-                    if raw is None:
-                        if missing == 'skip' or missing == 'error':
-                            skip_item = True
-                            break
-                        # 'substitute'
-                        fmt_dict[alias] = placeholder
-                        continue
-                    # Convert numeric strings back to int/float so {:,.2f}
-                    # spec works on the numeric value rather than the string.
-                    val: Any = raw
-                    if is_dt:
-                        val = _parse_datetime_value(raw)
-                    else:
-                        # Try int first (preserves integerness for `:d`),
-                        # then float; fall back to the raw string.
-                        try:
-                            val = int(raw)
-                        except (TypeError, ValueError):
-                            try:
-                                val = float(raw)
-                            except (TypeError, ValueError):
-                                val = raw
-                    fmt_dict[alias] = val
-
-                if skip_item:
-                    continue
-
-                try:
-                    rendered = _formatter.vformat(_template, (), fmt_dict)
-                except (ValueError, KeyError, IndexError, TypeError):
-                    # Defensive skip — validate() catches static template
-                    # syntax errors; this branch covers runtime corner cases
-                    # like a value whose type doesn't match its format spec.
-                    continue
-
-                if _target == 'attribute' and _sib_name and _sib_ref_id is not None:
-                    ri.attributes.append(ResolvedAttr(_sib_name, _sib_ref_id, rendered))
-                elif _target == 'label':
-                    if not ri.label or _override:
-                        ri.label = rendered
-
-        _paint(resolved_entities)
-        _paint(resolved_links)
+    _paint(resolved_entities, False)
+    _paint(resolved_links, True)
 
 
 # ── Link styling: scales, intensity, categorical ────────────────────────────

@@ -423,96 +423,74 @@ attribute_classes:
 Full field reference + valid `merge_behaviour` / `paste_behaviour` values per
 type: [attributes.md](../reference/attributes.md).
 
-#### Rendering datetime attributes on the canvas
+#### Display synthesizers (`display_attribute` / `display_label`)
 
-ANB v9 does not render datetime values on the canvas after import. Datetime
-ACs must have `visible: false`; a separate `extra_cfg.date_attribute_displays`
-entry synthesises a text sibling AttributeClass whose formatted value
-renders correctly. Range mode (`start` + `end`) is also supported.
+Two keyed-list synthesizers under `extra_cfg` render source attributes through
+a template. `display_attribute` emits a synthesized text-sibling AttributeClass;
+`display_label` writes the entity/link label. Each entry needs an explicit `key`
+(its identity for config layering / lock / delete) and may scope with `kind`
+(`entity` | `link` | `both`, default `both`) and an optional `type` filter.
+
+This is also the **datetime canvas-render workaround**: ANB v9 won't show a
+datetime value on the canvas, so keep the datetime AC `visible: false` and
+synthesise a text sibling. Datetime sources auto-parse, so `{d:%Y-%m-%d}` works.
 
 ```yaml
 attribute_classes:
   - name: EventDate
     type: datetime
     visible: false
-  - name: investigation_start
-    type: datetime
-    visible: false
-  - name: investigation_end
-    type: datetime
-    visible: false
-
-settings:
-  extra_cfg:
-    date_attribute_displays:
-      # Single-date workaround
-      - start: EventDate
-        format: "%d/%m/%Y"
-
-      # Range with substitute policy for ongoing investigations
-      - start: investigation_start
-        end: investigation_end
-        name: Period
-        format: "%Y-%m-%d"
-        separator: " – "
-        missing: substitute
-        end_placeholder: ongoing
-```
-
-See [attributes.md → Date attribute displays](../reference/attributes.md#date-attribute-displays).
-
-#### Multi-attribute display templates
-
-`extra_cfg.display_templates` is the general synthesizer: combine N source
-attribute values into one formatted string via a Python f-string-style
-template, and route the output to either a synthesized text-sibling AC
-(`target: attribute`) or the entity/link label (`target: label`).
-
-```yaml
-attribute_classes:
   - name: transaction_count
     type: number
     visible: false
   - name: total_value
     type: number
     visible: false
+  - name: age
+    type: number
 
 settings:
   extra_cfg:
-    display_templates:
-      # Sibling AC: replaces the two-row attribute stack with one row.
-      - target: attribute
+    display_attribute:
+      # Datetime canvas-render workaround (single date).
+      - key: event_date
+        attribute_name: Event Date
+        template: "{d:%d/%m/%Y}"
+        sources:
+          - {attribute: EventDate, alias: d}
+
+      # Combine a count + a value into one row, BR number formatting.
+      - key: activity
         attribute_name: Activity
         template: "{qty}x R$ {amount:,.2f}"
         decimal_separator: ','            # BR: "100.000,50"
         thousand_separator: '.'
         sources:
-          - attribute: transaction_count
-            alias: qty
-          - attribute: total_value
-            alias: amount
+          - {attribute: transaction_count, alias: qty}
+          - {attribute: total_value, alias: amount}
 
-      # Label: same formatted string on the link's label instead.
-      # Manual labels are preserved (override_existing: false default).
-      - target: label
-        template: "{qty}x R$ {amount:,.2f}"
+    display_label:
+      # Per-type label — only Person entities (manual labels preserved).
+      - key: person_lbl
+        kind: entity
+        type: Person
+        template: "Person ({age})"
         sources:
-          - attribute: transaction_count
-            alias: qty
-          - attribute: total_value
-            alias: amount
+          - {attribute: age}
 ```
 
-Template syntax: exactly what you'd write inside a Python f-string,
-without the `f` prefix (the `f` is Python source syntax, not part of the
-template). Supports format specs like `{x:,.2f}`, `{x:>10}`, and
-`{d:%d/%m/%Y}` for datetime sources.
+Template syntax: exactly what you'd write inside a Python f-string, without the
+`f` prefix. Supports format specs like `{x:,.2f}`, `{x:>10}`, and
+`{d:%d/%m/%Y}` (datetime sources). The `alias` field is required when the
+attribute name isn't a valid Python identifier (e.g. `"quantia em real"`).
+Source datetime ACs **must** be `visible: false`. For `display_attribute`, every
+source AC must be `visible: false`.
 
-The `alias` field on each source is required when the attribute name
-isn't a valid Python identifier (e.g. `"quantia em real"` with spaces).
-For identifier-shaped names, alias defaults to the attribute name.
+> Scope by `kind`/`type` only — these are structural metadata. Conditioning on
+> attribute *values* is out of scope; precompute a synthetic attribute or type
+> upstream.
 
-See [attributes.md → Display templates](../reference/attributes.md#display-templates).
+See [attributes.md → Display synthesizers](../reference/attributes.md#display-synthesizers).
 
 ---
 
@@ -1058,8 +1036,8 @@ attribute_classes:
 ```
 
 Same applies to `suffix:`, and to any other string field where leading or
-trailing whitespace is meaningful (`separator:` on
-`extra_cfg.date_attribute_displays`, etc). The Python API preserves the
+trailing whitespace is meaningful (a `template:` separator like `" - "` on
+`extra_cfg.display_attribute`, etc). The Python API preserves the
 space verbatim — this is a YAML parsing quirk, not anxwritter behaviour.
 JSON is unaffected: `"prefix": "R$ "` round-trips correctly.
 

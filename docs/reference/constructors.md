@@ -179,41 +179,73 @@ chart = ANXChart.from_config('{"entity_types": [...]}')
 
 ### Layered configs
 
-Apply multiple config files in order. Each layer is merged into the chart by default;
-pass `replace=True` to make a layer wipe the sections it mentions instead of merging
-into them.
+Apply multiple config files in order. Each layer **field-merges** into the chart by
+default. Three opt-in knobs change a layer's behaviour: `wipe_previous=True`
+(clear each section the layer mentions, then merge), `operation='delete'`
+(subtract by shape), and `lock=True` (freeze the leaves this layer declares).
 
 ```python
 chart = ANXChart()
 chart.apply_config_file('base.yaml')
-chart.apply_config_file('project_overrides.yaml')   # merge (default)
-chart.apply_config_file('narrow.yaml', replace=True)  # opt-in: wipe-and-set per section
+chart.apply_config_file('project_overrides.yaml')          # field-merge (default)
+chart.apply_config_file('narrow.yaml', wipe_previous=True)  # clear-and-set per section
+chart.apply_config_file('strip.yaml', operation='delete')   # remove entries/fields
 
 # Now add entities and links:
 chart.add_icon(id='Alice', type='Person')
 ```
 
-#### Per-section merge rules (default, `replace=False`)
+#### Per-section merge rules (default)
 
 | Section | Rule |
 |---|---|
-| `settings` | Deep merge — only fields the layer sets overwrite. |
-| `entity_types`, `link_types`, `attribute_classes`, `datetime_formats`, `semantic_entities/links/properties`, `strengths.items` | Upsert by `name` — same name in a later layer replaces the entry, new names are appended, no duplicates. |
-| `strengths.default`, `grades_*.default` | Later wins if non-None, otherwise the earlier layer's default is kept. A layer can extend items without re-stating `default`. |
-| `source_types`, `grades_one/two/three.items` | Append with **case-sensitive exact-text dedup**. `'Witness'` and `'witness'` both end up in the merged list — normalize strings if you layer across teams. |
-| `legend_items`, `palettes` | Always append — no natural key, multiple rows with the same name are valid. |
+| `settings` | Deep merge per leaf — only leaves the layer sets overwrite. |
+| `entity_types`, `link_types`, `attribute_classes`, `datetime_formats`, `semantic_entities/links/properties`, `strengths.items`, `extra_cfg.display_attribute` / `display_label` | **Field-merge by identity** (`name` / `key`) — a later layer's declared fields merge into the same-identity entry; omitted fields are retained; new identities are appended. |
+| `strengths.default`, `grades_*.default` | Later wins if non-None, otherwise the earlier layer's default is kept. |
+| `source_types`, `grades_one/two/three.items` | Append with **case-sensitive exact-text dedup**. |
+| `legend_items`, `palettes` | Always append — no natural key. |
 
-#### Per-section replace rules (`replace=True`)
+> **Note:** the public single-call builders (`add_entity_type`, `add_attribute_class`,
+> …) still REPLACE wholesale on a repeated `name`. Field-merge applies only to config
+> *layering* (`apply_config*`).
 
-When `replace=True`, every section the layer mentions is replaced wholesale.
-Sections the layer does not mention survive untouched. The classic use case:
-narrowing a base catalog down to a project-specific subset without merging.
+#### `wipe_previous=True`
+
+Clears every section the layer mentions, then merges. Sections the layer does not
+mention survive untouched. Use to *narrow* a base catalog to a subset.
 
 ```python
 chart.apply_config_file('full_catalog.yaml')
-# Drop everything except the source_types this project actually uses.
-chart.apply_config({'source_types': ['Witness', 'Officer']}, replace=True)
+chart.apply_config({'source_types': ['Witness', 'Officer']}, wipe_previous=True)
 # entity_types, grades, settings, etc. from full_catalog.yaml all survive.
+```
+
+#### `lock=True` (immutable baselines)
+
+Freezes exactly the leaves the layer declares. A later config layer that changes a
+locked leaf records a `locked_override` validation error and the locked value is
+kept (a later layer may still *add* unrelated leaves/entries). Built for "an org
+config the user can't alter, then a user preset layered on top":
+
+```python
+chart.apply_config_file('org.yaml', lock=True, source_name='org')
+chart.apply_config(user_preset, source_name='user_preset')
+errors = chart.validate()   # any override of an org-locked leaf surfaces here,
+                            # tagged with source='user_preset' + config_source='org'
+```
+
+#### `operation='delete'`
+
+Subtract by shape (the mirror of merge): a key with a null/empty value removes the
+whole section/entry; a list entry with only its identity removes that entry; an entry
+naming fields (which must be `null`) unsets those fields. A non-null value on a
+non-identity field is a `delete_contract` error; deleting an absent target is a no-op.
+`operation='delete'` combined with `lock` or `wipe_previous` is a `ValueError`.
+
+```python
+chart.apply_config({'attribute_classes': [{'name': 'CPF'}]}, operation='delete')      # drop CPF
+chart.apply_config({'attribute_classes': [{'name': 'CPF', 'prefix': None}]},
+                   operation='delete')  # keep CPF, unset just its prefix
 ```
 
 ### Applying config to an existing chart
@@ -303,11 +335,10 @@ When **no config** is applied (`_has_config` is `False`), conflict detection is 
 
 ---
 
-## CLI `--config` and `--config-replace`
+## CLI `--config` / `--config-wipe` / `--config-delete` / `--config-lock`
 
-`--config` and `--config-replace` can both be repeated and freely interleaved;
-order is preserved across the two flags. Each layer applies its own merge mode
-at the moment it is processed.
+All four flags can be repeated and freely interleaved; order is preserved across
+them. Each layer applies its own mode at the moment it is processed.
 
 ```bash
 # Single config
@@ -316,8 +347,11 @@ anxwritter --config org.yaml data.json -o output/chart.anx
 # Layered merges (applied in order)
 anxwritter --config base.yaml --config project.yaml data.json -o output/chart.anx
 
-# Mix merge and replace — base merges in, narrow replaces sections it mentions
-anxwritter --config base.yaml --config-replace narrow.yaml data.json -o output/chart.anx
+# Mix merge and wipe — base merges in, narrow clears sections it mentions then sets them
+anxwritter --config base.yaml --config-wipe narrow.yaml data.json -o output/chart.anx
+
+# Locked org baseline + user preset (preset may add, not alter org-locked leaves)
+anxwritter --config-lock org.yaml --config user.yaml --validate-only data.json
 
 # Config-only (no data file)
 anxwritter --config org.yaml -o output/empty_chart.anx

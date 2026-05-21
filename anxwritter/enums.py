@@ -255,19 +255,6 @@ class MissingPolicy(str, Enum):
     ERROR    = 'error'
 
 
-class DisplayTarget(str, Enum):
-    """Output slot for a ``DisplayTemplate``.
-
-    - ``attribute`` (default): emit a synthesized text-sibling AttributeClass
-      named via ``attribute_name`` (default ``'display'``).
-    - ``label``: write the formatted string into the entity/link ``label``
-      field. Respects ``override_existing`` (default ``False``) — items with
-      an explicit label are preserved unless overridden.
-    """
-    ATTRIBUTE = 'attribute'
-    LABEL     = 'label'
-
-
 #: All valid shading color names accepted by i2 ANB (40 colors).
 VALID_SHADING_COLORS: frozenset = frozenset([
     'Black', 'Brown', 'Olive Green', 'Dark Green', 'Dark Teal', 'Dark Blue',

@@ -82,21 +82,22 @@ def test_link_styling_builds(link_styling_module, tmp_path, monkeypatch):
 
 
 @pytest.fixture(scope="module")
-def date_attribute_displays_module():
+def display_synthesizers_module():
     sys.path.insert(0, str(EXAMPLES_DIR.parent))
     try:
-        mod = importlib.import_module("examples.date_attribute_displays_example")
+        mod = importlib.import_module("examples.display_synthesizers_example")
     finally:
         sys.path.pop(0)
     return mod
 
 
-def test_date_attribute_displays_example_builds(date_attribute_displays_module, tmp_path, monkeypatch):
-    """Single-date workaround + range variants all build clean."""
+def test_display_synthesizers_example_builds(display_synthesizers_module, tmp_path, monkeypatch):
+    """display_attribute (incl. single-date / range patterns) + display_label
+    + kind/type scoping variants all build clean."""
     monkeypatch.chdir(tmp_path)
 
     paths = []
-    for name, builder in date_attribute_displays_module.BUILDERS.items():
+    for name, builder in display_synthesizers_module.BUILDERS.items():
         path = builder().to_anx(tmp_path / name)
         paths.append(Path(path))
 

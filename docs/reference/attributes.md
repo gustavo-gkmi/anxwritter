@@ -108,404 +108,162 @@ Every field is declared `Optional[...] = None` on the dataclass. The "ANB defaul
 > datetime values on the canvas; the chrome would render with no value.
 > Validation rejects `type=datetime` + `visible=True` with
 > `datetime_ac_forbids_visible`. Use
-> [`extra_cfg.date_attribute_displays`](#date-attribute-displays) to
-> synthesise a text sibling that renders the formatted date.
+> [`extra_cfg.display_attribute`](#display-synthesizers) with a
+> `"{d:%Y-%m-%d}"`-style template to synthesise a text sibling that renders
+> the formatted date.
 
 ---
 
-## Date attribute displays {#date-attribute-displays}
+## Display synthesizers {#display-synthesizers}
 
-ANB v9 does not render datetime attribute values on the canvas after `.anx`
-import. The values load correctly -- they appear in the properties panel and
-work for time-wheel, sort, and filter -- but on the canvas, only the
-surrounding chrome (symbol, prefix, suffix, class name) appears next to each
-entity/link. The date itself is blank.
+Two chart-level synthesizers under `extra_cfg` turn raw attribute values into
+analyst-friendly presentation, declaratively:
 
-`extra_cfg.date_attribute_displays` is an opt-in chart-level synthesizer that
-declares one or more text-sibling AttributeClasses derived from datetime ACs.
-The synthesizer also supports **date ranges** -- two datetime ACs combined
-into one canvas-rendered string -- which the single-AC workaround on its own
-couldn't express.
+- **`extra_cfg.display_attribute`** -- render one or more source attributes
+  through a template into a synthesized **text-sibling `AttributeClass`**.
+- **`extra_cfg.display_label`** -- render straight into the entity/link
+  **label**.
 
-### What it does
+Both are keyed lists: each entry carries an explicit **`key`** (its identity
+for config layering / `lock` / `delete`) and optional **`kind`** / **`type`**
+scoping. They sit in the same family as `geo_map` and `styling`.
 
-For each `DateAttributeDisplay` entry, anxwritter:
+### Template syntax
 
-1. Computes the sibling AC's name (the entry's `name` field if set, else
-   `f"{start}{suffix}"` with suffix defaulting to `' (display)'` in
-   single-date mode).
-2. Registers the sibling as a text AttributeClass (`visible=True`,
-   `show_value=True` by default; override via `attribute_class=...`).
-3. Walks every entity/link in the chart and appends a sibling attribute
-   whose value is the parent's datetime(s) formatted via `strftime`
-   (default `'%Y-%m-%d'`).
+`template` is the body of a Python f-string format spec (the `f` prefix is
+Python syntax, not part of the template). It is evaluated with
+`str.format_map` -- **no code execution**, only `{alias}` and
+`{alias:format_spec}` substitutions such as `{x:,.2f}`, `{x:>10}`,
+`{d:%d/%m/%Y}`.
 
-The original datetime ACs are still emitted and ANB still loads them. They
-**must have `visible=False`** -- validation requires it explicitly. ANB never
-renders the datetime value on the canvas, so leaving the parent visible
-would render the chrome with no value. The synthesised sibling carries the
-canvas-rendered text.
+Each `DisplaySource` names a source `attribute` and an `alias` used in the
+template. `alias` is **required** when the attribute name isn't a valid Python
+identifier (spaces, accents, etc.), and otherwise optional (the attribute name
+is reused). Per-source `missing` policy is `'skip'` (default -- drop the whole
+rendered output for that item), `'substitute'` (use `placeholder`), or
+`'error'` (a `validate()` error per missing item).
 
-### Single-date mode
+Numeric format-spec output honours top-level `decimal_separator` /
+`thousand_separator` (e.g. BR-style `100.000,50`); literal separators in the
+static template text are untouched. Source ACs declared `type=datetime` are
+auto-parsed back to a `datetime`, so `{d:%Y-%m-%d}` works directly.
 
-```python
-from anxwritter import ANXChart, AttributeClass, Font
+### `display_attribute`
 
-chart = ANXChart()
-chart.add_attribute_class(name='event_date', type='datetime', visible=False)
-chart.add_date_attribute_display(
-    start='event_date',
-    format='%d/%m/%Y',
-    attribute_class=AttributeClass(prefix='Event: ', font=Font(italic=True)),
-)
-chart.add_icon(id='A', type='Person',
-               attributes={'event_date': datetime(2024, 1, 15)})
-# Canvas shows: Event: 15/01/2024
-```
-
-The synthesised AC's name auto-derives as `event_date (display)`. Set
-`name='Event'` on the display to override.
-
-### Range mode
+Synthesizes a text AC named by `attribute_name` (**required**) and appends the
+rendered value to each matching item. **Source ACs must declare
+`visible=False`** so the raw value isn't double-rendered alongside the sibling
+(validation enforces this). Sibling styling comes from the optional inner
+`attribute_class` template (its `.name` / `.type` must be `None` -- the sibling
+is auto-named and auto-typed text).
 
 ```python
-chart = ANXChart()
-chart.add_attribute_class(name='investigation_start', type='datetime', visible=False)
-chart.add_attribute_class(name='investigation_end',   type='datetime', visible=False)
-chart.add_date_attribute_display(
-    start='investigation_start',
-    end='investigation_end',
-    name='Period',                 # required in range mode
-    format='%Y-%m-%d',
-    separator=' – ',
+chart.add_attribute_class(name="tx_count", type="number", visible=False)
+chart.add_attribute_class(name="total", type="number", visible=False)
+chart.add_display_attribute(
+    key="activity",
+    attribute_name="Activity",
+    template="{q}x  R$ {amt:,.2f}",
+    decimal_separator=",", thousand_separator=".",
+    sources=[
+        {"attribute": "tx_count", "alias": "q"},
+        {"attribute": "total", "alias": "amt"},
+    ],
 )
-chart.add_icon(id='Case A', type='Event',
-               attributes={'investigation_start': datetime(2023, 6, 1),
-                           'investigation_end': datetime(2023, 12, 31)})
-# Canvas shows: 2023-06-01 – 2023-12-31
 ```
 
-`name` is required in range mode -- there's no single source AC to
-auto-derive from.
-
-### Missing bounds
-
-By default, items missing one bound emit no sibling row for that item. Four
-policies are available via `missing=`:
-
-| Policy | End missing (start present) | Start missing (end present) | Both missing |
-|---|---|---|---|
-| `'skip'` (default) | no sibling row | no sibling row | no sibling row |
-| `'substitute'` | `"2024-01-15 – {end_placeholder}"` | `"{start_placeholder} – 2024-12-31"` | no sibling row |
-| `'truncate'` | `"2024-01-15"` (no separator) | `"2024-12-31"` | no sibling row |
-| `'error'` | `validate()` row at `entities[i].attributes.<end>` | symmetric | no error |
-
-Per-bound placeholders default to `''`; set them via `start_placeholder=`
-and `end_placeholder=`. Common values: `'?'`, `'…'`, `'N/A'`, `'ongoing'`.
+**Datetime canvas-render workaround.** Because a `datetime` AC can't be
+`visible=True`, render the date as a text sibling -- a single source for one
+date, or two sources for a range:
 
 ```python
-chart.add_date_attribute_display(
-    start='investigation_start', end='investigation_end', name='Period',
-    missing='substitute', end_placeholder='ongoing',
+chart.add_attribute_class(name="start_dt", type="datetime", visible=False)
+chart.add_attribute_class(name="end_dt", type="datetime", visible=False)
+chart.add_display_attribute(
+    key="period",
+    attribute_name="Investigation Period",
+    template="{s:%Y-%m-%d} - {e:%Y-%m-%d}",
+    sources=[
+        {"attribute": "start_dt", "alias": "s"},
+        {"attribute": "end_dt", "alias": "e",
+         "missing": "substitute", "placeholder": "ongoing"},
+    ],
 )
-# Open investigation (no end_date): Canvas shows "2024-01-10 – ongoing"
 ```
 
-### YAML form
+### `display_label`
 
-```yaml
-attribute_classes:
-  - name: investigation_start
-    type: datetime
-    visible: false
-  - name: investigation_end
-    type: datetime
-    visible: false
+Renders into `item.label`. By default a manually-set label is preserved
+(explicit wins over calculated); set `override_existing=True` to replace it. An
+entity whose label defaults to its id, or a link with no label, counts as
+"unset" and is filled. No `visible=False` constraint on source ACs (nothing is
+synthesized).
 
-settings:
-  extra_cfg:
-    date_attribute_displays:
-      - start: investigation_start
-        end: investigation_end
-        name: Period
-        format: '%Y-%m-%d'
-        separator: ' – '
-        missing: substitute
-        end_placeholder: ongoing
+```python
+chart.add_display_label(
+    key="person_lbl", kind="entity", type="Person",
+    template="Person ({age})",
+    sources=[{"attribute": "age"}],
+)
 ```
 
-### `DateAttributeDisplay` fields
+### `kind` / `type` scoping
+
+`kind` (`'entity'` | `'link'` | `'both'`, default `'both'`) and optional `type`
+(a registered entity/link type name) select which items an entry paints. For a
+given slot (the label, or a given `attribute_name`) a **`type`-scoped entry
+beats an untyped one** (specificity). Two entries at the same specificity tier
+that could paint the same slot are a `display_overlap_conflict` validation
+error -- scope them to disjoint types or merge them.
+
+> **Scope policy (important).** `kind`/`type` filter by *structural metadata*
+> only -- a finite, config-time-known set. Conditioning on attribute *values*
+> (ranges, regex, comparisons, compound predicates) is **out of scope**:
+> precompute a synthetic attribute or entity/link type upstream and scope on
+> that. This keeps the synthesizers pure functions, not a rules engine.
+
+### `DisplayAttribute` fields
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `start` | `Optional[str]` | -- (required) | Name of the source datetime AC. |
-| `end` | `Optional[str]` | `None` | Range mode: name of the end-date AC. Must differ from `start`. |
-| `name` | `Optional[str]` | auto | Sibling AC name. Required in range mode; auto-derived as `f"{start}{suffix}"` in single-date mode. |
-| `suffix` | `Optional[str]` | `' (display)'` | Used only when `name` is None (single-date mode). |
-| `format` | `Optional[str]` | `'%Y-%m-%d'` | `strftime` format applied to both bounds. |
-| `separator` | `Optional[str]` | `' - '` | Range mode only. |
-| `missing` | `Optional[str]` | `'skip'` | One of `skip` / `substitute` / `truncate` / `error`. |
-| `start_placeholder` | `Optional[str]` | `''` | `substitute` mode: text for missing start bound. |
-| `end_placeholder` | `Optional[str]` | `''` | `substitute` mode: text for missing end bound. |
-| `attribute_class` | `Optional[AttributeClass]` | `None` | Styling template for the sibling AC. Inner `.name` and `.type` must be `None` -- the sibling is auto-named and auto-typed as text. No inheritance from the source ACs. |
+| `key` | `str` | -- (required) | Identity for config layering / lock / delete. |
+| `attribute_name` | `str` | -- (required) | Name of the synthesized text-sibling AC. |
+| `kind` | `str` | `'both'` | `'entity'` / `'link'` / `'both'`. |
+| `type` | `Optional[str]` | `None` | Entity/link type-name filter. |
+| `template` | `str` | -- (required) | f-string-style format body. |
+| `decimal_separator` | `str` | `'.'` | Numeric output only. |
+| `thousand_separator` | `str` | `','` | Numeric output only. |
+| `sources` | `List[DisplaySource]` | `[]` | At least one required. |
+| `attribute_class` | `Optional[AttributeClass]` | `None` | Sibling styling (inner `.name`/`.type` must be `None`). |
 
-### Validation rules
+### `DisplayLabel` fields
 
-`chart.validate()` emits these errors before `to_anx()` will write the file:
-
-| Error type | Condition |
-|---|---|
-| `datetime_ac_forbids_visible` | Any `type=datetime` AC has `visible=True`. ANB v9 will render the chrome with no value. |
-| `date_display_invalid` | `start` missing or references undeclared / non-datetime AC; `start` AC has `visible!=False`; `end` references undeclared / non-datetime AC; `end` AC has `visible!=False`; `end == start`; range mode without `name`; `format` is not a valid strftime; `missing` not in valid set; inner `attribute_class.name` / `.type` set; or `missing='error'` and an item has only one of two bounds. |
-| `date_display_name_collision` | The synthesised sibling name collides with an explicit AC, or two displays produce the same sibling name. |
-
-### Forward-compat note
-
-If a future ANB release renders datetime values on the canvas without this
-workaround, `date_attribute_displays` entries become redundant -- the text
-siblings still emit alongside the now-rendering datetime parents (after
-removing `visible=False`). A future anxwritter release may add a deprecation
-warning and eventually remove the transform. **Existing configs will not
-break** -- the synthesizer will degrade gracefully to "redundant but
-harmless."
-
----
-
-## Display templates {#display-templates}
-
-`extra_cfg.display_templates` is an opt-in chart-level synthesizer that
-takes one or more source attribute values, renders them through a Python
-`str.format_map`-style template, and emits the result either as a
-**synthesized text-sibling AttributeClass** (`target='attribute'`, default)
-or **directly into the entity/link label** (`target='label'`).
-
-Lives under `settings.extra_cfg.display_templates` -- same chart-level
-synthesizer family as [`date_attribute_displays`](#date-attribute-displays),
-`geo_map`, and `styling`. Coexists with `date_attribute_displays`; neither
-deprecates the other.
-
-### What it does
-
-ANB renders each AttributeClass on its own row in the attribute stack. A
-link with `transaction_count=5` plus `total_value=12345.67` shows as **two
-lines** stacked vertically. `display_templates` turns that into a single
-formatted string -- "5x R$ 12,345.67" -- and puts it where you want it:
-either as a new AC on its own row (replacing the source rows by setting
-those `visible=False`), or directly on the link label.
-
-The template is plain Python `str.format_map` syntax -- the same field
-spec mini-language used by f-strings, without the `f` prefix (which is
-Python source syntax, not part of the template). Examples: `{qty}`,
-`{amount:,.2f}`, `{when:%d/%m/%Y}`, `{x:>10}`.
-
-### target='attribute' (default)
-
-Synthesizes a new text AC, named via `attribute_name` (default
-`'display'`), with the rendered string as its per-item value. Source ACs
-**must** declare `visible=False` -- the synthesized sibling renders in
-place of the source rows in the attribute stack.
-
-```python
-from anxwritter import ANXChart, AttributeClass, DisplayTemplate, DisplaySource
-
-chart = ANXChart()
-chart.add_attribute_class(AttributeClass(
-    name='transaction_count', type='number', visible=False,
-))
-chart.add_attribute_class(AttributeClass(
-    name='total_value', type='number', visible=False,
-))
-chart.add_display_template(DisplayTemplate(
-    target='attribute',
-    attribute_name='Activity',
-    template='{qty}x R$ {amount:,.2f}',
-    sources=[
-        DisplaySource(attribute='transaction_count', alias='qty'),
-        DisplaySource(attribute='total_value', alias='amount'),
-    ],
-))
-```
-
-### target='label'
-
-Writes the rendered string into the entity/link `label` field. By default
-(`override_existing=False`), only items with an empty label are filled --
-manually-annotated labels are preserved. Source ACs have no visibility
-constraint in this mode; users can keep the structured data visible in the
-attribute stack AND show the formatted summary on the label.
-
-```python
-chart.add_display_template(DisplayTemplate(
-    target='label',
-    template='{qty}x R$ {amount:,.2f}',
-    sources=[
-        DisplaySource(attribute='transaction_count', alias='qty'),
-        DisplaySource(attribute='total_value', alias='amount'),
-    ],
-))
-```
-
-Set `override_existing=True` to stomp existing labels too. The default
-(`False`) keeps the library-wide convention that explicit values always
-win over calculated ones; the flag is for "I really want chart-wide
-consistency" cases where the user is fine with the synthesizer taking
-over.
-
-### Source aliases
-
-When a source attribute name isn't a valid Python identifier (contains
-spaces, accents, etc), you must give it an `alias` for use in the
-template:
-
-```yaml
-sources:
-  - attribute: "quantia em real"   # spaces -- not a valid identifier
-    alias: amount                   # use {amount} in template
-template: "R$ {amount:,.2f}"
-```
-
-When the attribute name is identifier-safe, the alias is optional --
-the attribute name is reused as the template key.
-
-### Decimal / thousand separators
-
-Python's standard `,.2f` format spec always renders US-style
-(`100,000.50`). For Brazilian (`100.000,50`) and other separator
-conventions, set `decimal_separator` and `thousand_separator` on the
-entry:
-
-```yaml
-decimal_separator: ','
-thousand_separator: '.'
-template: "R$ {amount:,.2f}"
-# 100000.50 → "R$ 100.000,50"
-```
-
-The swap is applied **only to formatted numeric values** -- literal
-commas/periods in the static template text are untouched, so
-`"qtd: {qty}, total"` keeps its literal comma after `{qty}`.
-
-### Datetime sources
-
-When a source AC declares `type: datetime`, the library parses the value
-back into a `datetime.datetime` before binding into the format dict, so
-strftime-style format specs work directly:
-
-```yaml
-attribute_classes:
-  - name: when
-    type: datetime
-    visible: false
-
-settings:
-  extra_cfg:
-    display_templates:
-      - target: attribute
-        attribute_name: When
-        template: "em {when:%d/%m/%Y}"
-        sources:
-          - attribute: when
-# datetime(2024, 3, 15) → "em 15/03/2024"
-```
-
-### Missing-value handling
-
-Per-source `missing` policy controls behaviour when an item is missing
-that source attribute. Default `'skip'`.
-
-| Policy | Behaviour |
-|---|---|
-| `skip` (default) | Drop the item -- no sibling AC emitted / no label change. |
-| `substitute` | Use the source's `placeholder` string in place of the missing value. |
-| `error` | Surface a `display_template_invalid` validation error per missing item at `validate()` time. |
-
-```yaml
-sources:
-  - attribute: tx
-    missing: substitute
-    placeholder: "0"
-```
-
-### YAML form
-
-```yaml
-attribute_classes:
-  - name: transaction_count
-    type: number
-    visible: false
-  - name: total_value
-    type: number
-    visible: false
-
-settings:
-  extra_cfg:
-    display_templates:
-      - target: attribute
-        attribute_name: Activity
-        template: "{qty}x R$ {amount:,.2f}"
-        decimal_separator: ','
-        thousand_separator: '.'
-        sources:
-          - attribute: transaction_count
-            alias: qty
-          - attribute: total_value
-            alias: amount
-```
-
-### `DisplayTemplate` fields
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `target` | `Optional[str]` | `'attribute'` | `'attribute'` or `'label'`. Picks the output slot. |
-| `attribute_name` | `Optional[str]` | `'display'` | Synthesized AC name when `target='attribute'`. Ignored for `'label'`. |
-| `override_existing` | `Optional[bool]` | `False` | `target='label'` only. Stomp existing labels when `True`. |
-| `template` | `Optional[str]` | -- (required) | f-string-style format body. Use `{alias}` and `{alias:format_spec}` substitutions. |
-| `decimal_separator` | `Optional[str]` | `'.'` | Applied to numeric format-spec output. Literal template text untouched. |
-| `thousand_separator` | `Optional[str]` | `','` | Same. |
-| `sources` | `List[DisplaySource]` | `[]` | At least one source required. |
-| `attribute_class` | `Optional[AttributeClass]` | `None` | Styling template for the synthesized AC (`target='attribute'` only). Inner `.name` and `.type` must be `None`. |
+Same as `DisplayAttribute` minus `attribute_name` and `attribute_class`, plus
+`override_existing: Optional[bool]` (default `False`).
 
 ### `DisplaySource` fields
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `attribute` | `Optional[str]` | -- (required) | Source AttributeClass name. |
-| `alias` | `Optional[str]` | `None` | Template key. Required when `attribute` isn't a valid Python identifier. |
-| `missing` | `Optional[str]` | `None` | Per-source override of the default `'skip'`. One of `'skip'`, `'substitute'`, `'error'`. |
-| `placeholder` | `Optional[str]` | `''` | Used when `missing='substitute'`. |
+| `attribute` | `str` | -- (required) | Source AC name. |
+| `alias` | `Optional[str]` | `None` | Template key; required for non-identifier attribute names. |
+| `missing` | `Optional[str]` | `'skip'` | `'skip'` / `'substitute'` / `'error'`. |
+| `placeholder` | `Optional[str]` | `''` | Used by `'substitute'`. |
 
 ### Validation rules
 
 | Error type | Condition |
 |---|---|
-| `display_template_invalid` | Missing/empty `template`; empty `sources`; undeclared source AC; source AC has `visible != False` when `target='attribute'`; invalid `target` or `missing` enum; alias collision within an entry; `alias` required (non-identifier attribute name) but omitted; `attribute_class.name` or `.type` set; template syntax error (unclosed brace, bad format spec); `missing='error'` triggered per item. |
-| `display_template_name_collision` | Synthesized `attribute_name` collides with an explicit AC, with another `display_templates` entry's name, or with any `date_attribute_displays` sibling name. |
+| `display_invalid` | Missing `key` / `template`; empty `sources`; missing `attribute_name` (attribute family); undeclared source AC; source AC not `visible=False` (attribute family); non-identifier attribute name without `alias`; duplicate alias; inner `attribute_class.name`/`.type` set; template syntax error; `missing='error'` triggered for an item. |
+| `display_name_collision` | Synthesized `attribute_name` collides with an explicit AC. |
+| `display_overlap_conflict` | Two same-specificity entries could paint the same `(kind, type)` slot. |
 
-### Non-goals
+### Migrating from `date_attribute_displays`
 
-`display_templates` is intentionally a pure function of declared source
-attributes:
-
-- **No compound conditions / regex / multi-attribute rules.** Precompute
-  upstream as a synthetic attribute and reference it here.
-- **No arithmetic expressions in templates** (`{a + b}`). Only
-  `{alias:format_spec}` substitutions.
-- **No per-source `prefix` / `suffix` / `format` / separator overrides.**
-  All formatting lives in the template; per-source decoration is
-  intentionally not supported to keep one source of truth for the
-  rendered shape.
-- **No filter by entity/link type.** Applies to every item that has the
-  source ACs; use distinct AC names per type if you need scoping.
-
-### Coexists with `date_attribute_displays`
-
-The two synthesizers run independently. `date_attribute_displays` is the
-convenience form for the common single-AC date / two-AC range case (no
-template needed, just `start`/`end`/`format`/`separator`).
-`display_templates` is the general form for everything else (multiple
-sources, custom formatting, label target). Synthesized AC names share one
-namespace -- collisions across the two families are caught at
-`validate()` time.
+`extra_cfg.date_attribute_displays` (removed in 1.12.0) is fully covered by
+`display_attribute` -- see the date examples above and the CHANGELOG migration
+table. The `missing: truncate` policy has no equivalent; use `substitute` with
+a placeholder.
 
 ---
 

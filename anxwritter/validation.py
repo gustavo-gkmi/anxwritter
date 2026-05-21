@@ -1018,9 +1018,9 @@ def validate_attribute_classes(
         # ── Rule: datetime + visible=True is always rejected ────────────
         # ANB v9 does not render datetime values on the canvas after import;
         # the surrounding chrome appears but the value is blank. Users must
-        # set visible=False and configure an extra_cfg.date_attribute_displays
-        # entry that references this AC to render the formatted date as a
-        # paired text sibling.
+        # set visible=False and configure an extra_cfg.display_attribute entry
+        # that references this AC to render the formatted date as a paired
+        # text sibling.
         if ac_type == 'datetime' and ac.visible is True:
             errors.append({
                 'type': ErrorType.DATETIME_AC_FORBIDS_VISIBLE.value,
@@ -1029,9 +1029,9 @@ def validate_attribute_classes(
                     f"visible=True: ANB v9 does not render datetime values "
                     f"on the canvas, so the chrome would render with no "
                     f"value. Set visible=False and add an "
-                    f"extra_cfg.date_attribute_displays entry referencing "
-                    f"this AC to render the formatted date as a paired text "
-                    f"sibling."
+                    f"extra_cfg.display_attribute entry with a "
+                    f"'{{d:%Y-%m-%d}}'-style template referencing this AC to "
+                    f"render the formatted date as a paired text sibling."
                 ),
                 'location': f"{loc}.visible",
             })
@@ -1843,312 +1843,21 @@ def validate_styling(
     return errors
 
 
-_VALID_MISSING_POLICIES = frozenset({'skip', 'substitute', 'truncate', 'error'})
+# ── Multi-attribute display synthesizers (attribute sibling + label) ─────────
 
-
-def _date_display_sibling_name(disp: Any) -> Optional[str]:
-    """Compute the effective sibling AC name for a DateAttributeDisplay.
-
-    Returns the explicit ``name`` when set, else ``f"{start}{suffix}"`` with
-    suffix defaulting to ``' (display)'`` (single-date mode only). Returns
-    ``None`` when neither path can produce a name (e.g. range mode without
-    explicit ``name``, or single-date with no ``start``) — callers should
-    treat that as "validation already flagged this entry, no sibling name to
-    use yet."
-    """
-    name = getattr(disp, 'name', None)
-    if name:
-        return name
-    start = getattr(disp, 'start', None)
-    end = getattr(disp, 'end', None)
-    if not start or end:
-        # Range mode requires explicit name; missing-start is invalid anyway.
-        return None
-    suffix = getattr(disp, 'suffix', None)
-    if suffix is None:
-        suffix = ' (display)'
-    return f"{start}{suffix}"
-
-
-def validate_date_attribute_displays(
-    displays: List[Any],
-    attribute_classes: List['AttributeClass'],
-    entities: List['_BaseEntity'],
-    links: List['Link'],
-    ac_names: Dict[str, str],
-) -> List[Dict[str, Any]]:
-    """Validate ``extra_cfg.date_attribute_displays`` entries.
-
-    Each entry synthesises a text-sibling AC from one (single-date) or two
-    (range) datetime ACs. Validation enforces:
-
-    - ``start`` is required and must reference a declared ``datetime`` AC
-      with ``visible=False``.
-    - ``end`` is optional; same constraints; must differ from ``start``.
-    - ``name`` is required when ``end`` is set (no natural single-AC base
-      to auto-derive from).
-    - ``format`` must be a valid strftime when set.
-    - ``missing`` ∈ {``skip``, ``substitute``, ``truncate``, ``error``}.
-    - ``attribute_class.name`` / ``.type`` must be ``None`` — the sibling
-      is auto-named and auto-typed as text.
-    - The effective sibling name must not collide with any explicit AC or
-      with any other display's effective sibling name.
-    - When ``missing == 'error'``: every entity/link that carries one bound
-      must also carry the other; missing bound is surfaced per-item.
-    """
-    errors: List[Dict[str, Any]] = []
-    if not displays:
-        return errors
-
-    # Build a fast lookup of declared AC name → AttributeClass for type +
-    # visibility checks. Only ACs with a name are eligible (unnamed ACs are
-    # already flagged by validate_attribute_classes).
-    ac_by_name: Dict[str, 'AttributeClass'] = {
-        ac.name: ac for ac in attribute_classes if ac.name
-    }
-
-    base_loc = 'settings.extra_cfg.date_attribute_displays'
-
-    # Per-display checks ------------------------------------------------------
-    effective_names: List[Optional[str]] = []
-    for i, disp in enumerate(displays):
-        loc = f"{base_loc}[{i}]"
-        start = getattr(disp, 'start', None)
-        end = getattr(disp, 'end', None)
-        name = getattr(disp, 'name', None)
-        fmt = getattr(disp, 'format', None)
-        missing = getattr(disp, 'missing', None)
-        inner = getattr(disp, 'attribute_class', None)
-
-        # Rule 1 — start required
-        if not start:
-            errors.append({
-                'type': ErrorType.DATE_DISPLAY_INVALID.value,
-                'message': (
-                    f"date_attribute_displays[{i}]: 'start' is required "
-                    f"(name of a declared datetime AttributeClass)."
-                ),
-                'location': f"{loc}.start",
-            })
-            effective_names.append(None)
-            continue
-
-        # Rule 2/3/4 — start references valid AC, datetime, visible=False
-        start_ac = ac_by_name.get(start)
-        if start_ac is None:
-            errors.append({
-                'type': ErrorType.DATE_DISPLAY_INVALID.value,
-                'message': (
-                    f"date_attribute_displays[{i}].start references "
-                    f"'{start}' but no AttributeClass with that name is "
-                    f"declared on the chart."
-                ),
-                'location': f"{loc}.start",
-            })
-        else:
-            start_type = _enum_val(start_ac.type).lower() if start_ac.type else None
-            if start_type != 'datetime':
-                errors.append({
-                    'type': ErrorType.DATE_DISPLAY_INVALID.value,
-                    'message': (
-                        f"date_attribute_displays[{i}].start references AC "
-                        f"'{start}' but its type is '{start_type}', not "
-                        f"'datetime'."
-                    ),
-                    'location': f"{loc}.start",
-                })
-            elif start_ac.visible is not False:
-                errors.append({
-                    'type': ErrorType.DATE_DISPLAY_INVALID.value,
-                    'message': (
-                        f"AC '{start}' is referenced by "
-                        f"date_attribute_displays[{i}] and must have "
-                        f"visible=False — ANB v9 won't render the datetime "
-                        f"value otherwise."
-                    ),
-                    'location': f"{loc}.start",
-                })
-
-        # Range-mode checks (end set)
-        if end is not None:
-            if end == start:
-                errors.append({
-                    'type': ErrorType.DATE_DISPLAY_INVALID.value,
-                    'message': (
-                        f"date_attribute_displays[{i}]: 'end' cannot equal "
-                        f"'start' ({start!r}). Use single-date mode (omit "
-                        f"'end') for one source AC."
-                    ),
-                    'location': f"{loc}.end",
-                })
-            end_ac = ac_by_name.get(end)
-            if end_ac is None:
-                errors.append({
-                    'type': ErrorType.DATE_DISPLAY_INVALID.value,
-                    'message': (
-                        f"date_attribute_displays[{i}].end references "
-                        f"'{end}' but no AttributeClass with that name is "
-                        f"declared on the chart."
-                    ),
-                    'location': f"{loc}.end",
-                })
-            else:
-                end_type = _enum_val(end_ac.type).lower() if end_ac.type else None
-                if end_type != 'datetime':
-                    errors.append({
-                        'type': ErrorType.DATE_DISPLAY_INVALID.value,
-                        'message': (
-                            f"date_attribute_displays[{i}].end references "
-                            f"AC '{end}' but its type is '{end_type}', not "
-                            f"'datetime'."
-                        ),
-                        'location': f"{loc}.end",
-                    })
-                elif end_ac.visible is not False:
-                    errors.append({
-                        'type': ErrorType.DATE_DISPLAY_INVALID.value,
-                        'message': (
-                            f"AC '{end}' is referenced by "
-                            f"date_attribute_displays[{i}] and must have "
-                            f"visible=False — ANB v9 won't render the "
-                            f"datetime value otherwise."
-                        ),
-                        'location': f"{loc}.end",
-                    })
-
-            # Rule — range mode requires explicit name
-            if not name:
-                errors.append({
-                    'type': ErrorType.DATE_DISPLAY_INVALID.value,
-                    'message': (
-                        f"date_attribute_displays[{i}] is a range "
-                        f"(end set) — 'name' is required because there's "
-                        f"no single source AC to derive the sibling name "
-                        f"from."
-                    ),
-                    'location': f"{loc}.name",
-                })
-
-        # format must be valid strftime when set
-        if fmt is not None and not _is_valid_strftime(fmt):
-            errors.append({
-                'type': ErrorType.DATE_DISPLAY_INVALID.value,
-                'message': (
-                    f"date_attribute_displays[{i}].format {fmt!r} is not a "
-                    f"valid strftime format string."
-                ),
-                'location': f"{loc}.format",
-            })
-
-        # missing policy must be in valid set
-        if missing is not None and missing not in _VALID_MISSING_POLICIES:
-            errors.append({
-                'type': ErrorType.DATE_DISPLAY_INVALID.value,
-                'message': (
-                    f"date_attribute_displays[{i}].missing {missing!r} is "
-                    f"invalid. Valid values: "
-                    f"{sorted(_VALID_MISSING_POLICIES)}."
-                ),
-                'location': f"{loc}.missing",
-            })
-
-        # attribute_class.name and .type must be None
-        if inner is not None:
-            if getattr(inner, 'name', None):
-                errors.append({
-                    'type': ErrorType.DATE_DISPLAY_INVALID.value,
-                    'message': (
-                        f"date_attribute_displays[{i}].attribute_class.name "
-                        f"must be None — the sibling AC name is the "
-                        f"display's 'name' field (or auto-derived from "
-                        f"start+suffix)."
-                    ),
-                    'location': f"{loc}.attribute_class.name",
-                })
-            if getattr(inner, 'type', None) is not None:
-                errors.append({
-                    'type': ErrorType.DATE_DISPLAY_INVALID.value,
-                    'message': (
-                        f"date_attribute_displays[{i}].attribute_class.type "
-                        f"must be None — the sibling AC type is auto-locked "
-                        f"to text."
-                    ),
-                    'location': f"{loc}.attribute_class.type",
-                })
-
-        effective_names.append(_date_display_sibling_name(disp))
-
-    # Cross-entry sibling-name collision checks --------------------------------
-    explicit = dict(ac_names)
-    sibling_to_index: Dict[str, int] = {}
-    for i, sib_name in enumerate(effective_names):
-        if not sib_name:
-            continue
-        loc = f"{base_loc}[{i}]"
-        if sib_name in explicit:
-            errors.append({
-                'type': ErrorType.DATE_DISPLAY_NAME_COLLISION.value,
-                'message': (
-                    f"date_attribute_displays[{i}] sibling name "
-                    f"'{sib_name}' collides with explicit AttributeClass "
-                    f"at {explicit[sib_name]}."
-                ),
-                'location': f"{loc}.name",
-            })
-            continue
-        if sib_name in sibling_to_index:
-            errors.append({
-                'type': ErrorType.DATE_DISPLAY_NAME_COLLISION.value,
-                'message': (
-                    f"date_attribute_displays[{i}] sibling name "
-                    f"'{sib_name}' collides with "
-                    f"date_attribute_displays[{sibling_to_index[sib_name]}]."
-                ),
-                'location': f"{loc}.name",
-            })
-            continue
-        sibling_to_index[sib_name] = i
-
-    # Per-item walk for missing='error' ----------------------------------------
-    for i, disp in enumerate(displays):
-        missing = getattr(disp, 'missing', None)
-        if missing != 'error':
-            continue
-        start = getattr(disp, 'start', None)
-        end = getattr(disp, 'end', None)
-        if not start:
-            continue
-        for kind, items in (('entities', entities), ('links', links)):
-            for j, it in enumerate(items):
-                attrs = getattr(it, 'attributes', None) or {}
-                has_start = start in attrs and attrs[start] is not None
-                has_end = (end is None) or (end in attrs and attrs[end] is not None)
-                if has_start and not has_end:
-                    errors.append({
-                        'type': ErrorType.DATE_DISPLAY_INVALID.value,
-                        'message': (
-                            f"date_attribute_displays[{i}].missing='error' "
-                            f"and {kind}[{j}] has '{start}' but no '{end}'."
-                        ),
-                        'location': f"{kind}[{j}].attributes.{end}",
-                    })
-                elif not has_start and end is not None and end in attrs and attrs[end] is not None:
-                    errors.append({
-                        'type': ErrorType.DATE_DISPLAY_INVALID.value,
-                        'message': (
-                            f"date_attribute_displays[{i}].missing='error' "
-                            f"and {kind}[{j}] has '{end}' but no '{start}'."
-                        ),
-                        'location': f"{kind}[{j}].attributes.{start}",
-                    })
-
-    return errors
-
-
-# ── Multi-attribute display templates ───────────────────────────────────────
-
-_VALID_DISPLAY_TARGETS = frozenset({'attribute', 'label'})
+_VALID_DISPLAY_KINDS = frozenset({'entity', 'link', 'both'})
 _VALID_DISPLAY_MISSING = frozenset({'skip', 'substitute', 'error'})
+
+
+def _display_kind(disp: Any) -> str:
+    return str(getattr(disp, 'kind', None) or 'both').lower()
+
+
+def _kinds_overlap(k1: str, k2: str) -> bool:
+    """True when two ``kind`` filters could apply to the same item."""
+    if k1 == 'both' or k2 == 'both':
+        return True
+    return k1 == k2
 
 
 def _is_valid_identifier(name: str) -> bool:
@@ -2159,19 +1868,6 @@ def _is_valid_identifier(name: str) -> bool:
     identifiers — alias-mode requires explicit ``alias`` for anything else.
     """
     return isinstance(name, str) and name.isidentifier()
-
-
-def _display_template_attribute_name(disp: Any) -> Optional[str]:
-    """Effective synthesized AC name (target='attribute' only).
-
-    Returns ``'display'`` by default; returns ``None`` for target='label'
-    (no AC is synthesized in that mode).
-    """
-    target = getattr(disp, 'target', None) or 'attribute'
-    if str(target).lower() != 'attribute':
-        return None
-    name = getattr(disp, 'attribute_name', None)
-    return name if name else 'display'
 
 
 class _AnyFormatProbe:
@@ -2208,163 +1904,172 @@ def _try_format_static(template: str, sample: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def validate_display_templates(
+def _validate_display_entries(
     displays: List[Any],
     attribute_classes: List['AttributeClass'],
     entities: List['_BaseEntity'],
     links: List['Link'],
     ac_names: Dict[str, str],
-    date_display_sibling_names: List[str],
+    *,
+    family: str,
+    base_loc: str,
 ) -> List[Dict[str, Any]]:
-    """Validate ``extra_cfg.display_templates`` entries.
+    """Shared validator for ``display_attribute`` / ``display_label`` entries.
 
-    Each entry renders one or more source attribute values through a Python
-    ``str.format_map`` template and routes the output to either a
-    synthesized text-sibling AC (``target='attribute'``) or the item label
-    (``target='label'``).
+    family='attribute': synthesizes a sibling AC — ``attribute_name`` is
+    required, source ACs must be ``visible=False``, the inner
+    ``attribute_class.name`` / ``.type`` must be ``None``, the synthesized
+    name must not collide with an explicit AC, and at most one entry may
+    target a given ``(kind, type, attribute_name)`` slot.
 
-    Enforced rules:
+    family='label': renders into the item label — no ``attribute_name`` /
+    ``attribute_class`` / ``visible`` constraint; at most one entry may apply
+    to a given ``(kind, type)`` label slot.
 
-    - ``template`` is required and must be parseable as a Python format
-      string given the declared source aliases.
-    - ``sources`` is required and non-empty.
-    - Each source's ``attribute`` must reference a declared AttributeClass.
-    - When ``target='attribute'`` the source AC must have ``visible=False``
-      so the value isn't double-rendered (source value in the stack + the
-      synthesized one).
-    - ``alias`` is required when ``source.attribute`` isn't a valid
-      Python identifier (spaces, accents, etc).
-    - Per-source ``missing`` ∈ {``skip``, ``substitute``, ``error``}.
-    - ``target`` ∈ {``attribute``, ``label``}.
-    - ``attribute_class.name`` / ``.type`` must be ``None`` — the sibling
-      is auto-named (via ``attribute_name`` or default ``'display'``) and
-      auto-typed as text.
-    - Aliases declared within a single entry must be unique.
-    - When ``target='attribute'``, the effective ``attribute_name`` must
-      not collide with any explicit AC, with another
-      ``display_templates`` entry's name, or with any
-      ``date_attribute_displays`` sibling.
-    - When ``missing='error'``: every entity/link missing that source's
-      attribute surfaces a per-item error.
-
-    The ``date_display_sibling_names`` parameter is the list of already-
-    computed sibling names from ``validate_date_attribute_displays`` so
-    collisions across the two synthesizer families are caught.
+    Common to both: required ``key`` and ``template``, non-empty ``sources``,
+    each source must reference a declared AC, ``alias`` required for
+    non-identifier attribute names, unique aliases per entry, per-source
+    ``missing`` ∈ {skip, substitute, error}, a template dry-run, and a
+    per-item walk for any ``missing='error'`` source. Multiple entries may
+    share an ``attribute_name`` as long as their ``(kind, type)`` scopes are
+    disjoint; a genuine overlap (same slot, intersecting kinds, same
+    specificity tier) is a ``display_overlap_conflict``.
     """
     errors: List[Dict[str, Any]] = []
     if not displays:
         return errors
 
+    is_attr = family == 'attribute'
     ac_by_name: Dict[str, 'AttributeClass'] = {
         ac.name: ac for ac in attribute_classes if ac.name
     }
 
-    base_loc = 'settings.extra_cfg.display_templates'
+    # Entries eligible for overlap detection: (index, kind, type, slot).
+    # slot = attribute_name (attribute family) or '' (the single label slot).
+    participants: list = []
 
-    # Per-display structural checks. Effective names tracked for collision
-    # detection in the second pass.
-    effective_names: List[Optional[str]] = []
     for i, disp in enumerate(displays):
         loc = f"{base_loc}[{i}]"
-        target_raw = getattr(disp, 'target', None) or 'attribute'
-        target = str(target_raw).lower()
+        key = getattr(disp, 'key', None)
+        kind = _display_kind(disp)
+        type_filter = getattr(disp, 'type', None)
         template = getattr(disp, 'template', None)
         sources = getattr(disp, 'sources', None) or []
-        inner = getattr(disp, 'attribute_class', None)
+        attr_name = getattr(disp, 'attribute_name', None) if is_attr else None
+        inner = getattr(disp, 'attribute_class', None) if is_attr else None
 
-        # Rule — target enum
-        if target not in _VALID_DISPLAY_TARGETS:
+        ok = True
+
+        # key required (identity for layering / lock / delete)
+        if not key:
             errors.append({
-                'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                'type': ErrorType.DISPLAY_INVALID.value,
                 'message': (
-                    f"display_templates[{i}].target {target_raw!r} is not "
-                    f"one of {sorted(_VALID_DISPLAY_TARGETS)}."
+                    f"{base_loc}[{i}]: 'key' is required (identity for "
+                    f"config layering / lock / delete)."
                 ),
-                'location': f"{loc}.target",
+                'location': f"{loc}.key",
             })
-            effective_names.append(None)
-            continue
+            ok = False
 
-        # Rule — template required
+        # kind enum
+        if kind not in _VALID_DISPLAY_KINDS:
+            errors.append({
+                'type': ErrorType.DISPLAY_INVALID.value,
+                'message': (
+                    f"{base_loc}[{i}].kind {kind!r} is not one of "
+                    f"{sorted(_VALID_DISPLAY_KINDS)}."
+                ),
+                'location': f"{loc}.kind",
+            })
+            ok = False
+
+        # attribute_name required (attribute family only)
+        if is_attr and not attr_name:
+            errors.append({
+                'type': ErrorType.DISPLAY_INVALID.value,
+                'message': (
+                    f"display_attribute[{i}]: 'attribute_name' is required "
+                    f"(names the synthesized text-sibling AttributeClass)."
+                ),
+                'location': f"{loc}.attribute_name",
+            })
+            ok = False
+
+        # template required
         if not template or not isinstance(template, str):
             errors.append({
-                'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                'type': ErrorType.DISPLAY_INVALID.value,
                 'message': (
-                    f"display_templates[{i}]: 'template' is required and "
-                    f"must be a non-empty string."
+                    f"{base_loc}[{i}]: 'template' is required and must be a "
+                    f"non-empty string."
                 ),
                 'location': f"{loc}.template",
             })
-            effective_names.append(None)
             continue
 
-        # Rule — sources required
+        # sources required
         if not sources:
             errors.append({
-                'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                'type': ErrorType.DISPLAY_INVALID.value,
                 'message': (
-                    f"display_templates[{i}]: 'sources' is required and "
-                    f"must be a non-empty list."
+                    f"{base_loc}[{i}]: 'sources' is required and must be a "
+                    f"non-empty list."
                 ),
                 'location': f"{loc}.sources",
             })
-            effective_names.append(None)
             continue
 
-        # Per-source checks: attribute existence, type for datetime path,
-        # alias requirement, missing enum, visible=False when target=attribute.
+        # Per-source checks: attribute existence, alias requirement, missing
+        # enum, and (attribute family) visible=False.
         aliases_seen: Dict[str, int] = {}
         alias_sample: Dict[str, Any] = {}
         for j, src in enumerate(sources):
-            attr_name = getattr(src, 'attribute', None)
-            if not attr_name:
+            attr = getattr(src, 'attribute', None)
+            if not attr:
                 errors.append({
-                    'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                    'type': ErrorType.DISPLAY_INVALID.value,
                     'message': (
-                        f"display_templates[{i}].sources[{j}]: 'attribute' "
-                        f"is required."
+                        f"{base_loc}[{i}].sources[{j}]: 'attribute' is "
+                        f"required."
                     ),
                     'location': f"{loc}.sources[{j}].attribute",
                 })
                 continue
 
-            src_ac = ac_by_name.get(attr_name)
+            src_ac = ac_by_name.get(attr)
             if src_ac is None:
                 errors.append({
-                    'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                    'type': ErrorType.DISPLAY_INVALID.value,
                     'message': (
-                        f"display_templates[{i}].sources[{j}].attribute "
-                        f"{attr_name!r} doesn't reference any declared "
-                        f"AttributeClass."
+                        f"{base_loc}[{i}].sources[{j}].attribute {attr!r} "
+                        f"doesn't reference any declared AttributeClass."
                     ),
                     'location': f"{loc}.sources[{j}].attribute",
                 })
 
             alias = getattr(src, 'alias', None)
             if alias is None:
-                # No alias — must derive from attribute name, which must be
-                # a valid Python identifier.
-                if not _is_valid_identifier(attr_name):
+                if not _is_valid_identifier(attr):
                     errors.append({
-                        'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                        'type': ErrorType.DISPLAY_INVALID.value,
                         'message': (
-                            f"display_templates[{i}].sources[{j}]: "
-                            f"attribute {attr_name!r} isn't a valid Python "
-                            f"identifier, so 'alias' is required for "
-                            f"template substitution."
+                            f"{base_loc}[{i}].sources[{j}]: attribute "
+                            f"{attr!r} isn't a valid Python identifier, so "
+                            f"'alias' is required for template substitution."
                         ),
                         'location': f"{loc}.sources[{j}].alias",
                     })
                     alias_key = None
                 else:
-                    alias_key = attr_name
+                    alias_key = attr
             else:
                 if not _is_valid_identifier(alias):
                     errors.append({
-                        'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                        'type': ErrorType.DISPLAY_INVALID.value,
                         'message': (
-                            f"display_templates[{i}].sources[{j}].alias "
-                            f"{alias!r} must be a valid Python identifier."
+                            f"{base_loc}[{i}].sources[{j}].alias {alias!r} "
+                            f"must be a valid Python identifier."
                         ),
                         'location': f"{loc}.sources[{j}].alias",
                     })
@@ -2372,27 +2077,19 @@ def validate_display_templates(
                 else:
                     alias_key = alias
 
-            # Alias uniqueness within the entry
             if alias_key is not None:
                 if alias_key in aliases_seen:
                     errors.append({
-                        'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                        'type': ErrorType.DISPLAY_INVALID.value,
                         'message': (
-                            f"display_templates[{i}]: alias {alias_key!r} "
-                            f"used by sources[{aliases_seen[alias_key]}] "
-                            f"and sources[{j}]."
+                            f"{base_loc}[{i}]: alias {alias_key!r} used by "
+                            f"sources[{aliases_seen[alias_key]}] and "
+                            f"sources[{j}]."
                         ),
                         'location': f"{loc}.sources[{j}].alias",
                     })
                 else:
                     aliases_seen[alias_key] = j
-                    # Sample value for the dry-run format check. Use a type
-                    # that matches the source AC so format specs intended
-                    # for that type validate cleanly (e.g. ``{d:%Y-%m-%d}``
-                    # on a datetime source). Falls back to the universal
-                    # ``_AnyFormatProbe`` sentinel when the source AC isn't
-                    # declared or has no type — sentinel accepts every
-                    # format spec without raising.
                     src_type = (
                         _enum_val(src_ac.type).lower()
                         if src_ac is not None and src_ac.type is not None
@@ -2405,114 +2102,107 @@ def validate_display_templates(
                     else:
                         alias_sample[alias_key] = _AnyFormatProbe()
 
-            # target=attribute → source AC must be visible=False
-            if target == 'attribute' and src_ac is not None:
-                if src_ac.visible is not False:
-                    errors.append({
-                        'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
-                        'message': (
-                            f"AC {attr_name!r} is referenced by "
-                            f"display_templates[{i}] (target='attribute') "
-                            f"and must have visible=False so its value "
-                            f"isn't double-rendered alongside the "
-                            f"synthesized sibling."
-                        ),
-                        'location': f"{loc}.sources[{j}].attribute",
-                    })
+            # Attribute family → source AC must be visible=False.
+            if is_attr and src_ac is not None and src_ac.visible is not False:
+                errors.append({
+                    'type': ErrorType.DISPLAY_INVALID.value,
+                    'message': (
+                        f"AC {attr!r} is referenced by display_attribute"
+                        f"[{i}] and must have visible=False so its value "
+                        f"isn't double-rendered alongside the synthesized "
+                        f"sibling."
+                    ),
+                    'location': f"{loc}.sources[{j}].attribute",
+                })
 
-            # missing enum
             missing = getattr(src, 'missing', None)
             if missing is not None and missing not in _VALID_DISPLAY_MISSING:
                 errors.append({
-                    'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                    'type': ErrorType.DISPLAY_INVALID.value,
                     'message': (
-                        f"display_templates[{i}].sources[{j}].missing "
-                        f"{missing!r} is not one of "
-                        f"{sorted(_VALID_DISPLAY_MISSING)}."
+                        f"{base_loc}[{i}].sources[{j}].missing {missing!r} "
+                        f"is not one of {sorted(_VALID_DISPLAY_MISSING)}."
                     ),
                     'location': f"{loc}.sources[{j}].missing",
                 })
 
-        # Template dry-run (after sample dict built)
+        # Template dry-run.
         if alias_sample:
             err_msg = _try_format_static(template, alias_sample)
             if err_msg:
                 errors.append({
-                    'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
-                    'message': (
-                        f"display_templates[{i}].template: {err_msg}"
-                    ),
+                    'type': ErrorType.DISPLAY_INVALID.value,
+                    'message': f"{base_loc}[{i}].template: {err_msg}",
                     'location': f"{loc}.template",
                 })
 
-        # attribute_class sanity (target=attribute only; for label the field
-        # is silently ignored since no AC is synthesized).
-        if target == 'attribute' and inner is not None:
+        # Inner attribute_class sanity (attribute family only).
+        if is_attr and inner is not None:
             if getattr(inner, 'name', None):
                 errors.append({
-                    'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                    'type': ErrorType.DISPLAY_INVALID.value,
                     'message': (
-                        f"display_templates[{i}].attribute_class.name must "
+                        f"display_attribute[{i}].attribute_class.name must "
                         f"be None — the synthesized AC is auto-named via "
-                        f"'attribute_name' (default 'display')."
+                        f"'attribute_name'."
                     ),
                     'location': f"{loc}.attribute_class.name",
                 })
             if getattr(inner, 'type', None) is not None:
                 errors.append({
-                    'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                    'type': ErrorType.DISPLAY_INVALID.value,
                     'message': (
-                        f"display_templates[{i}].attribute_class.type must "
-                        f"be None — the synthesized AC is auto-typed as "
-                        f"text."
+                        f"display_attribute[{i}].attribute_class.type must "
+                        f"be None — the synthesized AC is auto-typed as text."
                     ),
                     'location': f"{loc}.attribute_class.type",
                 })
 
-        effective_names.append(_display_template_attribute_name(disp))
+        # Eligible for overlap detection once it has identity + slot.
+        if ok and (not is_attr or attr_name):
+            participants.append((i, kind, type_filter, attr_name if is_attr else ''))
 
-    # Cross-entry name-collision checks (target=attribute only).
-    explicit = dict(ac_names)
-    sibling_to_index: Dict[str, int] = {}
-    date_sibling_set = set(n for n in date_display_sibling_names if n)
-    for i, sib_name in enumerate(effective_names):
-        if not sib_name:
-            continue
-        loc = f"{base_loc}[{i}]"
-        if sib_name in explicit:
+    # Name-collision pass (attribute family): synthesized name vs explicit AC.
+    # NOTE: multiple entries sharing an attribute_name is intentional (one
+    # formatter per type) — overlap detection handles same-slot ties instead.
+    if is_attr:
+        explicit = dict(ac_names)
+        for i, disp in enumerate(displays):
+            sib_name = getattr(disp, 'attribute_name', None)
+            if sib_name and sib_name in explicit:
+                errors.append({
+                    'type': ErrorType.DISPLAY_NAME_COLLISION.value,
+                    'message': (
+                        f"display_attribute[{i}] synthesized AC name "
+                        f"{sib_name!r} collides with explicit AttributeClass "
+                        f"at {explicit[sib_name]}."
+                    ),
+                    'location': f"{base_loc}[{i}].attribute_name",
+                })
+
+    # Overlap pass — same slot, intersecting kinds, same specificity tier.
+    n = len(participants)
+    for a in range(n):
+        ia, ka, ta, slota = participants[a]
+        for b in range(a + 1, n):
+            ib, kb, tb, slotb = participants[b]
+            if slota != slotb or not _kinds_overlap(ka, kb):
+                continue
+            same_tier = (ta is None and tb is None) or (
+                ta is not None and tb is not None and ta == tb
+            )
+            if not same_tier:
+                continue  # typed beats untyped, or disjoint types
+            slot_desc = f"attribute {slota!r}" if slota else "the label"
             errors.append({
-                'type': ErrorType.DISPLAY_TEMPLATE_NAME_COLLISION.value,
+                'type': ErrorType.DISPLAY_OVERLAP_CONFLICT.value,
                 'message': (
-                    f"display_templates[{i}] synthesized AC name "
-                    f"{sib_name!r} collides with explicit AttributeClass "
-                    f"at {explicit[sib_name]}."
+                    f"{base_loc}[{ib}] overlaps {base_loc}[{ia}]: both apply "
+                    f"to {slot_desc} for kind={kb!r} type={tb!r}. Scope them "
+                    f"to disjoint types, or merge them into one entry."
                 ),
-                'location': f"{loc}.attribute_name",
+                'location': f"{base_loc}[{ib}]",
             })
-            continue
-        if sib_name in date_sibling_set:
-            errors.append({
-                'type': ErrorType.DISPLAY_TEMPLATE_NAME_COLLISION.value,
-                'message': (
-                    f"display_templates[{i}] synthesized AC name "
-                    f"{sib_name!r} collides with a "
-                    f"date_attribute_displays sibling of the same name."
-                ),
-                'location': f"{loc}.attribute_name",
-            })
-            continue
-        if sib_name in sibling_to_index:
-            errors.append({
-                'type': ErrorType.DISPLAY_TEMPLATE_NAME_COLLISION.value,
-                'message': (
-                    f"display_templates[{i}] synthesized AC name "
-                    f"{sib_name!r} collides with "
-                    f"display_templates[{sibling_to_index[sib_name]}]."
-                ),
-                'location': f"{loc}.attribute_name",
-            })
-            continue
-        sibling_to_index[sib_name] = i
 
     # Per-item walk for any source with missing='error'.
     for i, disp in enumerate(displays):
@@ -2520,21 +2210,49 @@ def validate_display_templates(
         for j, src in enumerate(sources):
             if getattr(src, 'missing', None) != 'error':
                 continue
-            attr_name = getattr(src, 'attribute', None)
-            if not attr_name:
+            attr = getattr(src, 'attribute', None)
+            if not attr:
                 continue
             for kind, items in (('entities', entities), ('links', links)):
                 for k, it in enumerate(items):
                     attrs = getattr(it, 'attributes', None) or {}
-                    if attr_name not in attrs or attrs[attr_name] is None:
+                    if attr not in attrs or attrs[attr] is None:
                         errors.append({
-                            'type': ErrorType.DISPLAY_TEMPLATE_INVALID.value,
+                            'type': ErrorType.DISPLAY_INVALID.value,
                             'message': (
-                                f"display_templates[{i}].sources[{j}].missing="
-                                f"'error' and {kind}[{k}] has no "
-                                f"{attr_name!r} attribute."
+                                f"{base_loc}[{i}].sources[{j}].missing="
+                                f"'error' and {kind}[{k}] has no {attr!r} "
+                                f"attribute."
                             ),
-                            'location': f"{kind}[{k}].attributes.{attr_name}",
+                            'location': f"{kind}[{k}].attributes.{attr}",
                         })
 
     return errors
+
+
+def validate_display_attribute(
+    displays: List[Any],
+    attribute_classes: List['AttributeClass'],
+    entities: List['_BaseEntity'],
+    links: List['Link'],
+    ac_names: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    """Validate ``extra_cfg.display_attribute`` entries (sibling-AC family)."""
+    return _validate_display_entries(
+        displays, attribute_classes, entities, links, ac_names,
+        family='attribute', base_loc='settings.extra_cfg.display_attribute',
+    )
+
+
+def validate_display_label(
+    displays: List[Any],
+    attribute_classes: List['AttributeClass'],
+    entities: List['_BaseEntity'],
+    links: List['Link'],
+    ac_names: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    """Validate ``extra_cfg.display_label`` entries (label-target family)."""
+    return _validate_display_entries(
+        displays, attribute_classes, entities, links, ac_names,
+        family='label', base_loc='settings.extra_cfg.display_label',
+    )
