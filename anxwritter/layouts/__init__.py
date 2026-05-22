@@ -16,6 +16,7 @@ papers — see each module's docstring for the reference.
 from .fa2 import apply_forceatlas2
 from .fr import apply_fr
 from .tree import apply_tree
+from ._geometric import place
 
 # Map any user-supplied arrange string to its canonical key. Keys are
 # normalized via ``_canon`` (lowercase, spaces/dashes -> underscores).
@@ -59,4 +60,5 @@ __all__ = [
     'apply_forceatlas2',
     'apply_tree',
     'normalize_arrange',
+    'place',
 ]

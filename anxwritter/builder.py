@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple
 # Register LCX namespace for _fast_serialize tag resolution
 ET.register_namespace('lcx', 'http://www.i2group.com/Schemas/2001-12-07/LCXSchema')
 
-from .colors import color_to_colorref
+from .colors import color_to_colorref, coerce_color
 from .enums import Representation, AttributeType
 from .models import Link  # for type hints in add_link
 from .timing import PhaseTimer
@@ -143,6 +143,18 @@ _LEGEND_ALIGN_MAP: Dict[str, str] = {
 _TEXT_ALIGN_MAP: Dict[str, str] = {
     'centre': 'TextAlignCentre', 'center': 'TextAlignCentre',
     'left': 'TextAlignLeft', 'right': 'TextAlignRight',
+}
+
+# Legend item type short/Title-Case name → full ANB LegendItemType string.
+_LI_TYPE_MAP: Dict[str, str] = {
+    'font':       'LegendItemTypeFont',
+    'text':       'LegendItemTypeText',
+    'icon':       'LegendItemTypeIcon',
+    'attribute':  'LegendItemTypeAttribute',
+    'line':       'LegendItemTypeLine',
+    'link':       'LegendItemTypeLink',
+    'timezone':   'LegendItemTypeTimeZone',
+    'icon_frame': 'LegendItemTypeIconFrame',
 }
 
 # Per-field enum maps for _CHART_ATTR_MAP str-type entries
@@ -406,6 +418,13 @@ def _font_overrides_from_dc(font: Any) -> Dict[str, str]:
     return out
 
 
+def _ac_bool(val: Any, default: str) -> str:
+    """Convert an attribute-class cell value to 'true'/'false', else *default*."""
+    if val is None or (isinstance(val, float) and math.isnan(val)):
+        return default
+    return 'true' if bool(val) else 'false'
+
+
 class ANXBuilder:
     """Converts a batch of (DataFrame, entities, links) records to ANX XML."""
 
@@ -614,22 +633,12 @@ class ANXBuilder:
         )
 
     def _resolve_font_color(self, val) -> Optional[int]:
-        """Resolve a font color value to COLORREF int or None."""
-        if val is None:
-            return None
-        # Unwrap Color enum (str-Enum) before further checks
-        if hasattr(val, 'value'):
-            val = val.value
-        if isinstance(val, float) and math.isnan(val):
-            return None
-        if isinstance(val, bool):
-            return None
-        if isinstance(val, (int, float)):
-            return int(val)
-        s = str(val).strip()
-        if not s:
-            return None
-        return color_to_colorref(s)
+        """Resolve a font color value to COLORREF int or None.
+
+        Thin wrapper over :func:`anxwritter.colors.coerce_color` (the single
+        permissive coercion helper shared by the resolve and emit paths).
+        """
+        return coerce_color(val)
 
     def resolve_entity(self, entity, extra_cards=None,
                        semantic_guid=None) -> Optional['ResolvedEntity']:
@@ -1035,6 +1044,66 @@ class ANXBuilder:
 
     # ── XML element builders ──────────────────────────────────────────────────
 
+    @staticmethod
+    def _chart_item_attribs(
+        ci_id, label, description, date_set, time_set, dt_str, is_controlling,
+        source_ref, source_type, grade_one, grade_two, grade_three,
+        datetime_description,
+    ) -> Dict[str, str]:
+        """Build the shared <ChartItem> attribute dict (entity + link).
+
+        Insertion order is significant — it sets the XML attribute order in the
+        output — so the original sequence is preserved exactly.
+        """
+        ci_attribs: Dict[str, str] = {'Id': ci_id, 'Label': label}
+        if description:
+            ci_attribs['Description'] = description
+        if date_set:
+            ci_attribs['DateSet'] = 'true'
+        if time_set:
+            ci_attribs['TimeSet'] = 'true'
+        if is_controlling:
+            ci_attribs['Ordered'] = 'true'
+        if source_ref:
+            ci_attribs['SourceReference'] = source_ref
+        if source_type:
+            ci_attribs['SourceType'] = source_type
+        if grade_one is not None:
+            ci_attribs['GradeOneIndex'] = str(grade_one)
+        if grade_two is not None:
+            ci_attribs['GradeTwoIndex'] = str(grade_two)
+        if grade_three is not None:
+            ci_attribs['GradeThreeIndex'] = str(grade_three)
+        if dt_str:
+            ci_attribs['DateTime'] = dt_str
+        if datetime_description:
+            ci_attribs['DateTimeDescription'] = str(datetime_description)
+        return ci_attribs
+
+    @staticmethod
+    def _emit_timezone(ci_el: ET.Element, timezone: Any) -> None:
+        """Append a <TimeZone> child for a TimeZone dataclass / dict / scalar id.
+
+        Must be called after <CIStyle> per the XSD sequence.
+        """
+        if timezone is None or (isinstance(timezone, float) and math.isnan(timezone)):
+            return
+        tz_attrs: Dict[str, str] = {}
+        if hasattr(timezone, 'id') and hasattr(timezone, 'name'):
+            # TimeZone dataclass
+            if timezone.id is not None:
+                tz_attrs['UniqueID'] = str(timezone.id)
+            if timezone.name:
+                tz_attrs['Name'] = str(timezone.name)
+        elif isinstance(timezone, dict):
+            if 'id' in timezone and timezone['id'] is not None:
+                tz_attrs['UniqueID'] = str(timezone['id'])
+            if timezone.get('name'):
+                tz_attrs['Name'] = str(timezone['name'])
+        else:
+            tz_attrs['UniqueID'] = str(timezone)
+        ET.SubElement(ci_el, 'TimeZone', tz_attrs)
+
     def _make_entity_chart_item(
         self,
         ci_id: str,
@@ -1083,29 +1152,11 @@ class ANXBuilder:
         else:
             date_set, time_set, dt_str = self._format_datetime(date_val, time_val)
 
-        ci_attribs: Dict[str, str] = {'Id': ci_id, 'Label': label}
-        if description:
-            ci_attribs['Description'] = description
-        if date_set:
-            ci_attribs['DateSet'] = 'true'
-        if time_set:
-            ci_attribs['TimeSet'] = 'true'
-        if is_controlling:
-            ci_attribs['Ordered'] = 'true'
-        if source_ref:
-            ci_attribs['SourceReference'] = source_ref
-        if source_type:
-            ci_attribs['SourceType'] = source_type
-        if grade_one is not None:
-            ci_attribs['GradeOneIndex'] = str(grade_one)
-        if grade_two is not None:
-            ci_attribs['GradeTwoIndex'] = str(grade_two)
-        if grade_three is not None:
-            ci_attribs['GradeThreeIndex'] = str(grade_three)
-        if dt_str:
-            ci_attribs['DateTime'] = dt_str
-        if datetime_description:
-            ci_attribs['DateTimeDescription'] = str(datetime_description)
+        ci_attribs = self._chart_item_attribs(
+            ci_id, label, description, date_set, time_set, dt_str, is_controlling,
+            source_ref, source_type, grade_one, grade_two, grade_three,
+            datetime_description,
+        )
 
         ci_el = ET.Element('ChartItem', ci_attribs)
 
@@ -1148,22 +1199,7 @@ class ANXBuilder:
         )
 
         # TimeZone on ChartItem — must come after CIStyle per XSD sequence
-        if timezone is not None and not (isinstance(timezone, float) and math.isnan(timezone)):
-            tz_attrs: Dict[str, str] = {}
-            if hasattr(timezone, 'id') and hasattr(timezone, 'name'):
-                # TimeZone dataclass
-                if timezone.id is not None:
-                    tz_attrs['UniqueID'] = str(timezone.id)
-                if timezone.name:
-                    tz_attrs['Name'] = str(timezone.name)
-            elif isinstance(timezone, dict):
-                if 'id' in timezone and timezone['id'] is not None:
-                    tz_attrs['UniqueID'] = str(timezone['id'])
-                if timezone.get('name'):
-                    tz_attrs['Name'] = str(timezone['name'])
-            else:
-                tz_attrs['UniqueID'] = str(timezone)
-            ET.SubElement(ci_el, 'TimeZone', tz_attrs)
+        self._emit_timezone(ci_el, timezone)
 
         return ci_el
 
@@ -1220,29 +1256,11 @@ class ANXBuilder:
         else:
             date_set, time_set, dt_str = self._format_datetime(date_val, time_val)
 
-        ci_attribs: Dict[str, str] = {'Id': ci_id, 'Label': label}
-        if description:
-            ci_attribs['Description'] = description
-        if date_set:
-            ci_attribs['DateSet'] = 'true'
-        if time_set:
-            ci_attribs['TimeSet'] = 'true'
-        if is_controlling:
-            ci_attribs['Ordered'] = 'true'
-        if source_ref:
-            ci_attribs['SourceReference'] = source_ref
-        if source_type:
-            ci_attribs['SourceType'] = source_type
-        if grade_one is not None:
-            ci_attribs['GradeOneIndex'] = str(grade_one)
-        if grade_two is not None:
-            ci_attribs['GradeTwoIndex'] = str(grade_two)
-        if grade_three is not None:
-            ci_attribs['GradeThreeIndex'] = str(grade_three)
-        if dt_str:
-            ci_attribs['DateTime'] = dt_str
-        if datetime_description:
-            ci_attribs['DateTimeDescription'] = str(datetime_description)
+        ci_attribs = self._chart_item_attribs(
+            ci_id, label, description, date_set, time_set, dt_str, is_controlling,
+            source_ref, source_type, grade_one, grade_two, grade_three,
+            datetime_description,
+        )
 
         ci_el = ET.Element('ChartItem', ci_attribs)
 
@@ -1302,22 +1320,7 @@ class ANXBuilder:
         )
 
         # TimeZone on ChartItem — must come after CIStyle per XSD sequence
-        if timezone is not None and not (isinstance(timezone, float) and math.isnan(timezone)):
-            tz_attrs: Dict[str, str] = {}
-            if hasattr(timezone, 'id') and hasattr(timezone, 'name'):
-                # TimeZone dataclass
-                if timezone.id is not None:
-                    tz_attrs['UniqueID'] = str(timezone.id)
-                if timezone.name:
-                    tz_attrs['Name'] = str(timezone.name)
-            elif isinstance(timezone, dict):
-                if 'id' in timezone and timezone['id'] is not None:
-                    tz_attrs['UniqueID'] = str(timezone['id'])
-                if timezone.get('name'):
-                    tz_attrs['Name'] = str(timezone['name'])
-            else:
-                tz_attrs['UniqueID'] = str(timezone)
-            ET.SubElement(ci_el, 'TimeZone', tz_attrs)
+        self._emit_timezone(ci_el, timezone)
 
         return ci_el
 
@@ -1541,21 +1544,12 @@ class ANXBuilder:
 
     @staticmethod
     def _norm_color(val: Any) -> Optional[str]:
-        """Normalise a color value (int COLORREF or color string) to its string form,
-        or None if not set."""
-        if val is None:
-            return None
-        if isinstance(val, float) and math.isnan(val):
-            return None
-        # Unwrap Color enum (str-Enum) before further checks
-        if hasattr(val, 'value'):
-            val = val.value
-        if isinstance(val, (int, float)) and not isinstance(val, bool):
-            return str(int(val))
-        s = str(val).strip()
-        if not s:
-            return None
-        return str(color_to_colorref(s))
+        """Normalise a color value to its COLORREF string form, or None if unset.
+
+        The string counterpart of :func:`anxwritter.colors.coerce_color`.
+        """
+        ci = coerce_color(val)
+        return None if ci is None else str(ci)
 
     _SUMMARY_FIELD_MAP = {
         'title': 'SummaryFieldTitle',
@@ -1979,6 +1973,165 @@ class ANXBuilder:
 
     # ── Full document assembly ────────────────────────────────────────────────
 
+    def _emit_attribute_classes(
+        self, root: ET.Element, acc_cfg: Dict[str, Dict[str, Any]]
+    ) -> None:
+        """Register config-declared AttributeClasses then emit
+        ``<AttributeClassCollection>`` (user-defined classes only)."""
+        # Ensure every config-declared AttributeClass is registered and emitted,
+        # even when no entity/link data references it. Explicit declarations are
+        # first-class artefacts — users register them to reference later in ANB.
+        # Type conflicts between config and data are caught by validate() before
+        # this method is ever called, so the inferred type is trusted here.
+        for ac_name, ac_row in acc_cfg.items():
+            if ac_name in self._att_classes:
+                continue
+            declared = ac_row.get('type')
+            if declared is None:
+                continue  # validate() already flagged this as missing_required
+            att_type = _ATT_TYPE.get(_enum_val(declared).lower(), 'AttText')
+            self._att_classes[ac_name] = (self._next_id(), att_type)
+
+        if not self._att_classes:
+            return
+        acc = ET.SubElement(root, 'AttributeClassCollection')
+        for name, (ac_id, att_type) in self._att_classes.items():
+            cfg_row = acc_cfg.get(name, {})
+            # Mandatory attributes
+            ac_attrs: Dict[str, str] = {
+                'Id':   ac_id,
+                'Name': name,
+                'Type': att_type,
+            }
+            # Always emit — default to true so attributes are editable in ANB
+            ac_attrs['IsUser'] = _ac_bool(cfg_row.get('is_user'), 'true')
+            ac_attrs['UserCanAdd'] = _ac_bool(cfg_row.get('user_can_add'), 'true')
+            ac_attrs['UserCanRemove'] = _ac_bool(cfg_row.get('user_can_remove'), 'true')
+            # Always emit — ANB's silent default for ShowValue when omitted is false,
+            # but 99% of charts want the value visible. Set show_value=False explicitly to hide.
+            ac_attrs['ShowValue'] = _ac_bool(cfg_row.get('show_value'), 'true')
+            # Optional attributes — only emitted when explicitly set
+            if name in self._att_class_icons:
+                ac_attrs['IconFile'] = self._att_class_icons[name]
+            elif 'icon_file' in cfg_row:
+                ac_attrs['IconFile'] = str(cfg_row['icon_file'])
+            if 'prefix' in cfg_row:
+                prefix = str(cfg_row['prefix'])
+                ac_attrs['Prefix'] = prefix
+                ac_attrs['ShowPrefix'] = 'true' if prefix else 'false'
+            if 'suffix' in cfg_row:
+                suffix = str(cfg_row['suffix'])
+                ac_attrs['Suffix'] = suffix
+                ac_attrs['ShowSuffix'] = 'true' if suffix else 'false'
+            if 'show_class_name' in cfg_row:
+                ac_attrs['ShowClassName'] = _ac_bool(cfg_row.get('show_class_name'), 'false')
+            if 'show_symbol' in cfg_row:
+                ac_attrs['ShowSymbol'] = _ac_bool(cfg_row.get('show_symbol'), 'true')
+            if 'show_date' in cfg_row:
+                ac_attrs['ShowDate'] = _ac_bool(cfg_row.get('show_date'), 'true' if att_type == 'AttTime' else 'false')
+            if 'show_time' in cfg_row:
+                ac_attrs['ShowTime'] = _ac_bool(cfg_row.get('show_time'), 'true' if att_type == 'AttTime' else 'false')
+            if 'show_seconds' in cfg_row:
+                ac_attrs['ShowSeconds'] = _ac_bool(cfg_row.get('show_seconds'), 'false')
+            if 'decimal_places' in cfg_row:
+                ac_attrs['DecimalPlaces'] = str(int(cfg_row['decimal_places']))
+            if 'visible' in cfg_row:
+                ac_attrs['Visible'] = _ac_bool(cfg_row.get('visible'), 'true')
+            if 'show_if_set' in cfg_row:
+                ac_attrs['ShowIfSet'] = _ac_bool(cfg_row.get('show_if_set'), 'false')
+            if 'merge_behaviour' in cfg_row:
+                v = cfg_row['merge_behaviour']
+                ac_attrs['MergeBehaviour'] = _resolve_enum(v, _MERGE_MAP)
+            if 'paste_behaviour' in cfg_row:
+                v = cfg_row['paste_behaviour']
+                ac_attrs['PasteBehaviour'] = _resolve_enum(v, _MERGE_MAP)
+            if 'semantic_type' in cfg_row:
+                ac_attrs['SemanticTypeGuid'] = str(cfg_row['semantic_type'])
+            ac_el = ET.SubElement(acc, 'AttributeClass', ac_attrs)
+            ac_font_ov = _font_overrides_from_dc(cfg_row.get('font'))
+            if ac_font_ov:
+                self._font_el(ac_el, _FONT_DEFAULTS_AC, ac_font_ov)
+
+    def _emit_legend(self, root: ET.Element, s: Any,
+                     legend_items: Optional[List[Dict[str, Any]]]) -> None:
+        """Emit ``<LegendDefinition>`` and its ``<LegendItem>`` children, but only
+        when there is legend content (attrs, a font override, or items)."""
+        _LEGEND_PATH_MAP = [
+            ('legend_cfg.arrange', 'Arrange',             'str'),
+            ('legend_cfg.valign',  'VerticalAlignment',   'str'),
+            ('legend_cfg.halign',  'HorizontalAlignment', 'str'),
+            ('legend_cfg.x',       'X',                   'int'),
+            ('legend_cfg.y',       'Y',                   'int'),
+            ('legend_cfg.show',    'Shown',               'bool'),
+        ]
+        _LEGEND_ENUM_MAPS = {
+            'legend_cfg.arrange': _LEGEND_ARRANGE_MAP,
+            'legend_cfg.valign': _LEGEND_ALIGN_MAP,
+            'legend_cfg.halign': _LEGEND_ALIGN_MAP,
+        }
+        leg_attrs: Dict[str, str] = {}
+        for path, xml_attr, typ in _LEGEND_PATH_MAP:
+            val = _resolve_path(s, path)
+            if val is None:
+                continue
+            if typ == 'str' and path in _LEGEND_ENUM_MAPS:
+                val = _resolve_enum(val, _LEGEND_ENUM_MAPS[path])
+            leg_attrs[xml_attr] = _fmt_chart_attr(val, typ)
+        legend_font_ov = _font_overrides_from_dc(_resolve_path(s, 'legend_cfg.font'))
+        _has_legend = bool(leg_attrs or legend_font_ov or legend_items)
+        if not _has_legend:
+            return
+
+        if 'Arrange' not in leg_attrs:
+            leg_attrs['Arrange'] = 'LegendArrangementWide'
+        leg = ET.SubElement(root, 'LegendDefinition', leg_attrs)
+        if legend_font_ov:
+            self._font_el(leg, _FONT_DEFAULTS_CHART, legend_font_ov)
+
+        # Accept Title Case ('Font'), lowercase ('font'), and enum instances.
+        for li_row in (legend_items or []):
+            label_val = str(li_row.get('name', ''))
+            raw = li_row.get('item_type', 'Font')
+            raw_type = _enum_val(raw) if hasattr(raw, 'value') else str(raw)
+            li_type = _LI_TYPE_MAP.get(raw_type.lower().replace(' ', '_'), 'LegendItemTypeFont')
+
+            li_attrs: Dict[str, str] = {'Type': li_type, 'Label': label_val}
+
+            if li_type in ('LegendItemTypeLine', 'LegendItemTypeLink'):
+                if 'color' in li_row:
+                    li_attrs['Colour'] = str(int(li_row['color']))
+                if 'line_width' in li_row:
+                    li_attrs['LineWidth'] = str(int(li_row['line_width']))
+                if 'dash_style' in li_row:
+                    li_attrs['DashStyle'] = _resolve_enum(li_row['dash_style'], _DOT_MAP)
+                if li_type == 'LegendItemTypeLink' and 'arrows' in li_row:
+                    li_attrs['Arrows'] = _resolve_enum(li_row['arrows'], _ARROW_MAP)
+
+            elif li_type == 'LegendItemTypeIconFrame':
+                if 'color' in li_row:
+                    li_attrs['Colour'] = str(int(li_row['color']))
+
+            elif li_type in ('LegendItemTypeIcon', 'LegendItemTypeAttribute'):
+                if 'shade_color' in li_row:
+                    li_attrs['IconShadingColour'] = str(int(li_row['shade_color']))
+                if li_row.get('image_name'):
+                    li_attrs['ImageName'] = str(li_row['image_name'])
+
+            li_el = ET.SubElement(leg, 'LegendItem', li_attrs)
+
+            # Font/Text/TimeZone MUST have a <Font> child (ANB requires it).
+            # Other types with font: emit only when user sets font fields.
+            _FONT_REQUIRED_TYPES = (
+                'LegendItemTypeFont', 'LegendItemTypeText', 'LegendItemTypeTimeZone',
+            )
+            if li_type not in ('LegendItemTypeLine', 'LegendItemTypeLink'):
+                li_font_ov = _font_overrides_from_dc(li_row.get('font'))
+                if li_font_ov:
+                    self._font_el(li_el, _FONT_DEFAULTS_CHART, li_font_ov)
+                elif li_type in _FONT_REQUIRED_TYPES:
+                    # Empty <Font/> — ANB requires the tag but no attrs needed
+                    ET.SubElement(li_el, 'Font')
+
     def build(
         self,
         settings: Optional[Any] = None,
@@ -2082,87 +2235,7 @@ class ANXBuilder:
                         ET.SubElement(sc_el, 'String', {'Id': self._next_id(), 'Text': name})
 
         _t0_acc = _time.perf_counter()
-
-        # Ensure every config-declared AttributeClass is registered and emitted,
-        # even when no entity/link data references it. Explicit declarations are
-        # first-class artefacts — users register them to reference later in ANB.
-        # Type conflicts between config and data are caught by validate() before
-        # this method is ever called, so the inferred type is trusted here.
-        for ac_name, ac_row in acc_cfg.items():
-            if ac_name in self._att_classes:
-                continue
-            declared = ac_row.get('type')
-            if declared is None:
-                continue  # validate() already flagged this as missing_required
-            att_type = _ATT_TYPE.get(_enum_val(declared).lower(), 'AttText')
-            self._att_classes[ac_name] = (self._next_id(), att_type)
-
-        def _ac_bool(val: Any, default: str) -> str:
-            """Convert a chart.ac cell value to 'true'/'false', falling back to default."""
-            if val is None or (isinstance(val, float) and math.isnan(val)):
-                return default
-            return 'true' if bool(val) else 'false'
-
-        # AttributeClassCollection (user-defined only)
-        if self._att_classes:
-            acc = ET.SubElement(root, 'AttributeClassCollection')
-            for name, (ac_id, att_type) in self._att_classes.items():
-                cfg_row = acc_cfg.get(name, {})
-                # Mandatory attributes
-                ac_attrs: Dict[str, str] = {
-                    'Id':   ac_id,
-                    'Name': name,
-                    'Type': att_type,
-                }
-                # Always emit — default to true so attributes are editable in ANB
-                ac_attrs['IsUser'] = _ac_bool(cfg_row.get('is_user'), 'true')
-                ac_attrs['UserCanAdd'] = _ac_bool(cfg_row.get('user_can_add'), 'true')
-                ac_attrs['UserCanRemove'] = _ac_bool(cfg_row.get('user_can_remove'), 'true')
-                # Always emit — ANB's silent default for ShowValue when omitted is false,
-                # but 99% of charts want the value visible. Set show_value=False explicitly to hide.
-                ac_attrs['ShowValue'] = _ac_bool(cfg_row.get('show_value'), 'true')
-                # Optional attributes — only emitted when explicitly set
-                if name in self._att_class_icons:
-                    ac_attrs['IconFile'] = self._att_class_icons[name]
-                elif 'icon_file' in cfg_row:
-                    ac_attrs['IconFile'] = str(cfg_row['icon_file'])
-                if 'prefix' in cfg_row:
-                    prefix = str(cfg_row['prefix'])
-                    ac_attrs['Prefix'] = prefix
-                    ac_attrs['ShowPrefix'] = 'true' if prefix else 'false'
-                if 'suffix' in cfg_row:
-                    suffix = str(cfg_row['suffix'])
-                    ac_attrs['Suffix'] = suffix
-                    ac_attrs['ShowSuffix'] = 'true' if suffix else 'false'
-                if 'show_class_name' in cfg_row:
-                    ac_attrs['ShowClassName'] = _ac_bool(cfg_row.get('show_class_name'), 'false')
-                if 'show_symbol' in cfg_row:
-                    ac_attrs['ShowSymbol'] = _ac_bool(cfg_row.get('show_symbol'), 'true')
-                if 'show_date' in cfg_row:
-                    ac_attrs['ShowDate'] = _ac_bool(cfg_row.get('show_date'), 'true' if att_type == 'AttTime' else 'false')
-                if 'show_time' in cfg_row:
-                    ac_attrs['ShowTime'] = _ac_bool(cfg_row.get('show_time'), 'true' if att_type == 'AttTime' else 'false')
-                if 'show_seconds' in cfg_row:
-                    ac_attrs['ShowSeconds'] = _ac_bool(cfg_row.get('show_seconds'), 'false')
-                if 'decimal_places' in cfg_row:
-                    ac_attrs['DecimalPlaces'] = str(int(cfg_row['decimal_places']))
-                if 'visible' in cfg_row:
-                    ac_attrs['Visible'] = _ac_bool(cfg_row.get('visible'), 'true')
-                if 'show_if_set' in cfg_row:
-                    ac_attrs['ShowIfSet'] = _ac_bool(cfg_row.get('show_if_set'), 'false')
-                if 'merge_behaviour' in cfg_row:
-                    v = cfg_row['merge_behaviour']
-                    ac_attrs['MergeBehaviour'] = _resolve_enum(v, _MERGE_MAP)
-                if 'paste_behaviour' in cfg_row:
-                    v = cfg_row['paste_behaviour']
-                    ac_attrs['PasteBehaviour'] = _resolve_enum(v, _MERGE_MAP)
-                if 'semantic_type' in cfg_row:
-                    ac_attrs['SemanticTypeGuid'] = str(cfg_row['semantic_type'])
-                ac_el = ET.SubElement(acc, 'AttributeClass', ac_attrs)
-                ac_font_ov = _font_overrides_from_dc(cfg_row.get('font'))
-                if ac_font_ov:
-                    self._font_el(ac_el, _FONT_DEFAULTS_AC, ac_font_ov)
-
+        self._emit_attribute_classes(root, acc_cfg)
         _timer.record("AttributeClassCollection", _time.perf_counter() - _t0_acc)
 
         with _timer.phase("Type collections"):
@@ -2269,91 +2342,7 @@ class ANXBuilder:
 
         # LegendDefinition — only emitted when there is content
         _t0_legend = _time.perf_counter()
-        _LEGEND_PATH_MAP = [
-            ('legend_cfg.arrange', 'Arrange',             'str'),
-            ('legend_cfg.valign',  'VerticalAlignment',   'str'),
-            ('legend_cfg.halign',  'HorizontalAlignment', 'str'),
-            ('legend_cfg.x',       'X',                   'int'),
-            ('legend_cfg.y',       'Y',                   'int'),
-            ('legend_cfg.show',    'Shown',               'bool'),
-        ]
-        _LEGEND_ENUM_MAPS = {
-            'legend_cfg.arrange': _LEGEND_ARRANGE_MAP,
-            'legend_cfg.valign': _LEGEND_ALIGN_MAP,
-            'legend_cfg.halign': _LEGEND_ALIGN_MAP,
-        }
-        leg_attrs: Dict[str, str] = {}
-        for path, xml_attr, typ in _LEGEND_PATH_MAP:
-            val = _resolve_path(s, path)
-            if val is None:
-                continue
-            if typ == 'str' and path in _LEGEND_ENUM_MAPS:
-                val = _resolve_enum(val, _LEGEND_ENUM_MAPS[path])
-            leg_attrs[xml_attr] = _fmt_chart_attr(val, typ)
-        legend_font_ov = _font_overrides_from_dc(_resolve_path(s, 'legend_cfg.font'))
-        _has_legend = bool(leg_attrs or legend_font_ov or legend_items)
-
-        if _has_legend:
-            if 'Arrange' not in leg_attrs:
-                leg_attrs['Arrange'] = 'LegendArrangementWide'
-            leg = ET.SubElement(root, 'LegendDefinition', leg_attrs)
-            if legend_font_ov:
-                self._font_el(leg, _FONT_DEFAULTS_CHART, legend_font_ov)
-
-            # Accept Title Case ('Font'), lowercase ('font'), and enum instances.
-            _LI_TYPE_MAP = {
-                'font':       'LegendItemTypeFont',
-                'text':       'LegendItemTypeText',
-                'icon':       'LegendItemTypeIcon',
-                'attribute':  'LegendItemTypeAttribute',
-                'line':       'LegendItemTypeLine',
-                'link':       'LegendItemTypeLink',
-                'timezone':   'LegendItemTypeTimeZone',
-                'icon_frame': 'LegendItemTypeIconFrame',
-            }
-            for li_row in (legend_items or []):
-                label_val = str(li_row.get('name', ''))
-                raw = li_row.get('item_type', 'Font')
-                raw_type = _enum_val(raw) if hasattr(raw, 'value') else str(raw)
-                li_type = _LI_TYPE_MAP.get(raw_type.lower().replace(' ', '_'), 'LegendItemTypeFont')
-
-                li_attrs: Dict[str, str] = {'Type': li_type, 'Label': label_val}
-
-                if li_type in ('LegendItemTypeLine', 'LegendItemTypeLink'):
-                    if 'color' in li_row:
-                        li_attrs['Colour'] = str(int(li_row['color']))
-                    if 'line_width' in li_row:
-                        li_attrs['LineWidth'] = str(int(li_row['line_width']))
-                    if 'dash_style' in li_row:
-                        li_attrs['DashStyle'] = _resolve_enum(li_row['dash_style'], _DOT_MAP)
-                    if li_type == 'LegendItemTypeLink' and 'arrows' in li_row:
-                        li_attrs['Arrows'] = _resolve_enum(li_row['arrows'], _ARROW_MAP)
-
-                elif li_type == 'LegendItemTypeIconFrame':
-                    if 'color' in li_row:
-                        li_attrs['Colour'] = str(int(li_row['color']))
-
-                elif li_type in ('LegendItemTypeIcon', 'LegendItemTypeAttribute'):
-                    if 'shade_color' in li_row:
-                        li_attrs['IconShadingColour'] = str(int(li_row['shade_color']))
-                    if li_row.get('image_name'):
-                        li_attrs['ImageName'] = str(li_row['image_name'])
-
-                li_el = ET.SubElement(leg, 'LegendItem', li_attrs)
-
-                # Font/Text/TimeZone MUST have a <Font> child (ANB requires it).
-                # Other types with font: emit only when user sets font fields.
-                _FONT_REQUIRED_TYPES = (
-                    'LegendItemTypeFont', 'LegendItemTypeText', 'LegendItemTypeTimeZone',
-                )
-                if li_type not in ('LegendItemTypeLine', 'LegendItemTypeLink'):
-                    li_font_ov = _font_overrides_from_dc(li_row.get('font'))
-                    if li_font_ov:
-                        self._font_el(li_el, _FONT_DEFAULTS_CHART, li_font_ov)
-                    elif li_type in _FONT_REQUIRED_TYPES:
-                        # Empty <Font/> — ANB requires the tag but no attrs needed
-                        ET.SubElement(li_el, 'Font')
-
+        self._emit_legend(root, s, legend_items)
         _timer.record("LegendDefinition", _time.perf_counter() - _t0_legend)
 
         with _timer.phase("XML serialization"):
@@ -2361,6 +2350,21 @@ class ANXBuilder:
         return result
 
     # ── Layout ───────────────────────────────────────────────────────────────
+
+    def _layout_edges(self) -> List[Tuple[str, str]]:
+        """Entity-identity edge list from resolved links (for layout)."""
+        int_to_key = {
+            int_id: k for k, (_ci, int_id) in self._entity_registry.items()
+        }
+        edges: List[Tuple[str, str]] = []
+        for item in self._resolved_items:
+            if not hasattr(item, 'from_int_id'):
+                continue  # ResolvedEntity, not ResolvedLink
+            a = int_to_key.get(item.from_int_id)
+            b = int_to_key.get(item.to_int_id)
+            if a and b and a != b:
+                edges.append((a, b))
+        return edges
 
     def _apply_layout(
         self,
@@ -2372,239 +2376,35 @@ class ANXBuilder:
         """Calculate (X, Y) positions for all registered entities.
 
         Entities that already have a position in ``_positions`` (set manually
-        via ``chart.e`` x/y columns or geo_map) are skipped by the geometric
-        modes. The topology-aware modes treat them as fixed anchors during
-        simulation.
+        via x/y or geo_map) are skipped by the geometric modes; the
+        topology-aware modes treat them as fixed anchors during simulation.
+        Position math lives in :mod:`anxwritter.layouts` — this method only
+        gathers inputs and writes the result back into ``_positions``.
 
         Args:
             mode: Layout algorithm — ``'radial'`` (default), ``'circle'``,
                 ``'grid'``, ``'random'``, ``'fr'`` (Fruchterman-Reingold),
                 ``'forceatlas2'`` (or ``'fa2'``), or ``'tree'`` (tidy tree).
-                Aliases like ``'fruchterman_reingold'``, ``'reingold_tilford'``
-                are also accepted.
-            center: ``(cx, cy)`` offset for the layout origin. Used by geo_map
-                to place unmatched entities below the geo-positioned area.
-            scale_factor: Uniform spread multiplier (default ``1.0``). Applied
-                across all algorithms — multiplies hub/leaf radii (radial),
-                ring radius (circle), grid spacing, random extent, the
-                force-directed simulation scales (FR / FA2), and the tree
-                ``x_spacing`` / ``y_spacing``.
+            center: ``(cx, cy)`` offset for the layout origin.
+            scale_factor: Uniform spread multiplier (default ``1.0``).
         """
-        from .layouts import normalize_arrange
+        from .layouts import place
 
-        mode = normalize_arrange(mode)
-        cx, cy = center
         keys = list(self._entity_registry.keys())  # List[str] — identity strings
         auto_keys = [k for k in keys if k not in self._positions]
-        n = len(auto_keys)
-        if n == 0:
+        if not auto_keys:
             return
-
-        if mode == 'grid':
-            cols = math.ceil(math.sqrt(n))
-            spacing = int(round(200 * scale_factor))
-            for i, key in enumerate(auto_keys):
-                row_i, col_i = divmod(i, cols)
-                x = cx + col_i * spacing - (cols - 1) * spacing // 2
-                y = cy + row_i * spacing - ((n // cols) - 1) * spacing // 2
-                self._positions[key] = (x, y)
-
-        elif mode == 'circle':
-            radius = max(150, n * 35) * scale_factor
-            for i, key in enumerate(auto_keys):
-                angle = 2 * math.pi * i / n
-                x = cx + int(radius * math.cos(angle))
-                y = cy + int(radius * math.sin(angle))
-                self._positions[key] = (x, y)
-
-        elif mode == 'radial':
-            self._apply_radial_layout(auto_keys, cx, cy, scale_factor=scale_factor)
-
-        elif mode in ('fr', 'forceatlas2', 'tree'):
-            self._apply_topology_layout(mode, keys, cx, cy, scale_factor=scale_factor)
-
-        else:  # random
-            import random
-            rng = random.Random(42)
-            extent = int(round(400 * scale_factor))
-            for key in auto_keys:
-                x = cx + rng.randint(-extent, extent)
-                y = cy + rng.randint(-extent, extent)
-                self._positions[key] = (x, y)
-
-    def _apply_topology_layout(
-        self,
-        mode: str,
-        all_keys: List[str],
-        cx: int,
-        cy: int,
-        *,
-        scale_factor: float = 1.0,
-    ) -> None:
-        """Run a topology-aware layout (``fr`` / ``forceatlas2`` / ``tree``).
-
-        Pinned positions in ``self._positions`` are passed as fixed anchors
-        and preserved unchanged; only non-pinned entities receive new
-        positions.
-        """
-        from .layouts import apply_forceatlas2, apply_fr, apply_tree
-
-        # Translate ResolvedLink endpoints back to identity keys.
-        int_to_key = {
-            int_id: k for k, (_ci, int_id) in self._entity_registry.items()
-        }
-        edges: List[Tuple[str, str]] = []
-        for item in self._resolved_items:
-            if not hasattr(item, 'from_int_id'):
-                continue
-            a = int_to_key.get(item.from_int_id)
-            b = int_to_key.get(item.to_int_id)
-            if a and b and a != b:
-                edges.append((a, b))
-
         pinned = {
             k: (float(self._positions[k][0]), float(self._positions[k][1]))
-            for k in all_keys
+            for k in keys
             if k in self._positions
         }
-
-        if mode == 'fr':
-            placed = apply_fr(
-                all_keys, edges, pinned=pinned, center=(cx, cy),
-                scale=800.0 * scale_factor,
-            )
-        elif mode == 'forceatlas2':
-            placed = apply_forceatlas2(
-                all_keys, edges, pinned=pinned, center=(cx, cy),
-                scale=60.0 * scale_factor,
-            )
-        else:  # 'tree'
-            placed = apply_tree(
-                all_keys, edges, pinned=pinned, center=(cx, cy),
-                x_spacing=160.0 * scale_factor,
-                y_spacing=200.0 * scale_factor,
-            )
-
+        placed = place(
+            mode, all_keys=keys, auto_keys=auto_keys, edges=self._layout_edges(),
+            pinned=pinned, center=center, scale=scale_factor,
+        )
         for k, (x, y) in placed.items():
             self._positions[k] = (x, y)
-
-    def _apply_radial_layout(
-        self,
-        auto_keys: List[str],
-        cx: int,
-        cy: int,
-        *,
-        scale_factor: float = 1.0,
-    ) -> None:
-        """Hub-and-spokes layout with compaction.
-
-        Builds the entity adjacency graph from resolved links, identifies
-        hubs (degree >= 2), attaches each non-hub leaf to its highest-degree
-        hub neighbour, then places hubs on a ring with leaves arranged on an
-        outward-facing arc around each hub. Isolated entities (degree 0 or
-        no hub neighbour in ``auto_keys``) are placed in a grid below the
-        layout.
-        """
-        # int_id -> identity key, for translating ResolvedLink endpoints
-        int_to_key = {int_id: k for k, (_ci, int_id) in self._entity_registry.items()}
-
-        # Adjacency over all entities (manual + auto), so a leaf attached to a
-        # manually-positioned entity still counts as having a neighbour
-        adj: Dict[str, set] = {k: set() for k in self._entity_registry}
-        for item in self._resolved_items:
-            if not hasattr(item, 'from_int_id'):
-                continue  # ResolvedEntity, not ResolvedLink
-            a = int_to_key.get(item.from_int_id)
-            b = int_to_key.get(item.to_int_id)
-            if a and b and a != b:
-                adj[a].add(b)
-                adj[b].add(a)
-
-        degrees = {k: len(adj[k]) for k in auto_keys}
-
-        # Hubs: auto-placed entities with degree >= 2
-        hubs = [k for k in auto_keys if degrees[k] >= 2]
-        hubs.sort(key=lambda k: (-degrees[k], k))
-        hub_set = set(hubs)
-
-        # Non-hub auto entities: attach to highest-degree hub neighbour, else isolate
-        leaf_to_hub: Dict[str, str] = {}
-        isolated: List[str] = []
-        for k in auto_keys:
-            if k in hub_set:
-                continue
-            hub_neighbours = [n for n in adj[k] if n in hub_set]
-            if hub_neighbours:
-                leaf_to_hub[k] = max(hub_neighbours, key=lambda h: (degrees[h], h))
-            else:
-                isolated.append(k)
-
-        hub_leaves: Dict[str, List[str]] = {h: [] for h in hubs}
-        for leaf, hub in leaf_to_hub.items():
-            hub_leaves[hub].append(leaf)
-
-        # ── Place hubs ────────────────────────────────────────────────────
-        n_hubs = len(hubs)
-        hub_ring_radius = (
-            0 if n_hubs <= 1 else max(260, n_hubs * 70) * scale_factor
-        )
-        hub_pos: Dict[str, Tuple[int, int]] = {}
-
-        if n_hubs == 1:
-            h = hubs[0]
-            hub_pos[h] = (cx, cy)
-            self._positions[h] = (cx, cy)
-        else:
-            for i, h in enumerate(hubs):
-                a = 2 * math.pi * i / n_hubs
-                hx = cx + int(hub_ring_radius * math.cos(a))
-                hy = cy + int(hub_ring_radius * math.sin(a))
-                hub_pos[h] = (hx, hy)
-                self._positions[h] = (hx, hy)
-
-        # ── Place leaves on outward-facing arc per hub ────────────────────
-        # Compact: tight base radius, modest growth with leaf count
-        for h, leaves in hub_leaves.items():
-            if not leaves:
-                continue
-            hx, hy = hub_pos[h]
-            n_leaves = len(leaves)
-            leaf_radius = max(110, 25 + 14 * n_leaves) * scale_factor
-
-            if n_hubs == 1:
-                # Full circle around lone hub
-                for j, leaf in enumerate(leaves):
-                    a = 2 * math.pi * j / n_leaves
-                    lx = hx + int(leaf_radius * math.cos(a))
-                    ly = hy + int(leaf_radius * math.sin(a))
-                    self._positions[leaf] = (lx, ly)
-            else:
-                # Outward direction = vector from chart center to hub
-                base_angle = math.atan2(hy - cy, hx - cx)
-                arc_span = math.pi  # 180° fan facing outward
-                if n_leaves == 1:
-                    angles = [base_angle]
-                else:
-                    angles = [
-                        base_angle - arc_span / 2 + arc_span * j / (n_leaves - 1)
-                        for j in range(n_leaves)
-                    ]
-                for j, leaf in enumerate(leaves):
-                    a = angles[j]
-                    lx = hx + int(leaf_radius * math.cos(a))
-                    ly = hy + int(leaf_radius * math.sin(a))
-                    self._positions[leaf] = (lx, ly)
-
-        # ── Place isolated entities in a grid below the layout ────────────
-        if isolated:
-            cols = math.ceil(math.sqrt(len(isolated)))
-            spacing = int(round(160 * scale_factor))
-            y_offset = int(round(hub_ring_radius + 320 * scale_factor))
-            for i, key in enumerate(isolated):
-                row_i, col_i = divmod(i, cols)
-                x = cx + col_i * spacing - (cols - 1) * spacing // 2
-                y = cy + y_offset + row_i * spacing
-                self._positions[key] = (x, y)
 
     # ── Helper utilities ──────────────────────────────────────────────────────
 

@@ -28,11 +28,10 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import math
 import yaml
 import os
 import time
-from datetime import datetime as _datetime, date as _date
+from datetime import datetime as _datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -131,28 +130,6 @@ def _parse_attr_datetime(val: Any) -> Optional[_datetime]:
     return None
 
 
-def _str_or_none(val: Any) -> Optional[str]:
-    """Return str(val) stripped, or None if val is empty/NaN."""
-    if val is None:
-        return None
-    if isinstance(val, float) and math.isnan(val):
-        return None
-    s = str(val).strip()
-    return s if s else None
-
-
-def _int_or_none(val: Any) -> Optional[int]:
-    """Return int(val), or None if val is None/NaN."""
-    if val is None:
-        return None
-    if isinstance(val, float) and math.isnan(val):
-        return None
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return None
-
-
 def _settings_to_clean_dict(settings: Settings) -> dict:
     """Convert a Settings dataclass to a nested dict with None values dropped.
 
@@ -181,18 +158,6 @@ def _settings_to_clean_dict(settings: Settings) -> dict:
             if inner:
                 out[fld.name] = inner
     return out
-
-
-def _infer_attr_type(value: Any) -> str:
-    """Infer i2 attribute type string from a Python value."""
-    if isinstance(value, bool):
-        return 'Flag'
-    if isinstance(value, (int, float)):
-        return 'Number'
-    # date catches both datetime.datetime and datetime.date.
-    if isinstance(value, _date):
-        return 'DateTime'
-    return 'Text'
 
 
 # ── Main class ────────────────────────────────────────────────────────────────
@@ -867,6 +832,37 @@ class ANXChart:
                 ]
             return Palette(**d)
         return None
+
+    @staticmethod
+    def _palette_to_dict(pal, *, full: bool) -> dict:
+        """Serialize a Palette to a plain dict.
+
+        ``full=True`` (build path) always emits ``locked`` and keeps ``None``
+        entry values; ``full=False`` (config export) drops a falsy ``locked``
+        and strips ``None`` from attribute-entry dicts.
+        """
+        d: Dict[str, Any] = {'name': pal.name}
+        if full:
+            d['locked'] = pal.locked
+        elif pal.locked:
+            d['locked'] = True
+        if pal.entity_types:
+            d['entity_types'] = list(pal.entity_types)
+        if pal.link_types:
+            d['link_types'] = list(pal.link_types)
+        if pal.attribute_classes:
+            d['attribute_classes'] = list(pal.attribute_classes)
+        if pal.attribute_entries:
+            if full:
+                d['attribute_entries'] = [
+                    {'name': ae.name, 'value': ae.value}
+                    for ae in pal.attribute_entries
+                ]
+            else:
+                d['attribute_entries'] = [
+                    ANXChart._dc_to_clean_dict(ae) for ae in pal.attribute_entries
+                ]
+        return d
 
     @staticmethod
     def _build_legend_item(raw):
@@ -1578,23 +1574,9 @@ class ANXChart:
             result['source_types'] = list(self.source_types)
 
         if self._palettes:
-            pal_list = []
-            for pal in self._palettes:
-                d: Dict[str, Any] = {'name': pal.name}
-                if pal.locked:
-                    d['locked'] = True
-                if pal.entity_types:
-                    d['entity_types'] = list(pal.entity_types)
-                if pal.link_types:
-                    d['link_types'] = list(pal.link_types)
-                if pal.attribute_classes:
-                    d['attribute_classes'] = list(pal.attribute_classes)
-                if pal.attribute_entries:
-                    d['attribute_entries'] = [
-                        self._dc_to_clean_dict(ae) for ae in pal.attribute_entries
-                    ]
-                pal_list.append(d)
-            result['palettes'] = pal_list
+            result['palettes'] = [
+                self._palette_to_dict(pal, full=False) for pal in self._palettes
+            ]
 
         return result
 
@@ -1714,16 +1696,44 @@ class ANXChart:
                     return
         collection.append(obj)
 
-    def add_attribute_class(self, name_or_obj=None, **kwargs) -> None:
-        """Add or update an AttributeClass. Later calls with the same
-        ``name`` replace the earlier entry."""
-        if isinstance(name_or_obj, AttributeClass):
+    def _register(self, collection, cls, name_or_obj, kwargs, *,
+                  upsert=True, coerce=None) -> None:
+        """Accept an existing ``cls`` instance or build one from kwargs, then add
+        it to ``collection``.
+
+        ``name_or_obj`` is either a ready ``cls`` instance or the positional
+        ``name`` shortcut. ``upsert=True`` replaces a same-name entry (named
+        registries); otherwise the object is appended (legend / palette).
+        ``coerce`` is an optional callback that adjusts the kwargs dict before
+        construction.
+        """
+        if isinstance(name_or_obj, cls):
             obj = name_or_obj
         else:
             if name_or_obj is not None:
                 kwargs['name'] = name_or_obj
-            obj = AttributeClass(**kwargs)
-        self._upsert_by_name(self._attribute_classes, obj)
+            if coerce is not None:
+                coerce(kwargs)
+            obj = cls(**kwargs)
+        if upsert:
+            self._upsert_by_name(collection, obj)
+        else:
+            collection.append(obj)
+
+    @staticmethod
+    def _coerce_palette_kwargs(kwargs: dict) -> None:
+        """Convert ``attribute_entries`` dicts to ``PaletteAttributeEntry`` in place."""
+        ae = kwargs.get('attribute_entries')
+        if ae and isinstance(ae, list):
+            kwargs['attribute_entries'] = [
+                PaletteAttributeEntry(**e) if isinstance(e, dict) else e
+                for e in ae
+            ]
+
+    def add_attribute_class(self, name_or_obj=None, **kwargs) -> None:
+        """Add or update an AttributeClass. Later calls with the same
+        ``name`` replace the earlier entry."""
+        self._register(self._attribute_classes, AttributeClass, name_or_obj, kwargs)
 
     def add_strength(self, name_or_obj=None, **kwargs) -> None:
         """Add or update a Strength. Pass a Strength object or keyword args.
@@ -1731,18 +1741,7 @@ class ANXChart:
         If a Strength with the same name already exists (e.g. the pre-populated
         ``'Default'``), it is replaced rather than duplicated.
         """
-        if isinstance(name_or_obj, Strength):
-            obj = name_or_obj
-        else:
-            if name_or_obj is not None:
-                kwargs['name'] = name_or_obj
-            obj = Strength(**kwargs)
-        # Replace existing with same name, or append
-        for i, existing in enumerate(self.strengths.items):
-            if existing.name == obj.name:
-                self.strengths.items[i] = obj
-                return
-        self.strengths.items.append(obj)
+        self._register(self.strengths.items, Strength, name_or_obj, kwargs)
 
     def add_datetime_format(self, name_or_obj=None, **kwargs) -> None:
         """Add or update a DateTimeFormat. Pass a DateTimeFormat object or keyword args.
@@ -1750,17 +1749,7 @@ class ANXChart:
         If a DateTimeFormat with the same name already exists, it is replaced
         rather than duplicated.
         """
-        if isinstance(name_or_obj, DateTimeFormat):
-            obj = name_or_obj
-        else:
-            if name_or_obj is not None:
-                kwargs['name'] = name_or_obj
-            obj = DateTimeFormat(**kwargs)
-        for i, existing in enumerate(self._datetime_formats):
-            if existing.name == obj.name:
-                self._datetime_formats[i] = obj
-                return
-        self._datetime_formats.append(obj)
+        self._register(self._datetime_formats, DateTimeFormat, name_or_obj, kwargs)
 
     def add_custom_property(self, name: str, value: str) -> None:
         """Add a chart-level custom property (name/value pair).
@@ -1774,12 +1763,7 @@ class ANXChart:
 
     def add_legend_item(self, name_or_obj=None, **kwargs) -> None:
         """Add a LegendItem. Pass a LegendItem object or keyword args."""
-        if isinstance(name_or_obj, LegendItem):
-            self._legend_items.append(name_or_obj)
-        else:
-            if name_or_obj is not None:
-                kwargs['name'] = name_or_obj
-            self._legend_items.append(LegendItem(**kwargs))
+        self._register(self._legend_items, LegendItem, name_or_obj, kwargs, upsert=False)
 
     def add_display_attribute(self, obj=None, **kwargs) -> None:
         """Add a :class:`DisplayAttribute` to ``extra_cfg.display_attribute``.
@@ -1816,57 +1800,27 @@ class ANXChart:
     def add_entity_type(self, name_or_obj=None, **kwargs) -> None:
         """Add or update an EntityType. Later calls with the same ``name``
         replace the earlier entry."""
-        if isinstance(name_or_obj, EntityType):
-            obj = name_or_obj
-        else:
-            if name_or_obj is not None:
-                kwargs['name'] = name_or_obj
-            obj = EntityType(**kwargs)
-        self._upsert_by_name(self._entity_types, obj)
+        self._register(self._entity_types, EntityType, name_or_obj, kwargs)
 
     def add_link_type(self, name_or_obj=None, **kwargs) -> None:
         """Add or update a LinkType. Later calls with the same ``name``
         replace the earlier entry."""
-        if isinstance(name_or_obj, LinkType):
-            obj = name_or_obj
-        else:
-            if name_or_obj is not None:
-                kwargs['name'] = name_or_obj
-            obj = LinkType(**kwargs)
-        self._upsert_by_name(self._link_types, obj)
+        self._register(self._link_types, LinkType, name_or_obj, kwargs)
 
     def add_semantic_entity(self, name_or_obj=None, **kwargs) -> None:
         """Add or update a custom entity semantic type. Later calls with the
         same ``name`` replace the earlier entry."""
-        if isinstance(name_or_obj, SemanticEntity):
-            obj = name_or_obj
-        else:
-            if name_or_obj is not None:
-                kwargs['name'] = name_or_obj
-            obj = SemanticEntity(**kwargs)
-        self._upsert_by_name(self._semantic_entities, obj)
+        self._register(self._semantic_entities, SemanticEntity, name_or_obj, kwargs)
 
     def add_semantic_link(self, name_or_obj=None, **kwargs) -> None:
         """Add or update a custom link semantic type. Later calls with the
         same ``name`` replace the earlier entry."""
-        if isinstance(name_or_obj, SemanticLink):
-            obj = name_or_obj
-        else:
-            if name_or_obj is not None:
-                kwargs['name'] = name_or_obj
-            obj = SemanticLink(**kwargs)
-        self._upsert_by_name(self._semantic_links, obj)
+        self._register(self._semantic_links, SemanticLink, name_or_obj, kwargs)
 
     def add_semantic_property(self, name_or_obj=None, **kwargs) -> None:
         """Add or update a custom property semantic type. Later calls with
         the same ``name`` replace the earlier entry."""
-        if isinstance(name_or_obj, SemanticProperty):
-            obj = name_or_obj
-        else:
-            if name_or_obj is not None:
-                kwargs['name'] = name_or_obj
-            obj = SemanticProperty(**kwargs)
-        self._upsert_by_name(self._semantic_properties, obj)
+        self._register(self._semantic_properties, SemanticProperty, name_or_obj, kwargs)
 
     def add_palette(self, name_or_obj=None, **kwargs) -> None:
         """Add a Palette. Pass a Palette object or keyword args.
@@ -1874,19 +1828,8 @@ class ANXChart:
         When keyword args include ``attribute_entries`` as a list of dicts,
         each dict is converted to a ``PaletteAttributeEntry``.
         """
-        if isinstance(name_or_obj, Palette):
-            self._palettes.append(name_or_obj)
-        else:
-            if name_or_obj is not None:
-                kwargs['name'] = name_or_obj
-            # Normalise attribute_entries from dicts
-            ae = kwargs.get('attribute_entries')
-            if ae and isinstance(ae, list):
-                kwargs['attribute_entries'] = [
-                    PaletteAttributeEntry(**e) if isinstance(e, dict) else e
-                    for e in ae
-                ]
-            self._palettes.append(Palette(**kwargs))
+        self._register(self._palettes, Palette, name_or_obj, kwargs,
+                       upsert=False, coerce=self._coerce_palette_kwargs)
 
     # ------------------------------------------------------------------
     # Convenience constructors
@@ -2011,6 +1954,10 @@ class ANXChart:
             validate_attribute_classes,
             validate_palettes,
             validate_semantic_types,
+            validate_geo_map,
+            validate_styling,
+            validate_display_attribute,
+            validate_display_label,
         )
 
         errors: List[Dict[str, Any]] = []
@@ -2111,7 +2058,6 @@ class ANXChart:
         ))
 
         # Validate geo_map configuration
-        from .validation import validate_geo_map, validate_styling
         errors.extend(validate_geo_map(
             self.settings.extra_cfg.geo_map, self._entities
         ))
@@ -2125,10 +2071,6 @@ class ANXChart:
 
         # Validate the display synthesizers (extra_cfg.display_attribute /
         # display_label).
-        from .validation import (
-            validate_display_attribute,
-            validate_display_label,
-        )
         errors.extend(validate_display_attribute(
             self.settings.extra_cfg.display_attribute,
             self._attribute_classes,
@@ -2251,6 +2193,100 @@ class ANXChart:
 
         return resolver.build_config(), entity_semantic_guids, link_semantic_guids
 
+    def _register_static_defs(self, builder: 'ANXBuilder') -> None:
+        """Pre-register explicit AttributeClass icons, DateTimeFormats, and
+        EntityType / LinkType definitions on the builder (before resolution)."""
+        for ac in self._attribute_classes:
+            if ac.name and ac.icon_file:
+                builder.set_att_class_icon(ac.name, ac.icon_file)
+
+        for dtf in self._datetime_formats:
+            if dtf.name:
+                builder.register_datetime_format(dtf.name, dtf.format or '')
+
+        _REP_MAP = {
+            'Icon': Representation.ICON, 'Box': Representation.BOX,
+            'Circle': Representation.CIRCLE, 'ThemeLine': Representation.THEME_LINE,
+            'EventFrame': Representation.EVENT_FRAME, 'TextBlock': Representation.TEXT_BLOCK,
+            'Label': Representation.LABEL,
+        }
+        for et in self._entity_types:
+            if not et.name:
+                continue
+            color_int = None
+            if et.color is not None:
+                c = et.color
+                # color_to_colorref unwraps Color enums; isinstance int passthrough
+                color_int = c if isinstance(c, int) else color_to_colorref(c)
+            shade_int = None
+            if et.shade_color is not None:
+                sc = et.shade_color
+                shade_int = sc if isinstance(sc, int) else color_to_colorref(sc)
+            rep = _REP_MAP.get(et.representation, Representation.ICON) if et.representation else None
+            builder._entity_type_id(et.name, rep, et.icon_file, color_int, shade_int, et.semantic_type)
+
+        for lt in self._link_types:
+            if not lt.name:
+                continue
+            color_int = None
+            if lt.color is not None:
+                c = lt.color
+                color_int = c if isinstance(c, int) else color_to_colorref(c)
+            builder._link_type_id(lt.name, color_int, lt.semantic_type)
+
+    def _build_att_class_config(self) -> Dict[str, Dict[str, Any]]:
+        """Build the attribute-class config dict consumed by semantic resolution
+        and the builder. Font dataclasses are passed through unchanged."""
+        att_class_config: Dict[str, Dict[str, Any]] = {}
+        for ac in self._attribute_classes:
+            if not ac.name:
+                continue
+            d: Dict[str, Any] = {}
+            for field_name in (
+                'type', 'prefix', 'suffix', 'decimal_places', 'show_value',
+                'show_date', 'show_time', 'show_seconds', 'show_if_set',
+                'show_class_name', 'show_symbol', 'visible',
+                'is_user', 'user_can_add', 'user_can_remove',
+                'icon_file', 'semantic_type', 'merge_behaviour', 'paste_behaviour',
+            ):
+                val = getattr(ac, field_name, None)
+                if val is not None:
+                    d[field_name] = val
+            # Pass Font dataclass directly — builder uses _font_overrides_from_dc()
+            d['font'] = ac.font
+            att_class_config[ac.name] = d
+        return att_class_config
+
+    @staticmethod
+    def _assemble_summary_config(s: Settings) -> Optional[Dict[str, Any]]:
+        """Build the summary config (fields + origin + custom properties), or
+        None when the chart carries no document metadata."""
+        _SUMMARY_FIELD_NAMES = (
+            'title', 'subject', 'keywords', 'category', 'comments',
+            'author', 'template',
+        )
+        _ORIGIN_FIELD_NAMES = (
+            'created', 'edit_time', 'last_print', 'last_save', 'revision',
+        )
+        summary_fields: Dict[str, str] = {}
+        for fname in _SUMMARY_FIELD_NAMES:
+            v = getattr(s.summary, fname, None)
+            if v is not None and str(v).strip():
+                summary_fields[fname] = str(v)
+        origin_fields: Dict[str, Any] = {}
+        for fname in _ORIGIN_FIELD_NAMES:
+            v = getattr(s.summary, fname, None)
+            if v is not None:
+                origin_fields[fname] = v
+        custom_props = list(s.summary.custom_properties or [])
+        if not (summary_fields or origin_fields or custom_props):
+            return None
+        return {
+            'fields': summary_fields,
+            'origin': origin_fields,
+            'custom_properties': custom_props,
+        }
+
     def _build_xml(self) -> Tuple[str, List[str]]:
         """Build the ANX XML, collecting validation errors without raising.
 
@@ -2265,70 +2301,13 @@ class ANXChart:
             builder = ANXBuilder()
             entity_registry: Dict[str, Tuple[str, int]] = {}
 
-        # ── chart.attribute_classes icon_file — register explicit icons ──
-        with timer.phase("Register AC icons"):
-            for ac in self._attribute_classes:
-                if ac.name and ac.icon_file:
-                    builder.set_att_class_icon(ac.name, ac.icon_file)
-
-        # ── Pre-register DateTimeFormat definitions on builder ─────────────
-        with timer.phase("Register datetime formats"):
-            for dtf in self._datetime_formats:
-                if dtf.name:
-                    builder.register_datetime_format(dtf.name, dtf.format or '')
-
-        # ── Pre-register EntityType / LinkType definitions ────────────────
-        with timer.phase("Pre-register type defs"):
-            _REP_MAP = {
-                'Icon': Representation.ICON, 'Box': Representation.BOX,
-                'Circle': Representation.CIRCLE, 'ThemeLine': Representation.THEME_LINE,
-                'EventFrame': Representation.EVENT_FRAME, 'TextBlock': Representation.TEXT_BLOCK,
-                'Label': Representation.LABEL,
-            }
-            for et in self._entity_types:
-                if not et.name:
-                    continue
-                color_int = None
-                if et.color is not None:
-                    c = et.color
-                    # color_to_colorref unwraps Color enums; isinstance int passthrough
-                    color_int = c if isinstance(c, int) else color_to_colorref(c)
-                shade_int = None
-                if et.shade_color is not None:
-                    sc = et.shade_color
-                    shade_int = sc if isinstance(sc, int) else color_to_colorref(sc)
-                rep = _REP_MAP.get(et.representation, Representation.ICON) if et.representation else None
-                builder._entity_type_id(et.name, rep, et.icon_file, color_int, shade_int, et.semantic_type)
-
-            for lt in self._link_types:
-                if not lt.name:
-                    continue
-                color_int = None
-                if lt.color is not None:
-                    c = lt.color
-                    color_int = c if isinstance(c, int) else color_to_colorref(c)
-                builder._link_type_id(lt.name, color_int, lt.semantic_type)
+        # ── Pre-register explicit type / AC / datetime-format definitions ──
+        with timer.phase("Pre-register defs"):
+            self._register_static_defs(builder)
 
         # ── Build att_class_config (needed by semantic resolution) ─────────
         with timer.phase("Build att_class_config"):
-            att_class_config: Dict[str, Dict[str, Any]] = {}
-            for ac in self._attribute_classes:
-                if not ac.name:
-                    continue
-                d: Dict[str, Any] = {}
-                for field_name in (
-                    'type', 'prefix', 'suffix', 'decimal_places', 'show_value',
-                    'show_date', 'show_time', 'show_seconds', 'show_if_set',
-                    'show_class_name', 'show_symbol', 'visible',
-                    'is_user', 'user_can_add', 'user_can_remove',
-                    'icon_file', 'semantic_type', 'merge_behaviour', 'paste_behaviour',
-                ):
-                    val = getattr(ac, field_name, None)
-                    if val is not None:
-                        d[field_name] = val
-                # Pass Font dataclass directly — builder uses _font_overrides_from_dc()
-                d['font'] = ac.font
-                att_class_config[ac.name] = d
+            att_class_config = self._build_att_class_config()
 
         # ── Geo-map: auto-register semantic properties (before resolution) ─
         _geo_needs_latlon = False
@@ -2678,48 +2657,12 @@ class ANXChart:
         # Build palette dicts for the builder
         palette_dicts: Optional[List[Dict[str, Any]]] = None
         if self._palettes:
-            palette_dicts = []
-            for pal in self._palettes:
-                pd: Dict[str, Any] = {'name': pal.name, 'locked': pal.locked}
-                if pal.entity_types:
-                    pd['entity_types'] = list(pal.entity_types)
-                if pal.link_types:
-                    pd['link_types'] = list(pal.link_types)
-                if pal.attribute_classes:
-                    pd['attribute_classes'] = list(pal.attribute_classes)
-                if pal.attribute_entries:
-                    pd['attribute_entries'] = [
-                        {'name': ae.name, 'value': ae.value}
-                        for ae in pal.attribute_entries
-                    ]
-                palette_dicts.append(pd)
+            palette_dicts = [
+                self._palette_to_dict(pal, full=True) for pal in self._palettes
+            ]
 
         # ── Assemble summary config ────────────────────────────────────
-        _SUMMARY_FIELD_NAMES = (
-            'title', 'subject', 'keywords', 'category', 'comments',
-            'author', 'template',
-        )
-        _ORIGIN_FIELD_NAMES = (
-            'created', 'edit_time', 'last_print', 'last_save', 'revision',
-        )
-        summary_fields: Dict[str, str] = {}
-        for fname in _SUMMARY_FIELD_NAMES:
-            v = getattr(s.summary, fname, None)
-            if v is not None and str(v).strip():
-                summary_fields[fname] = str(v)
-        origin_fields: Dict[str, Any] = {}
-        for fname in _ORIGIN_FIELD_NAMES:
-            v = getattr(s.summary, fname, None)
-            if v is not None:
-                origin_fields[fname] = v
-        custom_props = list(s.summary.custom_properties or [])
-        summary_config = None
-        if summary_fields or origin_fields or custom_props:
-            summary_config = {
-                'fields': summary_fields,
-                'origin': origin_fields,
-                'custom_properties': custom_props,
-            }
+        summary_config = self._assemble_summary_config(s)
 
         # ── Geo-map layout center offset ─────────────────────────────────
         _layout_center = (0, 0)
