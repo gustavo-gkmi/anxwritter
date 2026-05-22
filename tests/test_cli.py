@@ -1,10 +1,14 @@
 """Tests for CLI argparse, exit codes, error JSON output."""
 
+import contextlib
+import io
 import json
 import subprocess
 import sys
 from pathlib import Path
 import pytest
+
+from anxwritter import cli
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -253,3 +257,97 @@ class TestShowConfig:
         rc, out, err = _run_cli("--show-config", "--config", str(cfg))
         assert rc == 0
         assert not out_target.exists()
+
+
+def _run_main(args, stdin_data=None):
+    """Drive ``cli.main`` in-process; return (exit_code, stdout, stderr).
+
+    The subprocess tests above exercise the same paths but report 0% line
+    coverage for ``anxwritter/cli.py`` (the work happens in a child process).
+    Running ``main`` directly makes that coverage visible and keeps the CLI's
+    branching behaviour under the coverage gate. ``_force_utf8_stdio`` is a
+    no-op here — ``reconfigure`` is absent on ``StringIO`` and the call is
+    already defensive.
+    """
+    out, err = io.StringIO(), io.StringIO()
+    old_stdin = sys.stdin
+    if stdin_data is not None:
+        sys.stdin = io.StringIO(stdin_data)
+    code = 0
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                cli.main(list(args))
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+    finally:
+        sys.stdin = old_stdin
+    return code, out.getvalue().strip(), err.getvalue().strip()
+
+
+class TestInProcess:
+    """Same CLI paths as the subprocess tests, run in-process for coverage."""
+
+    def test_validate_only_valid(self):
+        code, out, err = _run_main(["--validate-only"], stdin_data=VALID_JSON)
+        assert code == 0
+        assert json.loads(out) == []
+
+    def test_validate_only_invalid(self):
+        code, out, err = _run_main(["--validate-only"], stdin_data=INVALID_JSON)
+        assert code == 1
+        errors = json.loads(err)
+        assert errors[0]["type"] == "missing_required"
+
+    def test_writes_anx(self, tmp_path):
+        out_path = str(tmp_path / "out")
+        code, out, err = _run_main(["-o", out_path], stdin_data=VALID_JSON)
+        assert code == 0
+        assert out.endswith(".anx")
+        assert Path(out).exists()
+
+    def test_output_validation_error(self, tmp_path):
+        out_path = str(tmp_path / "out")
+        code, out, err = _run_main(["-o", out_path], stdin_data=INVALID_JSON)
+        assert code == 1
+        assert json.loads(err)
+
+    def test_missing_output_without_validate_is_argparse_error(self):
+        code, out, err = _run_main([], stdin_data=VALID_JSON)
+        assert code == 2  # argparse parser.error
+
+    def test_input_file_not_found(self, tmp_path):
+        code, out, err = _run_main([str(tmp_path / "nope.json"), "-o", str(tmp_path / "o")])
+        assert code == 1
+        assert "file not found" in err.lower()
+
+    def test_config_file_plus_data_file(self, tmp_path):
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"settings": {"extra_cfg": {"arrange": "grid"}}}), encoding="utf-8")
+        data = tmp_path / "data.json"
+        data.write_text(VALID_JSON, encoding="utf-8")
+        code, out, err = _run_main(["--config", str(cfg), str(data), "-o", str(tmp_path / "o")])
+        assert code == 0, err
+        assert out.endswith(".anx")
+
+    def test_config_file_not_found(self, tmp_path):
+        code, out, err = _run_main(["--config", str(tmp_path / "missing.json"),
+                                    "--validate-only"], stdin_data=VALID_JSON)
+        assert code == 1
+        assert "config file not found" in err.lower()
+
+    def test_show_config_provenance(self, tmp_path):
+        cfg = tmp_path / "base.json"
+        cfg.write_text(json.dumps({"settings": {"chart": {"bg_color": 123}}}), encoding="utf-8")
+        code, out, err = _run_main(["--show-config", "--config", str(cfg)])
+        assert code == 0, err
+        assert "bg_color: 123" in out
+        assert "# from: base.json" in out
+
+    def test_geo_data_file_not_found(self, tmp_path):
+        data = tmp_path / "data.json"
+        data.write_text(VALID_JSON, encoding="utf-8")
+        code, out, err = _run_main([str(data), "--geo-data", str(tmp_path / "missing.json"),
+                                    "-o", str(tmp_path / "o")])
+        assert code == 1
+        assert "geo-data file not found" in err.lower()
