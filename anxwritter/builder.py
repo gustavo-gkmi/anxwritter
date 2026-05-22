@@ -425,6 +425,43 @@ def _ac_bool(val: Any, default: str) -> str:
     return 'true' if bool(val) else 'false'
 
 
+# Shared representation-style attributes: style-dict key → (xml attr, converter,
+# presence rule). Applied per-branch in the branch's own key order by
+# _emit_style_attrs so XML attribute order is preserved exactly. Rules:
+#   'in'        — key present in the style dict
+#   'not_none'  — value is not None
+#   'truthy'    — value is truthy
+_STYLE_ATTR_MAP: Dict[str, Tuple[str, Any, str]] = {
+    'bg_color':    ('BackColour',        lambda v: str(v),                   'in'),
+    'filled':      ('Filled',            lambda v: 'true' if v else 'false', 'in'),
+    'line_width':  ('LineWidth',         lambda v: str(int(v)),              'in'),
+    'line_color':  ('LineColour',        lambda v: str(int(v)),              'not_none'),
+    'shade_color': ('IconShadingColour', lambda v: str(int(v)),             'truthy'),
+    'enlargement': ('Enlargement',       lambda v: v,                        'truthy'),
+}
+
+
+def _emit_style_attrs(attrs: Dict[str, str], style: Dict, keys) -> None:
+    """Apply the shared representation-style attrs named in *keys* (in order)."""
+    for key in keys:
+        xml_attr, conv, rule = _STYLE_ATTR_MAP[key]
+        if rule == 'in':
+            present = key in style
+        elif rule == 'not_none':
+            present = style.get(key) is not None
+        else:  # 'truthy'
+            present = bool(style.get(key))
+        if present:
+            attrs[xml_attr] = conv(style[key])
+
+
+def _apply_type_icon(attrs: Dict[str, str], style: Dict) -> None:
+    """Emit the OverrideTypeIcon / TypeIconName pair when a per-entity icon is set."""
+    if style.get('type_icon_name'):
+        attrs['OverrideTypeIcon'] = 'true'
+        attrs['TypeIconName'] = style['type_icon_name']
+
+
 class ANXBuilder:
     """Converts a batch of (DataFrame, entities, links) records to ANX XML."""
 
@@ -1334,18 +1371,11 @@ class ANXBuilder:
 
         if rep_val == Representation.ICON.value:
             icon = ET.SubElement(entity_el, 'Icon', _icon_text_attrs(style))
-            icon_style_attrs: Dict[str, str] = {
-                'Type': entity_type,
-            }
+            icon_style_attrs: Dict[str, str] = {'Type': entity_type}
             if et_id:
                 icon_style_attrs['EntityTypeReference'] = et_id
-            if style.get('enlargement'):
-                icon_style_attrs['Enlargement'] = style['enlargement']
-            if style.get('shade_color'):
-                icon_style_attrs['IconShadingColour'] = str(int(style['shade_color']))
-            if style.get('type_icon_name'):
-                icon_style_attrs['OverrideTypeIcon'] = 'true'
-                icon_style_attrs['TypeIconName'] = style['type_icon_name']
+            _emit_style_attrs(icon_style_attrs, style, ('enlargement', 'shade_color'))
+            _apply_type_icon(icon_style_attrs, style)
             icon_style = ET.SubElement(icon, 'IconStyle', icon_style_attrs)
             _maybe_frame_style(icon_style, style)
         elif rep_val == Representation.BOX.value:
@@ -1363,12 +1393,7 @@ class ANXBuilder:
                 box_style_attrs['Type'] = entity_type
             if et_id:
                 box_style_attrs['EntityTypeReference'] = et_id
-            if 'bg_color' in style:
-                box_style_attrs['BackColour'] = str(style['bg_color'])
-            if 'filled' in style:
-                box_style_attrs['Filled'] = 'true' if style['filled'] else 'false'
-            if 'line_width' in style:
-                box_style_attrs['LineWidth'] = str(int(style['line_width']))
+            _emit_style_attrs(box_style_attrs, style, ('bg_color', 'filled', 'line_width'))
             ET.SubElement(box, 'BoxStyle', box_style_attrs)
         elif rep_val == Representation.CIRCLE.value:
             sname = str(style.get('strength', 'Default'))
@@ -1378,12 +1403,7 @@ class ANXBuilder:
                 circle_style_attrs['Type'] = entity_type
             if et_id:
                 circle_style_attrs['EntityTypeReference'] = et_id
-            if 'bg_color' in style:
-                circle_style_attrs['BackColour'] = str(style['bg_color'])
-            if 'filled' in style:
-                circle_style_attrs['Filled'] = 'true' if style['filled'] else 'false'
-            if 'line_width' in style:
-                circle_style_attrs['LineWidth'] = str(int(style['line_width']))
+            _emit_style_attrs(circle_style_attrs, style, ('bg_color', 'filled', 'line_width'))
             if 'diameter' in style:
                 circle_style_attrs['Diameter'] = str(float(style['diameter']) / 100)
             if 'autosize' in style:
@@ -1396,21 +1416,10 @@ class ANXBuilder:
                 event_style_attrs['Type'] = entity_type
             if et_id:
                 event_style_attrs['EntityTypeReference'] = et_id
-            if 'bg_color' in style:
-                event_style_attrs['BackColour'] = str(style['bg_color'])
-            if 'filled' in style:
-                event_style_attrs['Filled'] = 'true' if style['filled'] else 'false'
-            if 'line_width' in style:
-                event_style_attrs['LineWidth'] = str(int(style['line_width']))
-            if style.get('enlargement'):
-                event_style_attrs['Enlargement'] = style['enlargement']
-            if style.get('shade_color'):
-                event_style_attrs['IconShadingColour'] = str(int(style['shade_color']))
-            if style.get('line_color') is not None:
-                event_style_attrs['LineColour'] = str(int(style['line_color']))
-            if style.get('type_icon_name'):
-                event_style_attrs['OverrideTypeIcon'] = 'true'
-                event_style_attrs['TypeIconName'] = style['type_icon_name']
+            _emit_style_attrs(event_style_attrs, style,
+                              ('bg_color', 'filled', 'line_width', 'enlargement',
+                               'shade_color', 'line_color'))
+            _apply_type_icon(event_style_attrs, style)
             event = ET.SubElement(entity_el, 'Event')
             ET.SubElement(event, 'EventStyle', event_style_attrs)
         elif rep_val == Representation.TEXT_BLOCK.value:
@@ -1422,14 +1431,7 @@ class ANXBuilder:
                 tb_attrs['EntityTypeReference'] = et_id
             if 'alignment' in style:
                 tb_attrs['Alignment'] = _resolve_enum(style['alignment'], _TEXT_ALIGN_MAP)
-            if 'bg_color' in style:
-                tb_attrs['BackColour'] = str(style['bg_color'])
-            if 'filled' in style:
-                tb_attrs['Filled'] = 'true' if style['filled'] else 'false'
-            if 'line_width' in style:
-                tb_attrs['LineWidth'] = str(int(style['line_width']))
-            if style.get('line_color') is not None:
-                tb_attrs['LineColour'] = str(int(style['line_color']))
+            _emit_style_attrs(tb_attrs, style, ('bg_color', 'filled', 'line_width', 'line_color'))
             if 'width' in style:
                 tb_attrs['Width'] = str(float(style['width']) / 100)
             if 'height' in style:
@@ -1455,8 +1457,7 @@ class ANXBuilder:
                 lbl_attrs['EntityTypeReference'] = et_id
             if 'alignment' in style:
                 lbl_attrs['Alignment'] = _resolve_enum(style['alignment'], _TEXT_ALIGN_MAP)
-            if 'line_width' in style:
-                lbl_attrs['LineWidth'] = str(int(style['line_width']))
+            _emit_style_attrs(lbl_attrs, style, ('line_width',))
             if 'width' in style:
                 lbl_attrs['Width'] = str(float(style['width']) / 100)
             if 'height' in style:
@@ -1467,13 +1468,10 @@ class ANXBuilder:
             # OleItem is the confirmed valid child element (from ANB 9 schema error log).
             # Internal attributes/children not yet investigated — falls back to Icon.
             icon = ET.SubElement(entity_el, 'Icon', _icon_text_attrs(style))
-            _ole_attrs: Dict[str, str] = {
-                'Type': entity_type,
-            }
+            _ole_attrs: Dict[str, str] = {'Type': entity_type}
             if et_id:
                 _ole_attrs['EntityTypeReference'] = et_id
-            if style.get('enlargement'):
-                _ole_attrs['Enlargement'] = style['enlargement']
+            _emit_style_attrs(_ole_attrs, style, ('enlargement',))
             ET.SubElement(icon, 'IconStyle', _ole_attrs)
         elif rep_val == Representation.THEME_LINE.value:
             theme = ET.SubElement(entity_el, 'Theme')
@@ -1484,31 +1482,18 @@ class ANXBuilder:
                 theme_style_attrs['Type'] = entity_type
             if et_id:
                 theme_style_attrs['EntityTypeReference'] = et_id
-            if 'line_width' in style:
-                theme_style_attrs['LineWidth'] = str(int(style['line_width']))
-            if style.get('enlargement'):
-                theme_style_attrs['Enlargement'] = style['enlargement']
-            if style.get('shade_color'):
-                theme_style_attrs['IconShadingColour'] = str(int(style['shade_color']))
-            if style.get('line_color') is not None:
-                theme_style_attrs['LineColour'] = str(int(style['line_color']))
-            if style.get('type_icon_name'):
-                theme_style_attrs['OverrideTypeIcon'] = 'true'
-                theme_style_attrs['TypeIconName'] = style['type_icon_name']
+            _emit_style_attrs(theme_style_attrs, style,
+                              ('line_width', 'enlargement', 'shade_color', 'line_color'))
+            _apply_type_icon(theme_style_attrs, style)
             theme_style = ET.SubElement(theme, 'ThemeStyle', theme_style_attrs)
             _maybe_frame_style(theme_style, style)
         else:
             # Fallback: Icon
             icon = ET.SubElement(entity_el, 'Icon', _icon_text_attrs(style))
-            _fb_attrs: Dict[str, str] = {
-                'Type': entity_type,
-            }
+            _fb_attrs: Dict[str, str] = {'Type': entity_type}
             if et_id:
                 _fb_attrs['EntityTypeReference'] = et_id
-            if style.get('enlargement'):
-                _fb_attrs['Enlargement'] = style['enlargement']
-            if style.get('shade_color'):
-                _fb_attrs['IconShadingColour'] = str(int(style['shade_color']))
+            _emit_style_attrs(_fb_attrs, style, ('enlargement', 'shade_color'))
             icon_style = ET.SubElement(icon, 'IconStyle', _fb_attrs)
             _maybe_frame_style(icon_style, style)
 

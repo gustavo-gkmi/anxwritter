@@ -215,6 +215,121 @@ class TestPresetFlow:
         assert ErrorType.LOCKED_OVERRIDE.value not in {e["type"] for e in c.validate()}
 
 
+# ── wipe_previous (the "narrow the list" case) ───────────────────────────────
+
+class TestWipePrevious:
+    def test_keyed_section_wiped_then_merged(self):
+        c = ANXChart()
+        c.apply_config({"attribute_classes": [
+            {"name": "A", "type": "text"}, {"name": "B", "type": "number"}]})
+        c.apply_config({"attribute_classes": [{"name": "C", "type": "text"}]},
+                       wipe_previous=True)
+        assert [a.name for a in c._attribute_classes] == ["C"]
+
+    def test_wipe_only_clears_mentioned_sections(self):
+        c = ANXChart()
+        c.apply_config({"entity_types": [{"name": "P"}],
+                        "attribute_classes": [{"name": "A", "type": "text"}]})
+        c.apply_config({"attribute_classes": [{"name": "B", "type": "text"}]},
+                       wipe_previous=True)
+        assert [e.name for e in c._entity_types] == ["P"]      # untouched
+        assert [a.name for a in c._attribute_classes] == ["B"]  # wiped + merged
+
+    def test_wipe_clears_prior_leaf_locks(self):
+        # A locked leaf wiped away no longer blocks a later layer.
+        c = ANXChart()
+        c.apply_config({"attribute_classes": [{"name": "X", "type": "text"}]},
+                       lock=True)
+        c.apply_config({"attribute_classes": [{"name": "X", "type": "number"}]},
+                       wipe_previous=True)
+        assert str(_ac(c, "X").type).lower().endswith("number")
+        assert ErrorType.LOCKED_OVERRIDE.value not in _conflict_types(c)
+
+    def test_grades_wipe(self):
+        c = ANXChart()
+        c.apply_config({"grades_one": {"items": ["A", "B"]}})
+        c.apply_config({"grades_one": {"items": ["C"]}}, wipe_previous=True)
+        assert list(c.grades_one.items) == ["C"]
+
+
+# ── append-only sections (palettes / legend_items) ───────────────────────────
+
+class TestAppendOnlySections:
+    def test_palettes_append_across_layers(self):
+        c = ANXChart()
+        c.apply_config({"palettes": [{"name": "P1"}]})
+        c.apply_config({"palettes": [{"name": "P2"}]})
+        assert [p.name for p in c._palettes] == ["P1", "P2"]
+
+    def test_palettes_delete_via_null_clears(self):
+        c = ANXChart()
+        c.apply_config({"palettes": [{"name": "P1"}]})
+        c.apply_config({"palettes": None}, operation="delete")
+        assert c._palettes == []
+
+    def test_palettes_wipe_replaces(self):
+        c = ANXChart()
+        c.apply_config({"palettes": [{"name": "P1"}]})
+        c.apply_config({"palettes": [{"name": "P2"}]}, wipe_previous=True)
+        assert [p.name for p in c._palettes] == ["P2"]
+
+    def test_legend_items_wipe_replaces(self):
+        c = ANXChart()
+        c.apply_config({"legend_items": [{"name": "L1"}]})
+        c.apply_config({"legend_items": [{"name": "L2"}]}, wipe_previous=True)
+        assert [li.name for li in c._legend_items] == ["L2"]
+
+
+# ── grades / strengths / source_types cross-domain lock + delete ─────────────
+
+class TestGradesStrengthsCrossDomain:
+    def test_grades_default_lock_preserved(self):
+        c = ANXChart()
+        c.apply_config({"grades_one": {"items": ["High", "Low"], "default": "High"}},
+                       lock=True, source_name="org")
+        c.apply_config({"grades_one": {"default": "Low"}}, source_name="user")
+        assert c.grades_one.default == "High"  # locked value kept
+        assert ErrorType.LOCKED_OVERRIDE.value in _conflict_types(c)
+
+    def test_grades_delete_item(self):
+        c = ANXChart()
+        c.apply_config({"grades_one": {"items": ["A", "B", "C"]}})
+        c.apply_config({"grades_one": {"items": ["B"]}}, operation="delete")
+        assert list(c.grades_one.items) == ["A", "C"]
+
+    def test_strengths_default_lock_preserved(self):
+        c = ANXChart()
+        c.apply_config({"strengths": {"default": "Strong",
+                                      "items": [{"name": "Strong", "dot_style": "solid"}]}},
+                       lock=True)
+        c.apply_config({"strengths": {"default": "Weak",
+                                      "items": [{"name": "Weak", "dot_style": "dashed"}]}})
+        assert c.strengths.default == "Strong"  # locked
+        assert ErrorType.LOCKED_OVERRIDE.value in _conflict_types(c)
+        assert "Weak" in {s.name for s in c.strengths.items}  # unlocked item still added
+
+    def test_source_types_locked_item_delete_blocked(self):
+        c = ANXChart()
+        c.apply_config({"source_types": ["A", "B"]}, lock=True)
+        c.apply_config({"source_types": ["A"]}, operation="delete")
+        assert "A" in c.source_types  # locked item kept
+        assert ErrorType.LOCKED_OVERRIDE.value in _conflict_types(c)
+
+    def test_provenance_survives_unrelated_delete(self):
+        # Deleting one entry must not drop a sibling's source attribution.
+        c = ANXChart()
+        c.apply_config({"entity_types": [{"name": "Person", "color": "Blue"}]},
+                       lock=True, source_name="org")
+        c.apply_config({"entity_types": [{"name": "Temp", "color": "Red"}]},
+                       source_name="temp")
+        c.apply_config({"entity_types": [{"name": "Temp"}]}, operation="delete")
+        # Person's lock + source still enforced after Temp's removal.
+        c.apply_config({"entity_types": [{"name": "Person", "color": "Red"}]},
+                       source_name="user")
+        errs = [e for e in c.validate() if e["type"] == ErrorType.LOCKED_OVERRIDE.value]
+        assert errs and errs[0].get("config_source") == "org"
+
+
 # ── CLI flags ────────────────────────────────────────────────────────────────
 
 class TestCLI:
