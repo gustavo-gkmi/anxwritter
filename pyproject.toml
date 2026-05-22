@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anxwritter"
-version = "1.12.0"
+version = "1.13.0"
 description = "Write i2 Analyst's Notebook Exchange (.anx) files from Python, JSON, or YAML"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -48,6 +48,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=5.0",
     "hypothesis>=6.0",
     "ruff>=0.5",
 ]
@@ -124,8 +125,7 @@ pythonpath = ["."]
 markers = [
     "perf: performance / scale tests - excluded from default runs; run with `pytest -m perf`",
 ]
-# Note: tests/test_cli.py runs the CLI via subprocess.run, so coverage of
-# anxwritter/cli.py reports as 0% under the default `pytest --cov`. The CLI
-# is exercised by ~30 tests in test_cli.py — see tests_audit.md §1 for the
-# full picture and how to enable subprocess coverage tracking if needed.
+# Note: tests/test_cli.py exercises the CLI both via subprocess.run (end-to-end)
+# and in-process via cli.main(argv=...) (the TestInProcess class), so cli.py
+# coverage is visible under `pytest --cov` rather than reporting as 0%.
 addopts = "-m 'not perf'"

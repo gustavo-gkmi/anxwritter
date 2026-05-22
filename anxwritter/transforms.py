@@ -17,7 +17,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
-from .colors import color_to_colorref, interpolate_ramp, rgb_to_colorref
+from .colors import coerce_color, interpolate_ramp, rgb_to_colorref
 from .enums import Representation
 
 if TYPE_CHECKING:
@@ -309,19 +309,28 @@ def resolve_grade_names(
 # ── Geo-map transforms ──────────────────────────────────────────────────────
 
 
-def _norm_geo_key(s: Any, fold_accents: bool) -> str:
-    """Canonical form for geo lookup keys and entity attribute values.
+def fold_key(s: Any, *, accents: bool, case: bool) -> str:
+    """Canonical comparison key: strip, optional case-fold, optional accent-fold.
 
-    Always lowercases and strips. When ``fold_accents`` is true, also folds
-    diacritics via Unicode NFKD so ``São Paulo`` matches ``Sao Paulo``.
+    Shared by geo-attribute matching and categorical-style lookup. ``case``
+    lowercases; ``accents`` folds diacritics via Unicode NFKD so ``São Paulo``
+    matches ``Sao Paulo``.
     """
-    out = str(s).strip().lower()
-    if fold_accents:
+    out = str(s).strip()
+    if case:
+        out = out.lower()
+    if accents:
         out = ''.join(
             c for c in unicodedata.normalize('NFKD', out)
             if not unicodedata.combining(c)
         )
     return out
+
+
+def _norm_geo_key(s: Any, fold_accents: bool) -> str:
+    """Canonical form for geo lookup keys / entity attribute values
+    (always case-folded). See :func:`fold_key`."""
+    return fold_key(s, accents=fold_accents, case=True)
 
 
 def resolve_geo_data(
@@ -941,20 +950,8 @@ def apply_scale(
 
 
 def _normalize_categorical_key(s: Any, fold_accents: bool, fold_case: bool) -> str:
-    """Canonical form for categorical-style lookup keys.
-
-    Mirrors ``_norm_geo_key`` but with a separate ``fold_case`` flag so the
-    categorical ``case_sensitive`` field works independently of accent folding.
-    """
-    out = str(s).strip()
-    if fold_case:
-        out = out.lower()
-    if fold_accents:
-        out = ''.join(
-            c for c in unicodedata.normalize('NFKD', out)
-            if not unicodedata.combining(c)
-        )
-    return out
+    """Canonical form for categorical-style lookup keys. See :func:`fold_key`."""
+    return fold_key(s, accents=fold_accents, case=fold_case)
 
 
 def _resolve_color_to_int(c: Any) -> Optional[int]:
@@ -965,14 +962,8 @@ def _resolve_color_to_int(c: Any) -> Optional[int]:
     rejected unresolvable colors, so this should never silently return None for
     valid input — the fallback only kicks in if someone bypasses validate().
     """
-    if c is None:
-        return None
-    if isinstance(c, bool):
-        return None
-    if isinstance(c, int):
-        return c
     try:
-        return color_to_colorref(c)
+        return coerce_color(c)
     except (ValueError, TypeError):
         return None
 

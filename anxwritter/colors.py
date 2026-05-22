@@ -5,7 +5,8 @@ ANB uses Windows COLORREF integers: ``R + G*256 + B*65536``
 (little-endian BGR, upper byte always 0).
 """
 import colorsys
-from typing import Any, Dict, Sequence
+import math
+from typing import Any, Dict, Optional, Sequence
 
 
 def rgb_to_colorref(r: int, g: int, b: int) -> int:
@@ -117,6 +118,77 @@ def color_to_colorref(color: Any) -> int:
         f"Unknown color {color!r}. "
         f"Use a name from NAMED_COLORS or a hex string like '#FF0000'."
     )
+
+
+def coerce_color(val: Any) -> Optional[int]:
+    """Coerce a colour value to a COLORREF int, or ``None`` for unset/blank input.
+
+    ``None`` / ``''`` / whitespace / ``NaN`` / ``bool`` all collapse to ``None``
+    (the "not set" signal shared by the resolve and emit paths). ``Color`` enums
+    are unwrapped; ``int`` / ``float`` pass through as ``int``; strings resolve
+    via :func:`color_to_colorref` (which raises ``ValueError`` on an unknown
+    name — callers that prefer ``None`` should catch it).
+
+    This is the permissive emission-side counterpart to :func:`is_color`, the
+    range-checked validation predicate. The two intentionally accept different
+    sets: emission trusts already-validated data; validation rejects out-of-range
+    ints.
+    """
+    if val is None:
+        return None
+    if hasattr(val, 'value'):  # unwrap Color enum / str-Enum
+        val = val.value
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, float) and math.isnan(val):
+        return None
+    if isinstance(val, (int, float)):
+        return int(val)
+    s = str(val).strip()
+    if not s:
+        return None
+    return color_to_colorref(s)
+
+
+def is_color(val: Any) -> bool:
+    """Return True if *val* is a recognisable colour (None, enum, name, hex, int).
+
+    Range-checked validation predicate: integer / float COLORREF values must be
+    within ``0..0xFFFFFF``. ``None`` is accepted (an unset colour is valid). This
+    is the validation-side counterpart to :func:`coerce_color`, which trusts
+    already-validated data and does no range check.
+    """
+    if val is None:
+        return True
+    if hasattr(val, 'value'):  # unwrap Color enum / str-Enum
+        val = val.value
+    # bool is a subclass of int — must reject before the int branch
+    if isinstance(val, bool):
+        return False
+    if isinstance(val, int):
+        return 0 <= val <= 0xFFFFFF
+    if isinstance(val, float):
+        if math.isnan(val):
+            return False
+        return 0 <= val <= 0xFFFFFF
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return False
+        if _normalize_name(s) in _NAMED_COLORS_NORM:
+            return True
+        if s.startswith('#') and len(s) == 7:
+            try:
+                int(s[1:], 16)
+                return True
+            except ValueError:
+                pass
+        try:
+            color_to_colorref(s)
+            return True
+        except (ValueError, TypeError):
+            pass
+    return False
 
 
 # ── Component split / join helpers ──────────────────────────────────────────

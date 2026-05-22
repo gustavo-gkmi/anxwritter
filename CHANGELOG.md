@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
 > changes ship in minor releases with notes here, as below.
 
+## [1.13.0] - 2026-05-22
+
+Internal maintainability refactor toward 2.0 stabilization. **No behaviour
+change** — the `.anx` output is byte-identical to 1.12.0 (verified by a new
+golden-digest test), the public API is unchanged, and validation / config
+semantics are preserved.
+
+### Changed
+
+- Config-layering engine extracted from `chart.py` into a new internal module
+  `anxwritter/_config_layering.py` (`_ConfigLayeringMixin`, mixed into
+  `ANXChart`). Purely a file split — state ownership is unchanged.
+- Geometric layout (grid / circle / radial / random, plus topology dispatch)
+  moved out of `builder.py` into `anxwritter/layouts/_geometric.py` behind a
+  single `layouts.place()` entry point.
+- Colour coercion centralized in `colors.coerce_color` / `colors.is_color`; the
+  per-call wrappers in `builder` / `transforms` / `utils` now delegate to them.
+- Deduplicated internal logic with no output change: the named-registry
+  validators, the shared entity/link validation body, the entity/link
+  `ChartItem` builders, palette serialization, the 8-branch
+  visual-representation emitter (now table-driven), and the `add_*`
+  registration methods. `chart.py` shrank ~2755 → ~1771 lines.
+
+### Added
+
+- `pytest-cov` dev dependency and a golden-digest byte-stability test that pins
+  `.anx` output across the equivalence specs and the bundled examples.
+- Expanded test suite (1399 → 1520 tests; line coverage 85% → 91%), including
+  direct unit tests for the CLI config helpers, the semantic-type resolver, the
+  styling scale/colour math, and entity/link resolution.
+
 ## [1.12.0] - 2026-05-20
 
 Config-layering overhaul + display-synthesizer unification. Several
@@ -529,6 +560,7 @@ extra_cfg:
 ### Added
 - Initial public release.
 
+[1.13.0]: https://github.com/gustavo-gkmi/anxwritter/releases/tag/v1.13.0
 [1.7.1]: https://github.com/gustavo-gkmi/anxwritter/releases/tag/v1.7.1
 [1.7.0]: https://github.com/gustavo-gkmi/anxwritter/releases/tag/v1.7.0
 [1.6.0]: https://github.com/gustavo-gkmi/anxwritter/releases/tag/v1.6.0

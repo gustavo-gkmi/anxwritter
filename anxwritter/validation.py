@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import math
 import re
-from datetime import date as _date, datetime as _datetime
+from datetime import datetime as _datetime
 from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 
 from .errors import ErrorType
-from .utils import _enum_val, _is_valid_color, _validate_date, _validate_time
+from .utils import (
+    _enum_val, _infer_attr_type, _int_or_none, _is_valid_color,
+    _str_or_none, _validate_date, _validate_time,
+)
 
 from .models import TimeZone
 
@@ -40,40 +43,6 @@ if TYPE_CHECKING:
 
 
 # ── Helper functions ─────────────────────────────────────────────────────────
-
-
-def _str_or_none(val: Any) -> Optional[str]:
-    """Return str(val) stripped, or None if val is empty/NaN."""
-    if val is None:
-        return None
-    if isinstance(val, float) and math.isnan(val):
-        return None
-    s = str(val).strip()
-    return s if s else None
-
-
-def _int_or_none(val: Any) -> Optional[int]:
-    """Return int(val), or None if val is None/NaN."""
-    if val is None:
-        return None
-    if isinstance(val, float) and math.isnan(val):
-        return None
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return None
-
-
-def _infer_attr_type(val: Any) -> str:
-    """Infer attribute type from Python value."""
-    if isinstance(val, bool):
-        return 'Flag'
-    if isinstance(val, (int, float)):
-        return 'Number'
-    # date catches both datetime.datetime and datetime.date (datetime is a subclass).
-    if isinstance(val, _date):
-        return 'DateTime'
-    return 'Text'
 
 
 # ── Checker functions (used by multiple validators) ──────────────────────────
@@ -300,6 +269,47 @@ def check_attr_types(
             attr_types[name] = inferred
 
 
+def _check_inline_cards(cards, loc, gc1_items, gc2_items, gc3_items, errors):
+    """Validate date/time/grades/timezone on an item's inline cards."""
+    for ci, card in enumerate(cards or []):
+        cloc = f"{loc}.cards[{ci}]"
+        check_date(card.date, cloc, errors)
+        check_time(card.time, cloc, errors)
+        check_grade(card.grade_one, 'grade_one', gc1_items, cloc, errors)
+        check_grade(card.grade_two, 'grade_two', gc2_items, cloc, errors)
+        check_grade(card.grade_three, 'grade_three', gc3_items, cloc, errors)
+        check_timezone(card.timezone, bool(card.date), bool(card.time), cloc, errors)
+
+
+def _check_chart_item_common(item, *, loc, strength_names, dtf_names,
+                             gc1_items, gc2_items, gc3_items, attr_types, errors):
+    """Validate the date/time/strength/grade/attribute/timezone/datetime_format
+    fields shared by entities and links, plus their inline cards.
+
+    Field-name compatible across ``_BaseEntity`` and ``Link``; preserves the
+    original per-item error ordering (item fields → inline cards →
+    datetime_format registration check)."""
+    check_date(item.date, loc, errors)
+    check_time(item.time, loc, errors)
+    check_strength(item.strength, strength_names, loc, errors)
+    check_grade(item.grade_one, 'grade_one', gc1_items, loc, errors)
+    check_grade(item.grade_two, 'grade_two', gc2_items, loc, errors)
+    check_grade(item.grade_three, 'grade_three', gc3_items, loc, errors)
+    check_attr_types(item.attributes, loc, attr_types, errors)
+    check_timezone(item.timezone, bool(item.date), bool(item.time), loc, errors)
+
+    _check_inline_cards(item.cards, loc, gc1_items, gc2_items, gc3_items, errors)
+
+    if item.datetime_format and item.datetime_format not in dtf_names:
+        errors.append({
+            'type': 'unregistered_datetime_format',
+            'message': f"datetime_format '{item.datetime_format}' is not registered "
+                       f"in the DateTimeFormatCollection. ANB 9 only accepts registered "
+                       f"format names - use add_datetime_format() to register it first.",
+            'location': loc,
+        })
+
+
 # ── Focused validation functions ─────────────────────────────────────────────
 
 
@@ -319,6 +329,44 @@ def _attach_source(
     if src is not None:
         err['source'] = src
     return err
+
+
+def _tag_rows_source(errors: List[Dict[str, Any]], row_start: int,
+                     sources: Optional[Dict[str, str]], name: Optional[str]) -> None:
+    """Tag every error appended since ``row_start`` with the row's config source.
+
+    The range counterpart of :func:`_attach_source`, shared by the named-registry
+    validators so a row's color / behaviour errors carry the same provenance as
+    its missing/duplicate-name error."""
+    if not sources or not name:
+        return
+    src = sources.get(name)
+    if src is None:
+        return
+    for err in errors[row_start:]:
+        err.setdefault('source', src)
+
+
+def _register_name(name: Optional[str], kind: str, loc: str,
+                   seen: Dict[str, str], errors: List[Dict[str, Any]]) -> None:
+    """Missing/duplicate-name skeleton shared by the simple named registries.
+
+    Emits ``missing_required`` (no name) or ``duplicate_name`` (already in
+    ``seen``); otherwise records ``seen[name] = loc``."""
+    if not name:
+        errors.append({
+            'type': ErrorType.MISSING_REQUIRED.value,
+            'message': f"Missing required field 'name' on {kind}",
+            'location': loc,
+        })
+    elif name in seen:
+        errors.append({
+            'type': ErrorType.DUPLICATE_NAME.value,
+            'message': f"Duplicate {kind} name '{name}' (first at {seen[name]})",
+            'location': loc,
+        })
+    else:
+        seen[name] = loc
 
 
 def validate_strength_collection(
@@ -453,37 +501,11 @@ def validate_entities(
         if frame_obj is not None:
             check_color(frame_obj.color, 'frame.color', loc, errors)
 
-        # Check date/time/strength/grades
-        check_date(entity.date, loc, errors)
-        check_time(entity.time, loc, errors)
-        check_strength(entity.strength, strength_names, loc, errors)
-        check_grade(entity.grade_one, 'grade_one', gc1_items, loc, errors)
-        check_grade(entity.grade_two, 'grade_two', gc2_items, loc, errors)
-        check_grade(entity.grade_three, 'grade_three', gc3_items, loc, errors)
-        check_attr_types(entity.attributes, loc, attr_types, errors)
-        check_timezone(entity.timezone, bool(entity.date), bool(entity.time), loc, errors)
-
-        # Inline cards: validate date/time/grades so YAML mistakes (e.g.
-        # unquoted ``time: 14:30:00`` parsing as int) surface as a clean
-        # invalid_time error rather than crashing the builder downstream.
-        for ci, card in enumerate(entity.cards or []):
-            cloc = f"{loc}.cards[{ci}]"
-            check_date(card.date, cloc, errors)
-            check_time(card.time, cloc, errors)
-            check_grade(card.grade_one, 'grade_one', gc1_items, cloc, errors)
-            check_grade(card.grade_two, 'grade_two', gc2_items, cloc, errors)
-            check_grade(card.grade_three, 'grade_three', gc3_items, cloc, errors)
-            check_timezone(card.timezone, bool(card.date), bool(card.time), cloc, errors)
-
-        # Check datetime_format is registered
-        if entity.datetime_format and entity.datetime_format not in dtf_names:
-            errors.append({
-                'type': 'unregistered_datetime_format',
-                'message': f"datetime_format '{entity.datetime_format}' is not registered "
-                           f"in the DateTimeFormatCollection. ANB 9 only accepts registered "
-                           f"format names - use add_datetime_format() to register it first.",
-                'location': loc,
-            })
+        _check_chart_item_common(
+            entity, loc=loc, strength_names=strength_names, dtf_names=dtf_names,
+            gc1_items=gc1_items, gc2_items=gc2_items, gc3_items=gc3_items,
+            attr_types=attr_types, errors=errors,
+        )
 
     return errors, all_entity_ids, entity_classes
 
@@ -570,35 +592,11 @@ def validate_links(
                 'location': loc,
             })
 
-        # Check date/time/strength/grades
-        check_date(link.date, loc, errors)
-        check_time(link.time, loc, errors)
-        check_strength(link.strength, strength_names, loc, errors)
-        check_grade(link.grade_one, 'grade_one', gc1_items, loc, errors)
-        check_grade(link.grade_two, 'grade_two', gc2_items, loc, errors)
-        check_grade(link.grade_three, 'grade_three', gc3_items, loc, errors)
-        check_attr_types(link.attributes, loc, attr_types, errors)
-        check_timezone(link.timezone, bool(link.date), bool(link.time), loc, errors)
-
-        # Inline cards: validate date/time/grades (same rationale as entities).
-        for ci, card in enumerate(link.cards or []):
-            cloc = f"{loc}.cards[{ci}]"
-            check_date(card.date, cloc, errors)
-            check_time(card.time, cloc, errors)
-            check_grade(card.grade_one, 'grade_one', gc1_items, cloc, errors)
-            check_grade(card.grade_two, 'grade_two', gc2_items, cloc, errors)
-            check_grade(card.grade_three, 'grade_three', gc3_items, cloc, errors)
-            check_timezone(card.timezone, bool(card.date), bool(card.time), cloc, errors)
-
-        # Check datetime_format is registered
-        if link.datetime_format and link.datetime_format not in dtf_names:
-            errors.append({
-                'type': 'unregistered_datetime_format',
-                'message': f"datetime_format '{link.datetime_format}' is not registered "
-                           f"in the DateTimeFormatCollection. ANB 9 only accepts registered "
-                           f"format names - use add_datetime_format() to register it first.",
-                'location': loc,
-            })
+        _check_chart_item_common(
+            link, loc=loc, strength_names=strength_names, dtf_names=dtf_names,
+            gc1_items=gc1_items, gc2_items=gc2_items, gc3_items=gc3_items,
+            attr_types=attr_types, errors=errors,
+        )
 
         # Check connection style enums
         mult_val = _enum_val(link.multiplicity) if link.multiplicity else None
@@ -746,21 +744,7 @@ def validate_entity_types(
     for i, et in enumerate(entity_types):
         loc = f"entity_types[{i}]"
         row_start = len(errors)
-        if not et.name:
-            errors.append({
-                'type': ErrorType.MISSING_REQUIRED.value,
-                'message': "Missing required field 'name' on EntityType",
-                'location': loc,
-            })
-        elif et.name in et_names:
-            errors.append({
-                'type': ErrorType.DUPLICATE_NAME.value,
-                'message': f"Duplicate EntityType name '{et.name}' "
-                           f"(first at {et_names[et.name]})",
-                'location': loc,
-            })
-        else:
-            et_names[et.name] = loc
+        _register_name(et.name, 'EntityType', loc, et_names, errors)
         check_color(et.color, 'color', loc, errors)
         check_color(et.shade_color, 'shade_color', loc, errors)
 
@@ -776,11 +760,7 @@ def validate_entity_types(
                 })
 
         # Tag every error emitted for this row with the source, if known.
-        if sources and et.name:
-            src = sources.get(et.name)
-            if src is not None:
-                for err in errors[row_start:]:
-                    err.setdefault('source', src)
+        _tag_rows_source(errors, row_start, sources, et.name)
 
     return errors, et_names
 
@@ -796,28 +776,10 @@ def validate_link_types(
     for i, lt in enumerate(link_types):
         loc = f"link_types[{i}]"
         row_start = len(errors)
-        if not lt.name:
-            errors.append({
-                'type': ErrorType.MISSING_REQUIRED.value,
-                'message': "Missing required field 'name' on LinkType",
-                'location': loc,
-            })
-        elif lt.name in lt_names:
-            errors.append({
-                'type': ErrorType.DUPLICATE_NAME.value,
-                'message': f"Duplicate LinkType name '{lt.name}' "
-                           f"(first at {lt_names[lt.name]})",
-                'location': loc,
-            })
-        else:
-            lt_names[lt.name] = loc
+        _register_name(lt.name, 'LinkType', loc, lt_names, errors)
         check_color(lt.color, 'color', loc, errors)
 
-        if sources and lt.name:
-            src = sources.get(lt.name)
-            if src is not None:
-                for err in errors[row_start:]:
-                    err.setdefault('source', src)
+        _tag_rows_source(errors, row_start, sources, lt.name)
 
     return errors, lt_names
 
@@ -861,11 +823,7 @@ def validate_datetime_formats(
                 'location': loc,
             })
 
-        if sources and dtf.name:
-            src = sources.get(dtf.name)
-            if src is not None:
-                for err in errors[row_start:]:
-                    err.setdefault('source', src)
+        _tag_rows_source(errors, row_start, sources, dtf.name)
 
     return errors, set(dtf_names.keys())
 
@@ -933,13 +891,7 @@ def validate_attribute_classes(
 
     def _row_tag(name: Optional[str], row_start: int) -> None:
         """Apply the per-row source tag to every error appended since row_start."""
-        if not sources or not name:
-            return
-        src = sources.get(name)
-        if src is None:
-            return
-        for err in errors[row_start:]:
-            err.setdefault('source', src)
+        _tag_rows_source(errors, row_start, sources, name)
 
     for i, ac in enumerate(attribute_classes):
         loc = f"attribute_classes[{i}]"

@@ -3,9 +3,9 @@ Shared utility functions for anxwritter.
 """
 import math
 from datetime import datetime as _datetime, date as _date, time as _time
-from typing import Any
+from typing import Any, Optional
 
-from .colors import _NAMED_COLORS_NORM, color_to_colorref, _normalize_name
+from .colors import is_color
 
 
 def _enum_val(x: Any) -> str:
@@ -26,52 +26,56 @@ def _enum_val(x: Any) -> str:
     return x.value if hasattr(x, 'value') else str(x)
 
 
-# ── Color / date / time validation ───────────────────────────────────────────
+# ── Value coercion (shared by chart loading + validation) ────────────────────
 
-# Case-insensitive / punctuation-insensitive lookup. NAMED_COLORS keys are
-# Title Case (e.g. 'Blue', 'Light Orange') so direct lookup misses 'blue',
-# 'BLUE', 'light_orange'. We delegate to colors._NAMED_COLORS_NORM which is
-# the same dict colors.color_to_colorref uses internally.
+
+def _str_or_none(val: Any) -> Optional[str]:
+    """Return str(val) stripped, or None if val is empty/NaN."""
+    if val is None:
+        return None
+    if isinstance(val, float) and math.isnan(val):
+        return None
+    s = str(val).strip()
+    return s if s else None
+
+
+def _int_or_none(val: Any) -> Optional[int]:
+    """Return int(val), or None if val is None/NaN."""
+    if val is None:
+        return None
+    if isinstance(val, float) and math.isnan(val):
+        return None
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def _infer_attr_type(val: Any) -> str:
+    """Infer the i2 attribute type ('Flag'/'Number'/'DateTime'/'Text') from a value."""
+    if isinstance(val, bool):
+        return 'Flag'
+    if isinstance(val, (int, float)):
+        return 'Number'
+    # date catches both datetime.datetime and datetime.date (datetime is a subclass).
+    if isinstance(val, _date):
+        return 'DateTime'
+    return 'Text'
+
+
+# ── Date / time validation ───────────────────────────────────────────────────
 
 _DATE_FORMATS = ('%Y-%m-%d', '%d/%m/%Y', '%Y%m%d')
 _TIME_FORMATS = ('%H:%M:%S', '%H:%M:%S.%f', '%H:%M', '%I:%M %p')
 
 
-# Resolution order: None → enum unwrap → bool reject → int range → float range → normalized name → hex → fallback color_to_colorref
 def _is_valid_color(val: Any) -> bool:
-    """Return True if val is a recognisable color (None, enum, name, hex, or int)."""
-    if val is None:
-        return True
-    # Unwrap Color enum (or any str-Enum) first
-    if hasattr(val, 'value'):
-        val = val.value
-    # bool is a subclass of int — must reject before int branch
-    if isinstance(val, bool):
-        return False
-    if isinstance(val, int):
-        return 0 <= val <= 0xFFFFFF
-    if isinstance(val, float):
-        if math.isnan(val):
-            return False
-        return 0 <= val <= 0xFFFFFF
-    if isinstance(val, str):
-        s = val.strip()
-        if not s:
-            return False
-        if _normalize_name(s) in _NAMED_COLORS_NORM:
-            return True
-        if s.startswith('#') and len(s) == 7:
-            try:
-                int(s[1:], 16)
-                return True
-            except ValueError:
-                pass
-        try:
-            color_to_colorref(s)
-            return True
-        except (ValueError, TypeError):
-            pass
-    return False
+    """Backwards-compatible alias for :func:`anxwritter.colors.is_color`.
+
+    Kept importable from ``anxwritter.utils`` (tests and validators rely on this
+    path); the implementation lives in ``colors`` alongside ``coerce_color``.
+    """
+    return is_color(val)
 
 
 def _validate_date(val: Any) -> bool:
