@@ -54,13 +54,28 @@ class TestDisplayAttribute:
                                sources=[DisplaySource(attribute="x")]))
         assert ErrorType.DISPLAY_INVALID.value in _types(c)
 
-    def test_source_must_be_visible_false(self):
+    def test_visible_source_is_allowed(self):
+        # A visible (non-datetime) source AC is accepted: the caller takes the
+        # double-render. Both the raw value and the synthesized sibling appear.
         c = ANXChart()
         c.add_attribute_class(name="x", type="number")  # visible defaults True
         c.add_icon(id="A", type="Person", attributes={"x": 1})
-        c.add_display_attribute(key="k", attribute_name="D", template="{x}",
+        c.add_display_attribute(key="k", attribute_name="D", template="amt {x}",
                                 sources=[{"attribute": "x"}])
-        assert ErrorType.DISPLAY_INVALID.value in _types(c)
+        assert c.validate() == []
+        assert _xml_has(c, "amt 1")
+
+    def test_visible_datetime_source_still_rejected(self):
+        # Relaxing the source-visibility check must NOT let a visible datetime
+        # source through — the independent datetime guard still fires.
+        from datetime import datetime
+        c = ANXChart()
+        c.add_attribute_class(name="d", type="datetime", visible=True)
+        c.add_icon(id="A", type="Person", attributes={"d": datetime(2024, 1, 15)})
+        c.add_display_attribute(key="k", attribute_name="When",
+                                template="{d:%Y-%m-%d}",
+                                sources=[{"attribute": "d"}])
+        assert ErrorType.DATETIME_AC_FORBIDS_VISIBLE.value in _types(c)
 
     def test_name_collides_with_explicit_ac(self):
         c = ANXChart()

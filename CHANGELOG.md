@@ -8,6 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
 > changes ship in minor releases with notes here, as below.
 
+## [1.14.0] - 2026-05-25
+
+### Added
+
+- `extra_cfg.styling.links.intensity` gains `decimal_separator` /
+  `thousand_separator` fields for formatting the auto-generated legend row
+  labels (default `'.'` / `','`).
+
+### Fixed
+
+- Intensity styling legend labels no longer fall back to **scientific
+  notation** on large values (e.g. `5.07e+05`). Labels now reuse the driving
+  attribute's declared `AttributeClass` format (`prefix` / `suffix` /
+  `decimal_places`) and the new intensity `decimal_separator` /
+  `thousand_separator`, with thousands always grouped — so a value renders like
+  `R$ 507.123,40` instead of `5.07e+05`. When no `AttributeClass` is declared
+  for the attribute, labels are bare grouped numbers.
+
+### Changed
+
+- `extra_cfg.display_attribute` now accepts **visible source ACs**. Previously a
+  `display_attribute` source had to be `visible=False` (a hard `display_invalid`
+  error) so its raw value wasn't double-rendered alongside the synthesized
+  sibling. That restriction is dropped: a visible source is allowed, and the raw
+  value renders alongside the composite (e.g. composing already-shown numeric
+  ACs into one string). Set `visible=False` on the source yourself to suppress
+  its own rendering. Strictly more permissive — no previously-valid config
+  changes behaviour. Source AC visibility is still never mutated.
+
+  Visible **datetime** sources remain rejected, unchanged: the independent
+  `datetime_ac_forbids_visible` guard still fires (ANB v9 can't render datetime
+  on the canvas), so a `datetime` source must still be `visible=False`.
+
 ## [1.13.0] - 2026-05-22
 
 Internal maintainability refactor toward 2.0 stabilization. **No behaviour

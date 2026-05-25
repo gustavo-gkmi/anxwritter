@@ -22,7 +22,7 @@ from .enums import Representation
 
 if TYPE_CHECKING:
     from .resolved import ResolvedEntity, ResolvedLink
-    from .models import Link, GeoMapCfg
+    from .models import AttributeClass, Link, GeoMapCfg
 
 
 def compute_auto_colors(
@@ -683,8 +683,10 @@ def expand_display_attributes(
     for a given item and ``attribute_name`` a type-scoped entry wins over an
     untyped one (genuine ties are rejected by validation).
 
-    Source AC visibility is NOT mutated — validation enforces ``visible=False``
-    on source ACs.
+    Source AC visibility is NOT mutated. A visible source AC is allowed: its
+    raw value renders alongside the synthesized sibling (a deliberate
+    double-render). Only visible *datetime* sources are rejected, by the
+    independent ``DATETIME_AC_FORBIDS_VISIBLE`` guard.
     """
     from .resolved import ResolvedAttr
 
@@ -1182,6 +1184,7 @@ def apply_link_categorical(
 def generate_styling_legend(
     styling: Any,
     links: List['Link'],
+    attribute_classes: Optional[List['AttributeClass']] = None,
 ) -> List[Dict[str, Any]]:
     """Build legend dicts for any styling block that opted in via ``legend: true``.
 
@@ -1202,28 +1205,54 @@ def generate_styling_legend(
     ccfg = getattr(styling.links, 'categorical', None)
 
     if icfg is not None and getattr(icfg, 'legend', None):
-        out.extend(_intensity_legend_rows(icfg, links))
+        out.extend(_intensity_legend_rows(icfg, links, attribute_classes or []))
     if ccfg is not None and getattr(ccfg, 'legend', None):
         out.extend(_categorical_legend_rows(ccfg))
 
     return out
 
 
-def _format_legend_value(v: float) -> str:
-    """Compact value formatter for legend row names."""
-    if v == int(v):
-        return str(int(v))
-    if abs(v) >= 1000 or (abs(v) > 0 and abs(v) < 0.01):
-        return f"{v:.3g}"
-    return f"{v:.2f}"
+def _format_legend_value(
+    v: float,
+    formatter: '_SeparatorFormatter',
+    *,
+    prefix: str = '',
+    suffix: str = '',
+    decimal_places: Optional[int] = None,
+) -> str:
+    """Format a legend row name using the driving attribute's declared format.
+
+    Mirrors how the value renders in the chart body: the driving
+    ``AttributeClass``'s ``prefix`` / ``suffix`` / ``decimal_places``, plus the
+    intensity block's declared ``decimal_separator`` / ``thousand_separator``
+    (applied via ``formatter``, a shared ``_SeparatorFormatter``). Thousands
+    are always grouped — never scientific notation, even for large values.
+
+    When ``decimal_places`` is ``None`` (no declared AC), integers render
+    without a fractional part and non-integers fall back to two places.
+    """
+    if decimal_places is not None:
+        body = formatter.format_field(float(v), f",.{int(decimal_places)}f")
+    elif float(v) == int(v):
+        body = formatter.format_field(int(v), ",")
+    else:
+        body = formatter.format_field(float(v), ",.2f")
+    return f"{prefix}{body}{suffix}"
 
 
-def _intensity_legend_rows(icfg: Any, links: List['Link']) -> List[Dict[str, Any]]:
+def _intensity_legend_rows(
+    icfg: Any,
+    links: List['Link'],
+    attribute_classes: Optional[List['AttributeClass']] = None,
+) -> List[Dict[str, Any]]:
     """Produce N sample rows along the intensity scale.
 
     Samples are picked uniformly in ``t``-space (the normalised [0, 1] axis),
     so a log scale shows a geometric progression of values. The corresponding
-    width / color is computed via the same machinery the transform uses.
+    width / color is computed via the same machinery the transform uses. Row
+    labels reuse the driving attribute's declared ``AttributeClass`` format
+    (``prefix`` / ``suffix`` / ``decimal_places``) and the block's
+    ``decimal_separator`` / ``thousand_separator``.
     """
     n = getattr(icfg, 'legend_count', None) or 5
     if n < 2:
@@ -1243,6 +1272,22 @@ def _intensity_legend_rows(icfg: Any, links: List['Link']) -> List[Dict[str, Any
     by_index, sorted_vals = _intensity_collect_values(links, drv_attr)
     if not by_index:
         return []
+
+    # Label formatting borrows the driving attribute's declared AC format and
+    # the block's declared separators (default '.'/',' — Python's native
+    # grouping). Suppresses scientific notation on large values.
+    src_ac = None
+    for ac in (attribute_classes or []):
+        if getattr(ac, 'name', None) == drv_attr:
+            src_ac = ac
+            break
+    lbl_prefix = (getattr(src_ac, 'prefix', None) or '') if src_ac else ''
+    lbl_suffix = (getattr(src_ac, 'suffix', None) or '') if src_ac else ''
+    lbl_dp = getattr(src_ac, 'decimal_places', None) if src_ac else None
+    fmt = _SeparatorFormatter(
+        getattr(icfg, 'decimal_separator', None) or '.',
+        getattr(icfg, 'thousand_separator', None) or ',',
+    )
 
     drv_cfg = width_cfg or color_cfg
     lo, hi = resolve_intensity_domain(list(by_index.values()), drv_cfg['domain'])
@@ -1265,7 +1310,9 @@ def _intensity_legend_rows(icfg: Any, links: List['Link']) -> List[Dict[str, Any
         v = _invert_scale_t(t, lo, hi, drv_cfg['scale'], drv_cfg['power'], sorted_vals)
 
         row: Dict[str, Any] = {
-            'name': _format_legend_value(v),
+            'name': _format_legend_value(
+                v, fmt, prefix=lbl_prefix, suffix=lbl_suffix, decimal_places=lbl_dp,
+            ),
             'item_type': 'Line',
         }
         if width_cfg is not None:

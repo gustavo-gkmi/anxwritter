@@ -13,6 +13,7 @@ import math
 import pytest
 
 from anxwritter import (
+    AttributeClass,
     CategoricalCfg,
     CategoricalStyleCfg,
     IntensityCfg,
@@ -175,6 +176,56 @@ class TestIntensityLegendRows:
     def test_no_matching_values_returns_empty(self):
         icfg = IntensityCfg(attribute="missing", width=IntensityWidthCfg(range=[1, 5]))
         assert _intensity_legend_rows(icfg, [Link("A", "B", attributes={})]) == []
+
+    def test_large_values_grouped_not_scientific(self):
+        # The bug: %g produced "5.07e+05". Now thousands are grouped.
+        links = [
+            Link("A", "B", attributes={"amount": 0.0}),
+            Link("A", "B", attributes={"amount": 507123.4}),
+        ]
+        icfg = IntensityCfg(attribute="amount", legend_count=2,
+                            width=IntensityWidthCfg(range=[1, 10]))
+        rows = _intensity_legend_rows(icfg, links)
+        names = [r["name"] for r in rows]
+        assert not any("e+" in n.lower() for n in names)
+        # Non-integer max → 2-place fallback, default US grouping.
+        assert names[-1] == "507,123.40"
+
+    def test_attribute_class_format_applied(self):
+        links = [
+            Link("A", "B", attributes={"amount": 0.0}),
+            Link("A", "B", attributes={"amount": 507123.4}),
+        ]
+        ac = AttributeClass(name="amount", type="number", prefix="R$ ",
+                            decimal_places=2)
+        icfg = IntensityCfg(attribute="amount", legend_count=2,
+                            width=IntensityWidthCfg(range=[1, 10]))
+        rows = _intensity_legend_rows(icfg, links, [ac])
+        assert rows[-1]["name"] == "R$ 507,123.40"
+
+    def test_declared_separators_brazilian(self):
+        links = [
+            Link("A", "B", attributes={"amount": 0.0}),
+            Link("A", "B", attributes={"amount": 507123.4}),
+        ]
+        ac = AttributeClass(name="amount", type="number", prefix="R$ ",
+                            decimal_places=2)
+        icfg = IntensityCfg(attribute="amount", legend_count=2,
+                            decimal_separator=",", thousand_separator=".",
+                            width=IntensityWidthCfg(range=[1, 10]))
+        rows = _intensity_legend_rows(icfg, links, [ac])
+        assert rows[-1]["name"] == "R$ 507.123,40"
+
+    def test_integer_values_unchanged_without_ac(self):
+        # Backward-compat: small integers, no AC → bare integer labels.
+        links = [
+            Link("A", "B", attributes={"w": 0.0}),
+            Link("A", "B", attributes={"w": 10.0}),
+        ]
+        icfg = IntensityCfg(attribute="w", legend_count=2,
+                            width=IntensityWidthCfg(range=[1, 10]))
+        rows = _intensity_legend_rows(icfg, links)
+        assert [r["name"] for r in rows] == ["0", "10"]
 
 
 class TestCategoricalLegendRows:

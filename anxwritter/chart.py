@@ -1726,7 +1726,9 @@ class ANXChart(_ConfigLayeringMixin):
                 legend_items.append(d)
             # Auto-generated styling legend rows (intensity/categorical with legend=true)
             if _styling is not None:
-                legend_items.extend(generate_styling_legend(_styling, valid_links))
+                legend_items.extend(generate_styling_legend(
+                    _styling, valid_links, self._attribute_classes,
+                ))
 
         # Build palette dicts for the builder
         palette_dicts: Optional[List[Dict[str, Any]]] = None

@@ -97,7 +97,7 @@ EXPECTED: Dict[str, str] = {
     "example:display_synth:display_label_per_type": "cb6a17e567869f4b566fef12ff9741d3680b49a34b3f54ea795190ce2d37ee83",
     "example:display_synth:display_single_date": "97d22c2a43f12bbf7fbf90ee1300b8229c1ae3766530ff53e7ab91066b6e2051",
     "example:investigation_chart": "5c68eca074322ef1c477d698d82902407414c6b9493eba5b4dad62edef995570",
-    "example:link_styling": "a83ccea58c533cbd3f83e57f75c4efc447882eb1d8425bfa122681910a618b24",
+    "example:link_styling": "91ff4a8a263375321660e6a69762eabf040aeb28eb0a31e981dfba9c255b3898",
     "spec:ENTITIES_ONLY": "f16f55c4a51f92d0f8ac854bfd3575b25e6b83241a6dc8bbd41f970951e037b1",
     "spec:FULL": "e96b586d0334853f5f07b9d123a891a0c353917a8de42cfeae0ddbd49209948b",
     "spec:REGISTRY_ONLY": "b21483e068c2bbd009a6e15ba613d7d6a1079c343f3503a95f8358deee026d13",

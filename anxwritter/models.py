@@ -404,6 +404,10 @@ class IntensityCfg:
     shortcuts inherited by ``width`` / ``color`` when those don't override.
     At least one of ``width`` / ``color`` must be set for the block to do
     anything; an empty ``IntensityCfg()`` is a silent no-op.
+
+    ``decimal_separator`` / ``thousand_separator`` format the auto-generated
+    legend row labels (when ``legend=True``); these pair with the driving
+    attribute's ``AttributeClass`` ``prefix`` / ``suffix`` / ``decimal_places``.
     """
     attribute: Optional[str] = None
     scale: Optional[str] = None
@@ -412,6 +416,8 @@ class IntensityCfg:
     missing: Optional[str] = None                  # 'fallback' | 'skip' | 'error'
     legend: Optional[bool] = None
     legend_count: Optional[int] = None             # default 5
+    decimal_separator: Optional[str] = None        # legend label decimal separator (default '.')
+    thousand_separator: Optional[str] = None       # legend label thousand separator (default ',')
     width: Optional[IntensityWidthCfg] = None
     color: Optional[IntensityColorCfg] = None
 
@@ -547,8 +553,11 @@ class DisplayAttribute:
     on attribute *values* is out of scope (precompute a synthetic attribute
     or type upstream).
 
-    Source ACs must declare ``visible=False`` (validation enforces) to avoid
-    a double-render in the attribute stack. Sibling AC styling comes from
+    Source ACs may be visible — the raw value then renders alongside the
+    synthesized sibling (a deliberate double-render); set ``visible=False`` on
+    the source to suppress it. (A *datetime* source must still be
+    ``visible=False`` — enforced by ``DATETIME_AC_FORBIDS_VISIBLE`` because ANB
+    v9 can't render datetime on the canvas.) Sibling AC styling comes from
     ``attribute_class`` (inner ``.name`` / ``.type`` must be ``None`` — the
     sibling is auto-named from ``attribute_name`` and auto-typed as text).
     """
