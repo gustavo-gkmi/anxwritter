@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
 > changes ship in minor releases with notes here, as below.
 
+## [1.14.1] - 2026-05-25
+
+### Changed
+
+- `extra_cfg.display_attribute` / `display_label` entries now accept an **empty
+  (or omitted) `sources`** list when their `template` references no `{alias}`
+  placeholders — a static template like `(líq.)` is painted as a literal onto
+  every matching item. A template that *does* reference placeholders still
+  requires sources to resolve them (now reported as `display_invalid` with a
+  message naming the unresolved placeholder, instead of a blanket "sources is
+  required"). Strictly more permissive — no previously-valid config changes
+  behaviour; previously every entry needed at least one source.
+
 ## [1.14.0] - 2026-05-25
 
 ### Added

@@ -700,8 +700,9 @@ def expand_display_attributes(
         template = getattr(disp, 'template', None)
         sources = getattr(disp, 'sources', None) or []
         attr_name = getattr(disp, 'attribute_name', None)
-        if not template or not sources or not attr_name:
-            # Validation already flagged this entry.
+        if not template or not attr_name:
+            # Validation already flagged this entry. `sources` may be empty for
+            # a static (placeholder-free) template, which renders as a literal.
             continue
 
         sib_ref_id = builder._att_class_id(attr_name, 'AttText')
@@ -776,8 +777,9 @@ def expand_display_labels(
     for disp in displays:
         template = getattr(disp, 'template', None)
         sources = getattr(disp, 'sources', None) or []
-        if not template or not sources:
-            # Validation already flagged this entry.
+        if not template:
+            # Validation already flagged this entry. `sources` may be empty for
+            # a static (placeholder-free) template, which renders as a literal.
             continue
         formatter = _SeparatorFormatter(
             getattr(disp, 'decimal_separator', None) or '.',
