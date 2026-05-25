@@ -511,6 +511,31 @@ class TestLegendAutoGen:
         assert labels[0] == "10"
         assert labels[-1] == "100"
 
+    def test_intensity_legend_uses_declared_format(self) -> None:
+        # End-to-end: AC prefix/decimals + Brazilian separators → readable
+        # labels, no scientific notation on large values.
+        chart = ANXChart(settings={
+            "extra_cfg": {"styling": {"links": {"intensity": {
+                "attribute": "amount", "scale": "linear",
+                "decimal_separator": ",", "thousand_separator": ".",
+                "width": {"range": [1, 10]},
+                "legend": True, "legend_count": 2,
+            }}}},
+            "legend_cfg": {"show": True},
+        })
+        chart.add_attribute_class(name="amount", type="number",
+                                  prefix="R$ ", decimal_places=2)
+        chart.add_icon(id="A", type="P")
+        chart.add_icon(id="B", type="P")
+        chart.add_link(from_id="A", to_id="B", type="Call",
+                       attributes={"amount": 0})
+        chart.add_link(from_id="A", to_id="B", type="Call",
+                       attributes={"amount": 507123.40})
+        xml = chart.to_xml()
+        labels = re.findall(r"<LegendItem [^>]*Label=\"([^\"]+)\"", xml)
+        assert not any("e+" in lbl.lower() for lbl in labels)
+        assert labels[-1] == "R$ 507.123,40"
+
     def test_no_legend_when_flag_unset(self) -> None:
         chart = ANXChart(settings={
             "extra_cfg": {"styling": {"links": {"categorical": {

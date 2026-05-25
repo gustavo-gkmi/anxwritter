@@ -151,11 +151,13 @@ auto-parsed back to a `datetime`, so `{d:%Y-%m-%d}` works directly.
 ### `display_attribute`
 
 Synthesizes a text AC named by `attribute_name` (**required**) and appends the
-rendered value to each matching item. **Source ACs must declare
-`visible=False`** so the raw value isn't double-rendered alongside the sibling
-(validation enforces this). Sibling styling comes from the optional inner
-`attribute_class` template (its `.name` / `.type` must be `None` -- the sibling
-is auto-named and auto-typed text).
+rendered value to each matching item. Source ACs **may be visible** -- the raw
+value then renders alongside the synthesized sibling (a deliberate
+double-render, e.g. composing already-shown numeric ACs into one string). Set
+`visible=False` on a source to suppress its own rendering. (A `datetime` source
+must still be `visible=False` -- see the workaround below.) Sibling styling
+comes from the optional inner `attribute_class` template (its `.name` / `.type`
+must be `None` -- the sibling is auto-named and auto-typed text).
 
 ```python
 chart.add_attribute_class(name="tx_count", type="number", visible=False)
@@ -254,7 +256,7 @@ Same as `DisplayAttribute` minus `attribute_name` and `attribute_class`, plus
 
 | Error type | Condition |
 |---|---|
-| `display_invalid` | Missing `key` / `template`; empty `sources`; missing `attribute_name` (attribute family); undeclared source AC; source AC not `visible=False` (attribute family); non-identifier attribute name without `alias`; duplicate alias; inner `attribute_class.name`/`.type` set; template syntax error; `missing='error'` triggered for an item. |
+| `display_invalid` | Missing `key` / `template`; empty `sources`; missing `attribute_name` (attribute family); undeclared source AC; non-identifier attribute name without `alias`; duplicate alias; inner `attribute_class.name`/`.type` set; template syntax error; `missing='error'` triggered for an item. (A visible source AC is **not** an error — visible `datetime` sources are caught separately by `datetime_ac_forbids_visible`.) |
 | `display_name_collision` | Synthesized `attribute_name` collides with an explicit AC. |
 | `display_overlap_conflict` | Two same-specificity entries could paint the same `(kind, type)` slot. |
 

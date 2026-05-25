@@ -371,9 +371,11 @@ chart.add_display_attribute(
 )
 ```
 
-Source datetime ACs **must** have `visible=False` — validation rejects
-`visible=True` on any datetime AC, and a `display_attribute` source AC must
-opt out of canvas rendering. See
+Source `datetime` ACs **must** have `visible=False` — validation rejects
+`visible=True` on any datetime AC (ANB can't render datetime on the canvas).
+Non-datetime source ACs **may** stay visible: the raw value then renders
+alongside the synthesized sibling (a deliberate double-render); set
+`visible=False` yourself to suppress it. See
 [reference/attributes.md → Display synthesizers](../reference/attributes.md#display-synthesizers).
 
 ### Merge and paste behaviour

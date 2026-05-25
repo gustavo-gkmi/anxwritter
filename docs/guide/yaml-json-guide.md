@@ -483,8 +483,9 @@ Template syntax: exactly what you'd write inside a Python f-string, without the
 `f` prefix. Supports format specs like `{x:,.2f}`, `{x:>10}`, and
 `{d:%d/%m/%Y}` (datetime sources). The `alias` field is required when the
 attribute name isn't a valid Python identifier (e.g. `"quantia em real"`).
-Source datetime ACs **must** be `visible: false`. For `display_attribute`, every
-source AC must be `visible: false`.
+Source datetime ACs **must** be `visible: false` (ANB can't render datetime on
+the canvas). Non-datetime source ACs may stay visible — the raw value then
+renders alongside the synthesized sibling; set `visible: false` to suppress it.
 
 > Scope by `kind`/`type` only — these are structural metadata. Conditioning on
 > attribute *values* is out of scope; precompute a synthetic attribute or type

@@ -467,6 +467,33 @@ rows. Intensity samples `legend_count` (default 5) points in **scale-space**, so
 a log scale shows geometric value steps; categorical emits one row per `styles`
 entry in insertion order.
 
+Intensity row labels reuse the **driving attribute's declared format**: the
+matching `AttributeClass`'s `prefix` / `suffix` / `decimal_places`, plus the
+block's `decimal_separator` / `thousand_separator` (default `'.'` / `','`).
+Thousands are always grouped — large values never fall back to scientific
+notation. For Brazilian-style currency, declare the AC and set the separators:
+
+```yaml
+attribute_classes:
+  - name: amount
+    type: number
+    prefix: "R$ "
+    decimal_places: 2
+extra_cfg:
+  styling:
+    links:
+      intensity:
+        attribute: amount
+        decimal_separator: ","
+        thousand_separator: "."
+        width: { range: [1, 10] }
+        legend: true
+# legend rows render like "R$ 507.123,40"
+```
+
+When no `AttributeClass` is declared for the attribute, labels are bare grouped
+numbers (integers without decimals, non-integers to two places).
+
 ### Validation rules
 
 | Check | Error type |

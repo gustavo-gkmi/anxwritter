@@ -1869,14 +1869,16 @@ def _validate_display_entries(
     """Shared validator for ``display_attribute`` / ``display_label`` entries.
 
     family='attribute': synthesizes a sibling AC — ``attribute_name`` is
-    required, source ACs must be ``visible=False``, the inner
-    ``attribute_class.name`` / ``.type`` must be ``None``, the synthesized
-    name must not collide with an explicit AC, and at most one entry may
-    target a given ``(kind, type, attribute_name)`` slot.
+    required, the inner ``attribute_class.name`` / ``.type`` must be ``None``,
+    the synthesized name must not collide with an explicit AC, and at most one
+    entry may target a given ``(kind, type, attribute_name)`` slot. Source ACs
+    may be visible (the caller accepts the double-render); a visible *datetime*
+    source is still rejected, but by ``DATETIME_AC_FORBIDS_VISIBLE`` in
+    ``validate_attribute_classes``, not here.
 
     family='label': renders into the item label — no ``attribute_name`` /
-    ``attribute_class`` / ``visible`` constraint; at most one entry may apply
-    to a given ``(kind, type)`` label slot.
+    ``attribute_class`` constraint; at most one entry may apply to a given
+    ``(kind, type)`` label slot.
 
     Common to both: required ``key`` and ``template``, non-empty ``sources``,
     each source must reference a declared AC, ``alias`` required for
@@ -2054,18 +2056,12 @@ def _validate_display_entries(
                     else:
                         alias_sample[alias_key] = _AnyFormatProbe()
 
-            # Attribute family → source AC must be visible=False.
-            if is_attr and src_ac is not None and src_ac.visible is not False:
-                errors.append({
-                    'type': ErrorType.DISPLAY_INVALID.value,
-                    'message': (
-                        f"AC {attr!r} is referenced by display_attribute"
-                        f"[{i}] and must have visible=False so its value "
-                        f"isn't double-rendered alongside the synthesized "
-                        f"sibling."
-                    ),
-                    'location': f"{loc}.sources[{j}].attribute",
-                })
+            # A visible source AC is allowed: the caller accepts the
+            # double-render (raw value + synthesized sibling), or hides the
+            # source themselves. Visible *datetime* sources remain rejected
+            # independently by DATETIME_AC_FORBIDS_VISIBLE in
+            # validate_attribute_classes (ANB v9 can't render datetime on the
+            # canvas), so no narrowing is needed here.
 
             missing = getattr(src, 'missing', None)
             if missing is not None and missing not in _VALID_DISPLAY_MISSING:
