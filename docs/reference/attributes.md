@@ -174,6 +174,19 @@ chart.add_display_attribute(
 )
 ```
 
+**Static (placeholder-free) templates.** `sources` is optional when the
+`template` references no `{alias}` placeholders -- the literal text is painted
+onto every matching item. A template that *does* reference placeholders still
+requires sources to resolve them.
+
+```python
+# A constant marker on every matching item -- no sources needed.
+chart.add_display_attribute(
+    key="net_marker", kind="link", type="Transfer",
+    attribute_name="Net", template="(líq.)",
+)
+```
+
 **Datetime canvas-render workaround.** Because a `datetime` AC can't be
 `visible=True`, render the date as a text sibling -- a single source for one
 date, or two sources for a range:
@@ -235,7 +248,7 @@ error -- scope them to disjoint types or merge them.
 | `template` | `str` | -- (required) | f-string-style format body. |
 | `decimal_separator` | `str` | `'.'` | Numeric output only. |
 | `thousand_separator` | `str` | `','` | Numeric output only. |
-| `sources` | `List[DisplaySource]` | `[]` | At least one required. |
+| `sources` | `List[DisplaySource]` | `[]` | Optional for a placeholder-free (static) `template`; required when the template references `{alias}` placeholders. |
 | `attribute_class` | `Optional[AttributeClass]` | `None` | Sibling styling (inner `.name`/`.type` must be `None`). |
 
 ### `DisplayLabel` fields
@@ -256,7 +269,7 @@ Same as `DisplayAttribute` minus `attribute_name` and `attribute_class`, plus
 
 | Error type | Condition |
 |---|---|
-| `display_invalid` | Missing `key` / `template`; empty `sources`; missing `attribute_name` (attribute family); undeclared source AC; non-identifier attribute name without `alias`; duplicate alias; inner `attribute_class.name`/`.type` set; template syntax error; `missing='error'` triggered for an item. (A visible source AC is **not** an error — visible `datetime` sources are caught separately by `datetime_ac_forbids_visible`.) |
+| `display_invalid` | Missing `key` / `template`; empty `sources` **when the template references placeholders** (a placeholder-free static template needs no sources); missing `attribute_name` (attribute family); undeclared source AC; non-identifier attribute name without `alias`; duplicate alias; inner `attribute_class.name`/`.type` set; template syntax error; `missing='error'` triggered for an item. (A visible source AC is **not** an error — visible `datetime` sources are caught separately by `datetime_ac_forbids_visible`.) |
 | `display_name_collision` | Synthesized `attribute_name` collides with an explicit AC. |
 | `display_overlap_conflict` | Two same-specificity entries could paint the same `(kind, type)` slot. |
 

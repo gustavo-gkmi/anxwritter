@@ -1880,9 +1880,11 @@ def _validate_display_entries(
     ``attribute_class`` constraint; at most one entry may apply to a given
     ``(kind, type)`` label slot.
 
-    Common to both: required ``key`` and ``template``, non-empty ``sources``,
-    each source must reference a declared AC, ``alias`` required for
-    non-identifier attribute names, unique aliases per entry, per-source
+    Common to both: required ``key`` and ``template``. ``sources`` is optional
+    for a placeholder-free (static) template but required when the template
+    references placeholders. Each source must reference a declared AC, ``alias``
+    required for non-identifier attribute names, unique aliases per entry,
+    per-source
     ``missing`` ∈ {skip, substitute, error}, a template dry-run, and a
     per-item walk for any ``missing='error'`` source. Multiple entries may
     share an ``attribute_name`` as long as their ``(kind, type)`` scopes are
@@ -1962,17 +1964,25 @@ def _validate_display_entries(
             })
             continue
 
-        # sources required
+        # Sources are optional for a placeholder-free (static) template — e.g.
+        # a literal "(líq.)" label. A template that references placeholders
+        # still requires sources to resolve them. Dry-running against an empty
+        # mapping tells the two apart: a static template renders cleanly, a
+        # placeholder (or malformed) template raises.
         if not sources:
-            errors.append({
-                'type': ErrorType.DISPLAY_INVALID.value,
-                'message': (
-                    f"{base_loc}[{i}]: 'sources' is required and must be a "
-                    f"non-empty list."
-                ),
-                'location': f"{loc}.sources",
-            })
-            continue
+            err_msg = _try_format_static(template, {})
+            if err_msg is not None:
+                errors.append({
+                    'type': ErrorType.DISPLAY_INVALID.value,
+                    'message': (
+                        f"{base_loc}[{i}]: 'sources' is required because the "
+                        f"template references placeholders — {err_msg}"
+                    ),
+                    'location': f"{loc}.sources",
+                })
+                continue
+            # Static template, no sources: valid. Fall through so the entry
+            # still takes part in name-collision / overlap detection.
 
         # Per-source checks: attribute existence, alias requirement, missing
         # enum, and (attribute family) visible=False.

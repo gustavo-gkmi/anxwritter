@@ -452,9 +452,11 @@ INVALID_SPECS: List[tuple] = [
         {ErrorType.DATETIME_AC_FORBIDS_VISIBLE.value},
     ),
 
-    # ── display_attribute: empty sources triggers structural error ──────────
+    # ── display_attribute: placeholder template with no sources to fill it ───
+    # (A static, placeholder-free template with no sources is now valid; only a
+    # template that references placeholders still requires sources.)
     (
-        "display_invalid_empty_sources",
+        "display_invalid_placeholder_without_sources",
         {
             "entities": {"icons": [{"id": "A", "type": "Person"}]},
             "settings": {
@@ -463,7 +465,7 @@ INVALID_SPECS: List[tuple] = [
                         {
                             "key": "d1",
                             "attribute_name": "Activity",
-                            "template": "hi",
+                            "template": "{q}",
                             "sources": [],
                         },
                     ],

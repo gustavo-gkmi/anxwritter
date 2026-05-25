@@ -207,6 +207,81 @@ class TestKindTypeScoping:
         assert "P1" in xml and "O2" in xml
 
 
+# ── static (placeholder-free) templates: sources are optional ────────────────
+
+class TestStaticTemplateNoSources:
+    def test_attribute_static_template_no_sources_valid(self):
+        # A placeholder-free template needs no sources; it renders as a literal
+        # text-sibling on every matching item.
+        c = ANXChart()
+        c.add_icon(id="A", type="Person")
+        c.add_display_attribute(key="liq", attribute_name="Net", template="(líq.)")
+        assert c.validate() == []
+        assert _xml_has(c, "(líq.)")
+
+    def test_label_static_template_no_sources_valid(self):
+        c = ANXChart()
+        c.add_icon(id="A", type="Person")
+        c.add_display_label(key="tag", template="(líq.)")
+        assert c.validate() == []
+        assert _xml_has(c, "(líq.)")
+
+    def test_attribute_placeholder_without_sources_rejected(self):
+        # Referencing a placeholder still requires a matching source.
+        c = ANXChart()
+        c.add_icon(id="A", type="Person")
+        c.add_display_attribute(key="k", attribute_name="D", template="{q}")
+        assert ErrorType.DISPLAY_INVALID.value in _types(c)
+
+    def test_label_placeholder_without_sources_rejected(self):
+        c = ANXChart()
+        c.add_icon(id="A", type="Person")
+        c.add_display_label(key="k", template="val {q}")
+        assert ErrorType.DISPLAY_INVALID.value in _types(c)
+
+    def test_escaped_braces_are_not_placeholders(self):
+        # Literal {{ }} are not placeholders, so no sources are required.
+        c = ANXChart()
+        c.add_icon(id="A", type="Person")
+        c.add_display_attribute(key="k", attribute_name="D", template="{{static}}")
+        assert c.validate() == []
+        assert _xml_has(c, "{static}")
+
+    def test_static_label_still_participates_in_overlap(self):
+        # The valid sourceless entry must still take part in overlap detection
+        # (it falls through instead of being skipped).
+        c = ANXChart()
+        c.add_icon(id="A", type="Person")
+        c.add_display_label(key="a", template="(líq.)")
+        c.add_display_label(key="b", template="(bruto)")
+        assert ErrorType.DISPLAY_OVERLAP_CONFLICT.value in _types(c)
+
+    def test_static_attribute_still_collides_with_explicit_ac(self):
+        # Name-collision detection also runs for a sourceless static entry.
+        c = ANXChart()
+        c.add_attribute_class(name="Net", type="text")
+        c.add_icon(id="A", type="Person")
+        c.add_display_attribute(key="k", attribute_name="Net", template="(líq.)")
+        assert ErrorType.DISPLAY_NAME_COLLISION.value in _types(c)
+
+    def test_from_dict_static_no_sources_parity(self):
+        def _expected():
+            c = ANXChart()
+            c.add_icon(id="A", type="Person")
+            c.add_display_attribute(key="k", attribute_name="Net", template="(líq.)")
+            return c.to_xml()
+
+        spec = {
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+            "settings": {"extra_cfg": {"display_attribute": [
+                {"key": "k", "attribute_name": "Net", "template": "(líq.)"},
+            ]}},
+        }
+        c = ANXChart.from_dict(spec)
+        assert c.validate() == []
+        assert c.to_xml() == _expected()
+
+
 # ── datetime-visible guard (survived date_attribute_displays removal) ─────────
 
 class TestDatetimeVisibleGuard:

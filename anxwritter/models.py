@@ -529,8 +529,12 @@ def _coerce_inner_attribute_class(obj) -> None:
 
 @dataclass
 class DisplayAttribute:
-    """Synthesizes a text-sibling AttributeClass from one or more source
+    """Synthesizes a text-sibling AttributeClass from zero or more source
     attribute values rendered through a format template.
+
+    ``sources`` is optional for a placeholder-free (static) ``template`` — e.g.
+    a literal ``"(líq.)"`` — and required only when the template references
+    ``{alias}`` placeholders.
 
     Lives under ``extra_cfg.display_attribute`` — a chart-level synthesizer
     keyed-list (same family as ``styling`` / ``geo_map``). Each entry is
@@ -578,8 +582,11 @@ class DisplayAttribute:
 
 @dataclass
 class DisplayLabel:
-    """Renders one or more source attribute values through a format template
+    """Renders zero or more source attribute values through a format template
     directly into the entity/link label.
+
+    ``sources`` is optional for a placeholder-free (static) ``template`` and
+    required only when the template references ``{alias}`` placeholders.
 
     Lives under ``extra_cfg.display_label`` — a chart-level synthesizer
     keyed-list. Each entry is addressed for config layering / lock / delete
