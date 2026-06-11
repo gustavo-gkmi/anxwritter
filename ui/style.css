@@ -1,0 +1,704 @@
+:root {
+  --bg: #f7f7f8;
+  --card: #ffffff;
+  --border: #d8d8dc;
+  --border-strong: #bcbcc4;
+  --text: #1a1a1a;
+  --muted: #6a6a73;
+  --accent: #2b6cb0;
+  --accent-hover: #225a93;
+  --danger: #c53030;
+  --tag-bg: #ebf3fb;
+  --tag-fg: #1f4f80;
+  --tri-true-bg:  #e6f4ea;
+  --tri-true-fg:  #186a3b;
+  --tri-true-bd:  #34a853;
+  --tri-false-bg: #fce8e6;
+  --tri-false-fg: #a50e0e;
+  --tri-false-bd: #ea4335;
+  --tri-unset-bg: #ececef;
+  --tri-unset-fg: #6a6a73;
+  --tri-unset-bd: #bcbcc4;
+  --unset-input-bg: #f0f0f3;
+  --unset-input-fg: #9a9aa3;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.topbar {
+  position: sticky; top: 0; z-index: 10;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 16px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.topbar h1 { font-size: 16px; margin: 0; }
+.topbar-left { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.meta { display: flex; align-items: center; gap: 8px; }
+
+.legend {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 12px; color: var(--muted);
+}
+.legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.tri-swatch {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px;
+  border-radius: 4px;
+  font: 600 11px ui-monospace, "Cascadia Mono", "Consolas", monospace;
+  border: 1px solid transparent;
+  line-height: 1;
+}
+.tri-swatch.is-true  { background: var(--tri-true-bg);  color: var(--tri-true-fg);  border-color: var(--tri-true-bd); }
+.tri-swatch.is-false { background: var(--tri-false-bg); color: var(--tri-false-fg); border-color: var(--tri-false-bd); }
+.tri-swatch.is-unset { background: var(--tri-unset-bg); color: var(--tri-unset-fg); border-color: var(--tri-unset-bd); }
+.pill {
+  font-size: 12px; color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 3px 8px; border-radius: 999px;
+}
+
+/* Quick filter input in topbar */
+.filter-input {
+  font: inherit;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  background: white;
+  width: 180px;
+}
+.filter-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+
+/* Dim non-matching fields + containers when filter is active */
+body.is-filtering .filter-dim {
+  opacity: 0.25;
+  transition: opacity 0.1s;
+}
+body.is-filtering .filter-dim input,
+body.is-filtering .filter-dim select,
+body.is-filtering .filter-dim button {
+  pointer-events: none;
+}
+.pill.autosave {
+  font-variant-numeric: tabular-nums;
+}
+.pill.autosave.saved {
+  color: var(--tri-true-fg);
+  border-color: var(--tri-true-bd);
+  background: var(--tri-true-bg);
+}
+.pill.autosave.saving {
+  color: var(--muted);
+  border-color: var(--border-strong);
+}
+.pill.autosave.off {
+  color: var(--danger);
+  border-color: var(--tri-false-bd);
+  background: var(--tri-false-bg);
+}
+button {
+  font: inherit;
+  border: 1px solid var(--border-strong);
+  background: var(--card);
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+button:hover { background: #f0f0f3; }
+button.primary {
+  background: var(--accent); color: white; border-color: var(--accent);
+}
+button.primary:hover { background: var(--accent-hover); }
+button.danger { color: var(--danger); border-color: var(--danger); background: white; }
+button.danger:hover { background: #fdecec; }
+button.ghost { border: 1px dashed var(--border-strong); background: transparent; color: var(--muted); }
+
+main {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 0;
+  min-height: calc(100vh - 53px);
+}
+
+.sidebar {
+  background: var(--card);
+  border-right: 1px solid var(--border);
+  padding: 12px 0;
+  overflow-y: auto;
+  position: sticky; top: 53px;
+  height: calc(100vh - 53px);
+}
+.sidebar a {
+  display: block;
+  padding: 6px 16px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 13px;
+}
+.sidebar a:hover { background: #f0f0f3; }
+.sidebar a.active { background: var(--tag-bg); color: var(--tag-fg); font-weight: 600; }
+.sidebar .group-label {
+  padding: 12px 16px 4px;
+  font-size: 11px; text-transform: uppercase;
+  color: var(--muted); letter-spacing: 0.5px;
+}
+
+/* Macro group ("CHART", "TYPES & SCHEMA", …): collapsible drawer, default closed */
+.nav-group { margin-bottom: 2px; }
+.nav-group > summary.group-label {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  display: flex; align-items: center; gap: 6px;
+}
+.nav-group > summary.group-label::-webkit-details-marker { display: none; }
+.nav-group > summary.group-label::before {
+  content: '▸';
+  font-size: 10px;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+  display: inline-block;
+}
+.nav-group[open] > summary.group-label::before { transform: rotate(90deg); }
+.nav-group > summary.group-label:hover { color: var(--text); }
+
+/* Parent link with children gets a disclosure caret on the right */
+.sidebar a.has-sub::after {
+  content: '▸';
+  float: right;
+  font-size: 10px;
+  color: var(--muted);
+  line-height: inherit;
+  margin-left: 8px;
+}
+.sidebar a.has-sub.expanded::after { content: '▾'; }
+
+/* Indented sub-list under a parent link */
+.sub-nav {
+  display: none;
+  background: #fafafc;
+  border-left: 2px solid var(--border);
+  margin: 2px 0 6px 16px;
+}
+.sub-nav.expanded { display: block; }
+.sub-nav .sub-link {
+  display: block;
+  padding: 4px 14px 4px 20px;
+  font-size: 12px;
+  color: var(--muted);
+  text-decoration: none;
+}
+.sub-nav .sub-link:hover { background: #f0f0f3; color: var(--text); }
+.sub-nav .sub-link.active {
+  background: var(--tag-bg);
+  color: var(--tag-fg);
+  font-weight: 600;
+}
+
+.content { padding: 20px 24px 80px; max-width: 980px; }
+
+/* Macro group ("CHART", "TYPES & SCHEMA", …) — collapsible band wrapping
+   one or more .section cards. Default closed. Shares set-marker logic. */
+.macro-group { margin: 18px 0 4px; }
+.macro-group > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  padding: 10px 0 8px;
+  border-bottom: 2px solid var(--border-strong);
+  display: flex; align-items: center; gap: 10px;
+}
+.macro-group > summary::-webkit-details-marker { display: none; }
+.macro-group > summary::before {
+  content: '▸';
+  font-size: 11px;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+  display: inline-block;
+}
+.macro-group[open] > summary::before { transform: rotate(90deg); }
+.macro-group > summary > h2 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--muted);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.macro-group > summary:hover > h2 { color: var(--text); }
+.macro-group[open] > .section { margin-top: 16px; }
+.macro-group[open] > .section:last-child { margin-bottom: 0; }
+/* Hide macro group entirely in view mode when no section inside has content */
+body.hide-unset details.macro-group:not(.has-content) { display: none; }
+
+.section {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 24px;
+  padding: 0;
+}
+.section > summary {
+  list-style: none;            /* hide default triangle */
+  cursor: pointer;
+  padding: 14px 20px;
+  user-select: none;
+  display: flex; align-items: baseline; gap: 8px;
+  border-radius: 8px;
+}
+.section > summary::-webkit-details-marker { display: none; }
+.section > summary::before {
+  content: '▸';
+  color: var(--muted);
+  font-size: 12px;
+  transition: transform 0.15s ease;
+  display: inline-block;
+}
+.section[open] > summary::before { transform: rotate(90deg); }
+.section > summary:hover { background: #f7f7f8; }
+.section[open] > summary { border-bottom: 1px solid var(--border); border-radius: 8px 8px 0 0; }
+.section > summary > h2 {
+  font-size: 15px; margin: 0;
+  display: inline-flex; align-items: baseline; gap: 8px;
+}
+.section > .section-desc {
+  font-size: 12px; color: var(--muted); margin: 0;
+  padding: 12px 20px 0;
+}
+.section > .fields,
+.section > .row,
+.section > .row + .row,
+.section > div:not(.section-desc) {
+  /* content body gets the padding the wrapper used to have */
+}
+.section[open] > :not(summary):not(.section-desc) {
+  padding-left: 20px; padding-right: 20px;
+}
+.section[open] > :last-child:not(summary) { padding-bottom: 16px; }
+
+/* "Hide unset" mode: hide every container whose slice would be omitted
+   from the downloaded YAML. Driven by classes toggled in applyHideUnset(). */
+body.hide-unset .field-unset,
+body.hide-unset .row-unset,
+body.hide-unset .nav-hide,
+body.hide-unset details.section:not(.has-content),
+body.hide-unset details.nested-details:not(.has-content) {
+  display: none !important;
+}
+/* In view mode, Add buttons would create rows that are immediately hidden
+   (because they start empty). Easier to hide them and tell the user to flip
+   to "Show all" when they want to add content. */
+body.hide-unset .add-row { display: none; }
+/* Empty primitive list items (e.g. blank strings in source_types) drop out. */
+body.hide-unset .list-prim .item:has(input.is-unset) { display: none; }
+
+/* Placeholder when hide-unset is on AND chart is fully empty */
+.empty-state {
+  display: none;
+  padding: 60px 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+  background: var(--card);
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+}
+.empty-state.visible { display: block; }
+
+/* Field-count badge — "3 / 53" in section/macro/nested/row summaries */
+.field-count {
+  display: none;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-variant-numeric: tabular-nums;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.field-count.visible { display: inline-block; }
+
+/* "(N issues)" badge — red, hover for full message via tooltip on the field */
+.issue-count {
+  display: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tri-false-fg);
+  background: var(--tri-false-bg);
+  border: 1px solid var(--tri-false-bd);
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.issue-count.visible { display: inline-block; }
+
+/* Field-level error: red border on the input + a red dot indicator on the label */
+.field.has-error > .input-row > input,
+.field.has-error > .input-row > select,
+.field.has-error > .input-row > .tri-state {
+  border-color: var(--tri-false-bd);
+  background-color: #fff8f8;
+}
+.field.has-error > label::after {
+  content: '!';
+  display: inline-block;
+  margin-left: 6px;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--tri-false-bd);
+  color: white;
+  font: 700 10px/14px ui-sans-serif, system-ui, sans-serif;
+  text-align: center;
+  vertical-align: middle;
+}
+
+/* "+N hidden" badge — visible only when hide-mode is on AND there's
+   something hidden under this collapsible */
+.hidden-count {
+  display: none;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--tri-unset-fg);
+  background: var(--tri-unset-bg);
+  border: 1px solid var(--tri-unset-bd);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-variant-numeric: tabular-nums;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.hidden-count.visible { display: inline-block; }
+
+/* "Has values set" dot in the summary title */
+.set-marker {
+  display: none;                /* visible only when .has-content */
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  align-self: center;
+}
+details.has-content > summary .set-marker,
+details.has-content > summary > h2 > .set-marker,
+details.has-content > summary > label > .set-marker {
+  display: inline-block;
+}
+
+/* Nested collapsible (ref fields like Settings → chart, font, view, …) */
+.nested-details {
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: white;
+  margin-top: 2px;
+}
+.nested-details > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 6px 10px;
+  user-select: none;
+  display: flex; align-items: center; gap: 6px;
+  border-radius: 4px;
+}
+.nested-details > summary::-webkit-details-marker { display: none; }
+.nested-details > summary::before {
+  content: '▸';
+  color: var(--muted);
+  font-size: 11px;
+  transition: transform 0.15s ease;
+  display: inline-block;
+}
+.nested-details[open] > summary::before { transform: rotate(90deg); }
+.nested-details > summary:hover { background: #f7f7f8; }
+.nested-details > summary > label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.nested-details > .nested {
+  padding: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+/* Each list-of-dataclass entry ("Palette #1" etc.) is a <details> collapsed
+   by default, with the row-head as its <summary>. Auto-opened by
+   renderListOfDataclass when the user clicks Add or Duplicate. */
+.row {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 10px;
+  background: #fcfcfd;
+  padding: 0;
+}
+.row > summary.row-head {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  padding: 10px 12px;
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 8px;
+  border-radius: 6px;
+}
+.row > summary.row-head::-webkit-details-marker { display: none; }
+.row > summary.row-head::before {
+  content: '▸';
+  color: var(--muted);
+  font-size: 11px;
+  transition: transform 0.15s ease;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.row[open] > summary.row-head::before { transform: rotate(90deg); }
+.row[open] > summary.row-head {
+  border-bottom: 1px solid var(--border);
+  border-radius: 6px 6px 0 0;
+}
+.row > summary.row-head:hover { background: #f7f7f8; }
+.row-head .row-title {
+  flex: 1;
+  font-weight: 600; font-size: 13px;
+  display: inline-flex; align-items: center; gap: 8px;
+  min-width: 0;
+}
+.row-head .row-title-label {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.row-head .row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.row[open] > .fields { padding: 12px; }
+
+.fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 14px;
+}
+.field { display: flex; flex-direction: column; gap: 2px; }
+.field label {
+  font-size: 11px; color: var(--muted); font-weight: 500;
+}
+.field label .req { color: var(--danger); margin-left: 2px; }
+.field input,
+.field select,
+.field textarea {
+  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 5px 7px;
+  background: white;
+}
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+.field input[type="checkbox"] { width: 16px; height: 16px; align-self: flex-start; }
+.field textarea { min-height: 36px; resize: vertical; }
+
+/* Input row — flex so input grows and (swatch + ×) sit alongside it */
+.field .input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.field .input-row > input,
+.field .input-row > select {
+  flex: 1;
+  min-width: 0;
+}
+.field .input-row > .field-clear {
+  flex-shrink: 0;
+  width: 22px; height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: 600 16px/1 ui-sans-serif, system-ui, sans-serif;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.field .input-row > .field-clear:hover {
+  background: #fce8e6;
+  color: var(--danger);
+}
+/* Hide × when input is already empty — nothing to clear */
+.field .input-row > input.is-unset ~ .field-clear,
+.field .input-row > select.is-unset ~ .field-clear {
+  display: none;
+}
+
+/* Color swatch — solid block when value resolves, checker pattern when not */
+.color-swatch {
+  flex-shrink: 0;
+  width: 22px; height: 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background-color: transparent;
+  background-image:
+    linear-gradient(45deg, #ccc 25%, transparent 25%),
+    linear-gradient(-45deg, #ccc 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #ccc 75%),
+    linear-gradient(-45deg, transparent 75%, #ccc 75%);
+  background-size: 6px 6px;
+  background-position: 0 0, 0 3px, 3px -3px, -3px 0;
+}
+.color-swatch.has-color {
+  background-color: var(--swatch-color);
+  background-image: none;
+}
+
+/* Tri-state boolean button (true / false / unset) */
+.field .tri-state {
+  align-self: flex-start;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 26px;
+  border-radius: 4px;
+  padding: 0;
+  font: 600 14px ui-monospace, "Cascadia Mono", "Consolas", monospace;
+  cursor: pointer;
+  border: 1px solid transparent;
+  line-height: 1;
+  user-select: none;
+}
+.field .tri-state.is-true  { background: var(--tri-true-bg);  color: var(--tri-true-fg);  border-color: var(--tri-true-bd); }
+.field .tri-state.is-false { background: var(--tri-false-bg); color: var(--tri-false-fg); border-color: var(--tri-false-bd); }
+.field .tri-state.is-unset { background: var(--tri-unset-bg); color: var(--tri-unset-fg); border-color: var(--tri-unset-bd); }
+.field .tri-state:hover    { filter: brightness(0.97); }
+.field .tri-state:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Unset (empty) inputs render greyed so it's clear they'll be omitted */
+.field input.is-unset,
+.field select.is-unset {
+  background: var(--unset-input-bg);
+  color: var(--unset-input-fg);
+}
+.field input.is-unset::placeholder { color: var(--unset-input-fg); }
+.field input.is-unset:focus,
+.field select.is-unset:focus { background: white; color: var(--text); }
+.field.full { grid-column: 1 / -1; }
+.field .nested {
+  /* Used inside .nested-details now; the dashed border lives on the wrapper. */
+  padding: 8px;
+  background: white;
+}
+
+.list-prim {
+  display: flex; flex-direction: column; gap: 4px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  padding: 6px;
+  background: white;
+}
+.list-prim .item { display: flex; gap: 6px; }
+.list-prim .item input { flex: 1; }
+
+.add-row {
+  margin-top: 4px;
+}
+
+.subsection-label {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--muted); margin: 14px 0 6px;
+}
+
+/* "(?)" help button on field labels */
+.field label .help-btn {
+  margin-left: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  background: var(--card);
+  color: var(--muted);
+  border-radius: 50%;
+  font: 600 10px ui-sans-serif, system-ui, sans-serif;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: middle;
+}
+.field label .help-btn:hover {
+  background: var(--tag-bg);
+  color: var(--tag-fg);
+  border-color: var(--accent);
+}
+.field label .help-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Help modal */
+dialog#help-dialog {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 0;
+  width: min(560px, 90vw);
+  max-height: 80vh;
+  background: var(--card);
+  color: var(--text);
+}
+dialog#help-dialog::backdrop {
+  background: rgba(20, 20, 25, 0.35);
+}
+dialog#help-dialog .help-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+dialog#help-dialog #help-title {
+  margin: 0; font-size: 16px;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+dialog#help-dialog .help-close {
+  border: none; background: transparent;
+  font-size: 22px; line-height: 1;
+  width: 28px; height: 28px;
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+}
+dialog#help-dialog .help-close:hover {
+  background: #f0f0f3;
+  color: var(--text);
+}
+dialog#help-dialog .help-type {
+  padding: 8px 16px 0;
+  font: 12px ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color: var(--muted);
+}
+dialog#help-dialog .help-body {
+  padding: 8px 16px 18px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.toast {
+  position: fixed; bottom: 20px; right: 20px;
+  background: #1a1a1a; color: white;
+  padding: 10px 16px; border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  font-size: 13px;
+  animation: fade-out 3s forwards;
+}
+@keyframes fade-out {
+  0%, 70% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(10px); }
+}

@@ -1145,12 +1145,16 @@ class ANXChart(_ConfigLayeringMixin):
 
         # Validate the display synthesizers (extra_cfg.display_attribute /
         # display_label).
+        et_name_set = set(et_names.keys())
+        lt_name_set = set(lt_names.keys())
         errors.extend(validate_display_attribute(
             self.settings.extra_cfg.display_attribute,
             self._attribute_classes,
             self._entities,
             self._links,
             ac_names,
+            et_name_set,
+            lt_name_set,
         ))
         errors.extend(validate_display_label(
             self.settings.extra_cfg.display_label,
@@ -1158,6 +1162,8 @@ class ANXChart(_ConfigLayeringMixin):
             self._entities,
             self._links,
             ac_names,
+            et_name_set,
+            lt_name_set,
         ))
 
         return errors
