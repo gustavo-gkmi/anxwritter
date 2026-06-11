@@ -343,3 +343,107 @@ settings:
 """
         c = ANXChart.from_yaml(yaml_src)
         assert c.to_xml() == self._expected_xml()
+
+
+# ── type filter must reference a registered entity/link type ────────────────
+#
+# Pre-this-fix the library silently accepted typos like type='Persn'; the
+# synthesizer just matched nothing. Now it's flagged at validate() time so
+# users see a clear error pointing at the bad type filter.
+
+class TestDisplayTypeFilterValidation:
+    def _base_chart(self):
+        c = ANXChart()
+        c.add_entity_type(name="Person", icon_file="person")
+        c.add_link_type(name="Call")
+        c.add_attribute_class(name="x", type="text")
+        c.add_icon(id="A", type="Person", attributes={"x": "a"})
+        c.add_icon(id="B", type="Person", attributes={"x": "b"})
+        c.add_link(from_id="A", to_id="B", type="Call", attributes={"x": "ab"})
+        return c
+
+    def test_valid_entity_type_passes(self):
+        c = self._base_chart()
+        c.add_display_label(key="ok", kind="entity", type="Person",
+                            template="P:{x}", sources=[{"attribute": "x"}])
+        assert c.validate() == []
+
+    def test_valid_link_type_passes(self):
+        c = self._base_chart()
+        c.add_display_label(key="ok", kind="link", type="Call",
+                            template="C:{x}", sources=[{"attribute": "x"}])
+        assert c.validate() == []
+
+    def test_unknown_entity_type_rejected(self):
+        c = self._base_chart()
+        c.add_display_label(key="bad", kind="entity", type="Persn",  # typo
+                            template="P:{x}", sources=[{"attribute": "x"}])
+        errors = c.validate()
+        assert any(
+            e["type"] == ErrorType.DISPLAY_INVALID.value
+            and e.get("location") == "settings.extra_cfg.display_label[0].type"
+            and "'Persn'" in e["message"]
+            and "entity_types" in e["message"]
+            for e in errors
+        ), errors
+
+    def test_unknown_link_type_rejected(self):
+        c = self._base_chart()
+        c.add_display_label(key="bad", kind="link", type="Txn",
+                            template="T:{x}", sources=[{"attribute": "x"}])
+        errors = c.validate()
+        assert any(
+            e["type"] == ErrorType.DISPLAY_INVALID.value
+            and e.get("location") == "settings.extra_cfg.display_label[0].type"
+            and "'Txn'" in e["message"]
+            and "link_types" in e["message"]
+            for e in errors
+        ), errors
+
+    def test_unknown_type_kind_both_rejected(self):
+        c = self._base_chart()
+        # kind='both' (default) — must match entity OR link types.
+        c.add_display_label(key="bad", type="Unicorn",
+                            template="U:{x}", sources=[{"attribute": "x"}])
+        errors = c.validate()
+        assert any(
+            e["type"] == ErrorType.DISPLAY_INVALID.value
+            and e.get("location") == "settings.extra_cfg.display_label[0].type"
+            and "'Unicorn'" in e["message"]
+            for e in errors
+        ), errors
+
+    def test_kind_entity_with_link_type_name_rejected(self):
+        # Type name exists in link_types, but kind='entity' restricts the lookup.
+        c = self._base_chart()
+        c.add_display_label(key="bad", kind="entity", type="Call",
+                            template="C:{x}", sources=[{"attribute": "x"}])
+        errors = c.validate()
+        assert any(
+            e["type"] == ErrorType.DISPLAY_INVALID.value
+            and e.get("location") == "settings.extra_cfg.display_label[0].type"
+            and "'Call'" in e["message"]
+            for e in errors
+        ), errors
+
+    def test_unknown_type_on_display_attribute_rejected(self):
+        # Same check applies symmetrically to display_attribute.
+        c = self._base_chart()
+        c.add_attribute_class(name="y", type="text", visible=False)
+        c.add_display_attribute(key="bad", attribute_name="D", kind="entity",
+                                type="Persn", template="P:{y}",
+                                sources=[{"attribute": "y"}])
+        errors = c.validate()
+        assert any(
+            e["type"] == ErrorType.DISPLAY_INVALID.value
+            and e.get("location") == "settings.extra_cfg.display_attribute[0].type"
+            and "'Persn'" in e["message"]
+            for e in errors
+        ), errors
+
+    def test_type_omitted_is_fine(self):
+        # No type filter — synthesizer applies broadly. No validation error.
+        c = self._base_chart()
+        c.add_display_label(key="ok", template="X:{x}",
+                            sources=[{"attribute": "x"}])
+        assert c.validate() == []

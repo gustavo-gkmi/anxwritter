@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>anxwritter — config builder</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-left">
+    <h1>anxwritter config builder</h1>
+    <div class="legend" aria-label="field state legend">
+      <span class="legend-item"><span class="tri-swatch is-true">✓</span>true</span>
+      <span class="legend-item"><span class="tri-swatch is-false">✗</span>false</span>
+      <span class="legend-item"><span class="tri-swatch is-unset">–</span>unset (omitted from YAML)</span>
+    </div>
+  </div>
+  <div class="meta">
+    <span id="meta-version" class="pill">…</span>
+    <span id="autosave-pill" class="pill" title="Auto-saves to your browser's localStorage so a refresh doesn't lose your edits.">…</span>
+    <input id="form-filter" class="filter-input" type="search" placeholder="Filter fields…" autocomplete="off" title="Substring filter on field names + help text. Esc clears.">
+    <button id="btn-collapse-all" type="button" title="Collapse every section, nested block, and row">Collapse all</button>
+    <button id="btn-expand-all" type="button" title="Expand every section, nested block, and row">Expand all</button>
+    <button id="btn-hide-unset" type="button" title="Toggle visibility of fields that aren't set">Hide unset</button>
+    <button id="btn-import" type="button">Import config.yaml</button>
+    <input type="file" id="import-file" accept=".yaml,.yml,.json" hidden>
+    <button id="btn-download" class="primary" type="button">Download config.yaml</button>
+    <button id="btn-reset" type="button">Reset</button>
+  </div>
+</header>
+
+<main>
+  <nav id="section-nav" class="sidebar"></nav>
+  <section id="form-root" class="content"></section>
+</main>
+
+<dialog id="help-dialog">
+  <header class="help-head">
+    <h2 id="help-title">field</h2>
+    <form method="dialog"><button class="help-close" aria-label="Close">×</button></form>
+  </header>
+  <div id="help-type" class="help-type"></div>
+  <p id="help-body" class="help-body"></p>
+</dialog>
+
+<script src="js-yaml.min.js"></script>
+<script src="schema.js"></script>
+<script src="help.js"></script>
+<script src="colors.js"></script>
+<script src="validate.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -8,6 +8,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
 > changes ship in minor releases with notes here, as below.
 
+## [1.15.0] - 2026-06-11
+
+### Added
+
+- **Schema-driven UI config builder** (`ui/`): a no-build single-page web app
+  that renders a form from a hand-curated `schema.json`-equivalent and emits a
+  `config.yaml` matching the CLI's `--config` shape. Lives at the repo root
+  alongside `anxwritter/` and `tests/`; **excluded from both the wheel and the
+  sdist** by the existing allowlists, so it never lands in published artifacts.
+  Run locally with `cd ui && python -m http.server`, or open `index.html`
+  directly (the page reads its schema from a `<script>` tag so `file://` works
+  too). Features: every dataclass / list-of-dataclass / nested ref is
+  collapsible, with set-marker dots and `set / total` field-count badges in
+  every summary; tri-state checkboxes (true / false / **unset = omitted from
+  YAML**) with a legend in the topbar; per-field clear `×`; **Import** loads an
+  existing `config.yaml` for editing; **LocalStorage auto-save** restores work
+  across refreshes; **Hide unset** view mode hides everything that would be
+  omitted from the YAML; **Collapse all / Expand all**; quick filter that dims
+  fields not matching a substring; per-field `?` help modal sourced from
+  `docs/reference/*.md`; **color swatches** rendering the resolved color (named
+  / hex / COLORREF); client-side cross-field validation (grade default ∈ items,
+  duplicate names, palette references, datetime AC visibility, intensity ×
+  categorical attribute conflict, display AC references, display type-filter
+  references) that paints red badges on offending fields and `N issues` pills
+  on parent sections. New `tests/test_ui_schema_sync.py` (4 checks) keeps the
+  schema in lock-step with the library — fails CI when an enum value, a
+  dataclass field name, or the round-trip sample config drifts.
+
+### Changed
+
+- `validate()` now rejects `extra_cfg.display_attribute[].type` and
+  `extra_cfg.display_label[].type` filters that don't reference a known
+  entity/link type. "Known" means **either** registered via `add_entity_type` /
+  `add_link_type` **or** observed on at least one entity / link in the chart
+  data — so inline-typed entities still work, but a typo like
+  `kind="entity", type="Persn"` now surfaces as `ErrorType.DISPLAY_INVALID` at
+  `settings.extra_cfg.display_*[i].type`. Pre-1.15, the typo silently matched
+  nothing and the synthesizer produced no output, with no diagnostic. Scope
+  follows `kind`: `'entity'` checks entity types only, `'link'` checks link
+  types only, `'both'` (default) accepts either.
+
+### Fixed
+
+- `ui/schema.js`: the `chart.icon_quality` field is now rendered as a 2-value
+  `select` (`HighQuality` / `Legacy`) instead of free-form text. The XSD
+  confirms `TypeIconDrawingMode` is a closed enum but the original schema
+  hand-curation only picked up its default. No library-side change; the value
+  is still passed through as a string.
+
 ## [1.14.1] - 2026-05-25
 
 ### Changed

@@ -1862,6 +1862,8 @@ def _validate_display_entries(
     entities: List['_BaseEntity'],
     links: List['Link'],
     ac_names: Dict[str, str],
+    entity_type_names: Set[str],
+    link_type_names: Set[str],
     *,
     family: str,
     base_loc: str,
@@ -1939,6 +1941,42 @@ def _validate_display_entries(
                 'location': f"{loc}.kind",
             })
             ok = False
+
+        # `type` filter (when set) must reference a known entity/link type.
+        # Scope by `kind`: 'entity' → entity types only, 'link' → link types
+        # only, 'both' (default) → either. "Known" means EITHER registered
+        # via add_entity_type / add_link_type OR observed on at least one
+        # entity / link in the chart data (the library allows inline-typed
+        # entities without pre-registration). Catches the typo case where a
+        # bad type filter would otherwise silently match nothing.
+        if type_filter and kind in _VALID_DISPLAY_KINDS:
+            observed_entity_types = {e.type for e in entities if e.type}
+            observed_link_types = {ln.type for ln in links if ln.type}
+            known_entity_types = entity_type_names | observed_entity_types
+            known_link_types = link_type_names | observed_link_types
+            if kind == 'entity':
+                resolved = type_filter in known_entity_types
+                where = 'entity_types'
+            elif kind == 'link':
+                resolved = type_filter in known_link_types
+                where = 'link_types'
+            else:  # 'both' or any other valid kind treats as either
+                resolved = (type_filter in known_entity_types
+                            or type_filter in known_link_types)
+                where = 'entity_types or link_types'
+            if not resolved:
+                errors.append({
+                    'type': ErrorType.DISPLAY_INVALID.value,
+                    'message': (
+                        f"{base_loc}[{i}].type {type_filter!r} is not "
+                        f"registered in {where} and no entity/link has "
+                        f"this type (declare via add_entity_type / "
+                        f"add_link_type, fix the typo, or omit the type "
+                        f"filter)."
+                    ),
+                    'location': f"{loc}.type",
+                })
+                ok = False
 
         # attribute_name required (attribute family only)
         if is_attr and not attr_name:
@@ -2194,10 +2232,13 @@ def validate_display_attribute(
     entities: List['_BaseEntity'],
     links: List['Link'],
     ac_names: Dict[str, str],
+    entity_type_names: Set[str],
+    link_type_names: Set[str],
 ) -> List[Dict[str, Any]]:
     """Validate ``extra_cfg.display_attribute`` entries (sibling-AC family)."""
     return _validate_display_entries(
         displays, attribute_classes, entities, links, ac_names,
+        entity_type_names, link_type_names,
         family='attribute', base_loc='settings.extra_cfg.display_attribute',
     )
 
@@ -2208,9 +2249,12 @@ def validate_display_label(
     entities: List['_BaseEntity'],
     links: List['Link'],
     ac_names: Dict[str, str],
+    entity_type_names: Set[str],
+    link_type_names: Set[str],
 ) -> List[Dict[str, Any]]:
     """Validate ``extra_cfg.display_label`` entries (label-target family)."""
     return _validate_display_entries(
         displays, attribute_classes, entities, links, ac_names,
+        entity_type_names, link_type_names,
         family='label', base_loc='settings.extra_cfg.display_label',
     )
