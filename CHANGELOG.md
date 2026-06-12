@@ -8,6 +8,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
 > changes ship in minor releases with notes here, as below.
 
+## [1.16.0] - 2026-06-12
+
+### Added
+
+- **`cascade.mode` — self-describing layer files.** A config file can now
+  carry a top-level `cascade` block whose `mode` field tells the loader how
+  the file *intends to be applied as a layer*. Values match the CLI flag
+  vocabulary one-to-one: `merge` (default), `wipe`, `delete`, `lock`. Bare
+  `anxwritter --config FILE` honors `cascade.mode` automatically; explicit
+  `--config-lock` / `--config-wipe` / `--config-delete` flags override.
+
+  ```yaml
+  # org_baseline.yaml
+  cascade:
+    mode: lock
+  entity_types:
+    - name: Person
+      color: Blue
+  ```
+
+  Python parity: `apply_config(data)` / `apply_config_file(path)` /
+  `from_config(source)` / `from_config_file(path)` honor `cascade.mode` when
+  called with default kwargs; passing an explicit `operation=` /
+  `wipe_previous=` / `lock=` overrides. The kwarg signatures changed from
+  `bool = False` / `str = 'merge'` defaults to `Optional[bool] = None` /
+  `Optional[str] = None`, where `None` means "use the file's `cascade.mode`,
+  or fall back to merge if none is declared." Callers passing explicit bool
+  / string values are unaffected.
+
+  `from_dict` / `from_yaml` / `from_json` and their `_file` variants silently
+  **strip** the `cascade` block — those APIs construct a chart in one shot
+  and have no layer to apply against — but malformed cascade metadata
+  (unknown `mode` value, unknown keys under `cascade`, non-mapping `cascade`)
+  still raises `ValueError` on the construction path so typos surface early.
+
+  UI: the topbar gains a small **Cascade** dropdown (`merge` / `wipe` /
+  `delete` / `lock`). Non-merge selections are written into the downloaded
+  YAML as `cascade.mode`; merge emits nothing. Imported configs sync the
+  dropdown back from `cascade.mode`.
+
+  Implementation: new helper `_extract_cascade_meta()` in
+  `_config_layering.py` pops + validates the `cascade` block before delegating
+  to the existing layering engine. CLI: bare `--config` now passes `None`
+  sentinels via `_ConfigLayerAction` so the loader can route to the file's
+  declared mode.
+
 ## [1.15.0] - 2026-06-11
 
 ### Added

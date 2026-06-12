@@ -38,7 +38,11 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from loguru import logger
 
 from .builder import ANXBuilder
-from ._config_layering import _ConfigLayeringMixin
+from ._config_layering import (
+    _ConfigLayeringMixin,
+    _CASCADE_MODE_TO_TRIPLE,
+    _extract_cascade_meta,
+)
 from .colors import color_to_colorref
 from .entities import _BaseEntity, Icon, Box, Circle, ThemeLine, EventFrame, TextBlock, Label
 from .enums import DotStyle, Representation
@@ -249,7 +253,18 @@ class ANXChart(_ConfigLayeringMixin):
         Config sections are processed via ``_apply_config(is_config=False)``
         (conflict detection active when a config was previously applied).
         Entities and links are parsed and added to the chart.
+
+        A top-level ``cascade`` block is silently stripped — it's an
+        apply-time layering directive (handled by :meth:`apply_config`) and
+        has no meaning when constructing a chart in one shot via
+        :meth:`from_dict` / :meth:`from_yaml` / :meth:`from_json` etc.
         """
+        if isinstance(data, dict) and 'cascade' in data:
+            # Validate the block's shape so a malformed cascade still raises
+            # on the construction path (catches typos early), then drop it.
+            _extract_cascade_meta(data)
+            data = {k: v for k, v in data.items() if k != 'cascade'}
+
         # Apply config sections from the data dict
         self._apply_config(data, is_config=False)
 
@@ -396,9 +411,9 @@ class ANXChart(_ConfigLayeringMixin):
         self,
         data: dict,
         *,
-        operation: str = 'merge',
-        wipe_previous: bool = False,
-        lock: bool = False,
+        operation: Optional[str] = None,
+        wipe_previous: Optional[bool] = None,
+        lock: Optional[bool] = None,
         source_name: Optional[str] = None,
     ) -> None:
         """Apply a config dict to this chart (one config layer).
@@ -407,6 +422,11 @@ class ANXChart(_ConfigLayeringMixin):
         attribute_classes, strengths, datetime_formats, semantic_*, palettes,
         legend_items, grades, source_types). ``entities`` / ``links`` keys are
         silently ignored.
+
+        Precedence for layering knobs: an explicit kwarg here overrides the
+        file's top-level ``cascade.mode`` block; if neither is set, the
+        layer defaults to plain merge. Pass ``None`` (the default) for any
+        knob you want the file's ``cascade.mode`` to drive.
 
         Layering rules (``operation='merge'``, the default):
 
@@ -447,25 +467,34 @@ class ANXChart(_ConfigLayeringMixin):
 
         No validation runs at load time. Call :meth:`validate` afterwards.
         """
+        cleaned, mode = _extract_cascade_meta(data) if data else (data, None)
+        cs_op, cs_wipe, cs_lock = (
+            _CASCADE_MODE_TO_TRIPLE[mode] if mode
+            else ('merge', False, False)
+        )
         self._apply_config(
-            data, is_config=True, operation=operation,
-            wipe_previous=wipe_previous, lock=lock, source_name=source_name,
+            cleaned, is_config=True,
+            operation=cs_op if operation is None else operation,
+            wipe_previous=cs_wipe if wipe_previous is None else wipe_previous,
+            lock=cs_lock if lock is None else lock,
+            source_name=source_name,
         )
 
     def apply_config_file(
         self,
         path: Union[str, Path],
         *,
-        operation: str = 'merge',
-        wipe_previous: bool = False,
-        lock: bool = False,
+        operation: Optional[str] = None,
+        wipe_previous: Optional[bool] = None,
+        lock: Optional[bool] = None,
         source_name: Optional[str] = None,
     ) -> None:
         """Load a config file (JSON or YAML) and apply it as one config layer.
 
         See :meth:`apply_config` for the layering rules and the meaning of
-        *operation* / *wipe_previous* / *lock*. Call :meth:`validate` after
-        loading to catch schema errors before feeding the chart any data.
+        *operation* / *wipe_previous* / *lock* (including precedence vs the
+        file's ``cascade.mode``). Call :meth:`validate` after loading to
+        catch schema errors before feeding the chart any data.
 
         *source_name* defaults to the file's basename (``Path(path).name``).
         """
@@ -482,17 +511,18 @@ class ANXChart(_ConfigLayeringMixin):
         cls,
         source: str,
         *,
-        operation: str = 'merge',
-        wipe_previous: bool = False,
-        lock: bool = False,
+        operation: Optional[str] = None,
+        wipe_previous: Optional[bool] = None,
+        lock: Optional[bool] = None,
         source_name: Optional[str] = None,
     ) -> "ANXChart":
         """Create an ANXChart pre-loaded with config from a JSON or YAML string.
 
         Tries JSON first; falls back to YAML if JSON parsing fails.
 
-        See :meth:`apply_config` for *operation* / *wipe_previous* / *lock* /
-        *source_name*.
+        See :meth:`apply_config` for *operation* / *wipe_previous* / *lock*
+        precedence (file ``cascade.mode`` is honored when the kwarg is None)
+        and *source_name*.
         """
         try:
             data = json.loads(source)
@@ -510,17 +540,18 @@ class ANXChart(_ConfigLayeringMixin):
         cls,
         path: Union[str, Path],
         *,
-        operation: str = 'merge',
-        wipe_previous: bool = False,
-        lock: bool = False,
+        operation: Optional[str] = None,
+        wipe_previous: Optional[bool] = None,
+        lock: Optional[bool] = None,
         source_name: Optional[str] = None,
     ) -> "ANXChart":
         """Create an ANXChart pre-loaded with config from a JSON or YAML file.
 
         Format detected by extension (.yaml/.yml -> YAML, else JSON).
 
-        See :meth:`apply_config` for *operation* / *wipe_previous* / *lock* /
-        *source_name* (the latter defaults to ``Path(path).name``).
+        See :meth:`apply_config` for *operation* / *wipe_previous* / *lock*
+        precedence (file ``cascade.mode`` is honored when the kwarg is None)
+        and *source_name* (which defaults to ``Path(path).name``).
         """
         chart = cls()
         chart.apply_config_file(

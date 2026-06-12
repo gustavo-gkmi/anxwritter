@@ -19,6 +19,13 @@
   <div class="meta">
     <span id="meta-version" class="pill">…</span>
     <span id="autosave-pill" class="pill" title="Auto-saves to your browser's localStorage so a refresh doesn't lose your edits.">…</span>
+    <label for="cascade-mode" class="cascade-label" title="On `anxwritter --config <this-file>`: how this layer applies. Default merge.">Cascade:</label>
+    <select id="cascade-mode" class="cascade-select" title="On `anxwritter --config <this-file>`: how this layer applies. Default merge.">
+      <option value="merge" title="Default: deep-merge for settings; field-merge by identity for keyed lists; append+dedup for grades/source_types.">merge</option>
+      <option value="wipe" title="Clear each section this layer touches before merging (the 'narrow the list' case).">wipe</option>
+      <option value="delete" title="Subtract by shape: null values remove sections/entries; identity-only entries remove rows.">delete</option>
+      <option value="lock" title="Freeze the leaves this layer declares. Later layers changing them are locked_override errors.">lock</option>
+    </select>
     <input id="form-filter" class="filter-input" type="search" placeholder="Filter fields…" autocomplete="off" title="Substring filter on field names + help text. Esc clears.">
     <button id="btn-collapse-all" type="button" title="Collapse every section, nested block, and row">Collapse all</button>
     <button id="btn-expand-all" type="button" title="Expand every section, nested block, and row">Expand all</button>

@@ -17,6 +17,7 @@ import pytest
 
 from anxwritter import ANXChart
 from anxwritter.errors import ErrorType
+from anxwritter.utils import _enum_val
 
 REPO_ROOT = str(Path(__file__).parent.parent)
 
@@ -371,3 +372,169 @@ class TestCLI:
         finally:
             os.unlink(base)
             os.unlink(rm)
+
+
+# ── In-file `cascade.mode` (self-describing layer metadata) ─────────────────
+
+class TestCascadeMode:
+    """Top-level ``cascade.mode`` block in a config file declares the layering
+    operation for that file. Bare --config / no-kwargs Python entry points
+    honor it; explicit CLI flags / kwargs override. See chart.py docstrings."""
+
+    def test_apply_config_honors_lock_mode(self):
+        org = ANXChart()
+        org.apply_config({
+            'cascade': {'mode': 'lock'},
+            'attribute_classes': [{'name': 'X', 'type': 'text'}],
+        })
+        # A later layer overriding X.type triggers locked_override.
+        org.apply_config({'attribute_classes': [{'name': 'X', 'type': 'number'}]})
+        types = {e['type'] for e in org.validate()}
+        assert 'locked_override' in types
+
+    def test_apply_config_honors_wipe_mode(self):
+        chart = ANXChart()
+        chart.apply_config({'source_types': ['A', 'B', 'C']})
+        chart.apply_config({
+            'cascade': {'mode': 'wipe'},
+            'source_types': ['Z'],
+        })
+        assert chart.source_types == ['Z']
+
+    def test_apply_config_honors_delete_mode(self):
+        chart = ANXChart()
+        chart.apply_config({'source_types': ['A', 'B', 'C']})
+        chart.apply_config({
+            'cascade': {'mode': 'delete'},
+            'source_types': ['B'],
+        })
+        assert chart.source_types == ['A', 'C']
+
+    def test_explicit_kwarg_overrides_cascade_mode(self):
+        # cascade says lock; caller explicitly passes lock=False → no lock.
+        chart = ANXChart()
+        chart.apply_config({
+            'cascade': {'mode': 'lock'},
+            'attribute_classes': [{'name': 'X', 'type': 'text'}],
+        }, lock=False)
+        chart.apply_config({'attribute_classes': [{'name': 'X', 'type': 'number'}]})
+        types = {e['type'] for e in chart.validate()}
+        assert 'locked_override' not in types
+
+    def test_merge_mode_is_a_noop(self):
+        # cascade.mode=merge is the default; behavior identical to no cascade.
+        chart = ANXChart()
+        chart.apply_config({
+            'cascade': {'mode': 'merge'},
+            'attribute_classes': [{'name': 'X', 'type': 'text'}],
+        })
+        chart.apply_config({'attribute_classes': [{'name': 'X', 'type': 'number'}]})
+        # Later layer wins on type (field-merge by name).
+        assert chart.validate() == [] or all(
+            e['type'] != 'locked_override' for e in chart.validate()
+        )
+        # Confirm the type updated.
+        ac = next(a for a in chart._attribute_classes if a.name == 'X')
+        assert _enum_val(ac.type).lower() == 'number'
+
+    def test_invalid_mode_value_rejected(self):
+        chart = ANXChart()
+        with pytest.raises(ValueError, match="cascade.mode"):
+            chart.apply_config({'cascade': {'mode': 'frobnicate'}})
+
+    def test_unknown_keys_under_cascade_rejected(self):
+        chart = ANXChart()
+        with pytest.raises(ValueError, match="Unknown keys under `cascade`"):
+            chart.apply_config({'cascade': {'mode': 'merge', 'priority': 5}})
+
+    def test_cascade_not_a_mapping_rejected(self):
+        chart = ANXChart()
+        with pytest.raises(ValueError, match="cascade.*must be a mapping"):
+            chart.apply_config({'cascade': 'lock'})
+
+    def test_empty_cascade_block_is_fine(self):
+        # `cascade: {}` or `cascade: null` is valid — no mode set, defaults apply.
+        chart = ANXChart()
+        chart.apply_config({'cascade': {}, 'source_types': ['A']})
+        assert chart.source_types == ['A']
+        chart2 = ANXChart()
+        chart2.apply_config({'cascade': None, 'source_types': ['A']})
+        assert chart2.source_types == ['A']
+
+    def test_from_dict_strips_cascade_silently(self):
+        # from_dict / from_yaml / from_json are construction APIs; cascade
+        # has no meaning. Strip it without complaint (but still validate
+        # the block's shape — typos should still error).
+        c = ANXChart.from_dict({
+            'cascade': {'mode': 'lock'},
+            'attribute_classes': [{'name': 'X', 'type': 'text'}],
+        })
+        # No 'cascade' section leaks into the chart; AC was applied normally.
+        assert any(a.name == 'X' for a in c._attribute_classes)
+        # Malformed cascade still raises on the construction path.
+        with pytest.raises(ValueError, match="cascade.mode"):
+            ANXChart.from_dict({'cascade': {'mode': 'bogus'}})
+
+    def test_from_yaml_strips_cascade_silently(self):
+        yaml_src = """
+cascade:
+  mode: lock
+attribute_classes:
+  - name: X
+    type: text
+"""
+        c = ANXChart.from_yaml(yaml_src)
+        assert any(a.name == 'X' for a in c._attribute_classes)
+
+    def test_apply_config_file_honors_cascade_mode(self, tmp_path):
+        org = tmp_path / "org.yaml"
+        org.write_text(
+            "cascade:\n  mode: lock\n"
+            "attribute_classes:\n  - name: X\n    type: text\n"
+        )
+        chart = ANXChart()
+        chart.apply_config_file(str(org))  # bare call → file's mode wins
+        chart.apply_config({'attribute_classes': [{'name': 'X', 'type': 'number'}]})
+        types = {e['type'] for e in chart.validate()}
+        assert 'locked_override' in types
+
+
+class TestCascadeModeCLI(TestCLI):
+    """CLI-level wiring: bare --config honors file's cascade.mode; explicit
+    --config-* flags override it."""
+
+    def test_bare_config_honors_cascade_lock(self):
+        org = self._write({
+            "cascade": {"mode": "lock"},
+            "attribute_classes": [{"name": "X", "type": "text"}],
+        })
+        user = self._write({"attribute_classes": [{"name": "X", "type": "number"}]})
+        data = self._write({"entities": {"icons": [{"id": "a", "type": "Person"}]}})
+        try:
+            rc, out, err = self._run(
+                "--config", org, "--config", user, "--validate-only", data,
+            )
+            assert rc == 1
+            assert "locked_override" in err
+        finally:
+            for p in (org, user, data):
+                os.unlink(p)
+
+    def test_explicit_config_flag_overrides_cascade(self):
+        # cascade says lock but CLI --config-wipe overrides → wipe wins,
+        # no locked_override fires.
+        org = self._write({
+            "cascade": {"mode": "lock"},
+            "source_types": ["A", "B"],
+        })
+        user = self._write({"source_types": ["Z"]})
+        try:
+            rc, out, err = self._run(
+                "--show-config", "--config-wipe", org, "--config", user,
+            )
+            assert rc == 0
+            # Wipe cleared org's contributions, then user's Z is added.
+            assert "Z" in out
+        finally:
+            for p in (org, user):
+                os.unlink(p)

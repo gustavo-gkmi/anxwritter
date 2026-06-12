@@ -66,6 +66,36 @@ html, body {
   padding: 3px 8px; border-radius: 999px;
 }
 
+/* Cascade-mode dropdown in topbar — meta about the file (how it applies as
+   a --config layer), not chart content. */
+.cascade-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 4px 0 4px;
+}
+.cascade-select {
+  font: inherit;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  background: white;
+  cursor: pointer;
+}
+.cascade-select:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+.cascade-select.non-default {
+  /* When the user has picked a non-default mode, give the dropdown a subtle
+     tinted background so the topbar reflects that the file's layering is
+     non-trivial. (Toggled in JS — `select[value="x"]` doesn't work because
+     value is a property, not an attribute.) */
+  background: var(--tag-bg);
+  border-color: var(--tag-fg);
+  color: var(--tag-fg);
+  font-weight: 600;
+}
+
 /* Quick filter input in topbar */
 .filter-input {
   font: inherit;

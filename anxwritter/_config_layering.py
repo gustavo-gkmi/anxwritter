@@ -26,6 +26,63 @@ from .models import (
 _UNSET = object()
 
 
+# ── `cascade.mode` (in-file layering policy) ──────────────────────────────
+#
+# A config file may carry a top-level ``cascade`` block whose ``mode`` field
+# tells the loader which layering operation to apply by default. Values match
+# the CLI flag vocabulary one-to-one. When present and the caller didn't pass
+# an explicit operation/wipe_previous/lock, the meta wins; explicit kwargs
+# (from CLI flags or Python callers) override.
+#
+#     cascade:
+#       mode: lock           # one of: merge (default), wipe, delete, lock
+#
+# The meta is purely an apply-time concern; ``from_dict`` / ``from_yaml`` /
+# ``from_json`` strip it silently because chart construction has no layering.
+
+_CASCADE_MODE_TO_TRIPLE = {
+    'merge':  ('merge', False, False),
+    'wipe':   ('merge', True, False),
+    'delete': ('delete', False, False),
+    'lock':   ('merge', False, True),
+}
+
+
+def _extract_cascade_meta(data: dict) -> tuple:
+    """Pop the top-level ``cascade`` block (if any), validate, return its mode.
+
+    Returns ``(cleaned_data, mode | None)``. ``cleaned_data`` is the same dict
+    as ``data`` with the ``cascade`` key removed (a copy — we don't mutate the
+    caller's dict). Raises ``ValueError`` on malformed cascade metadata.
+    """
+    if not isinstance(data, dict) or 'cascade' not in data:
+        return data, None
+
+    cleaned = {k: v for k, v in data.items() if k != 'cascade'}
+    meta = data['cascade']
+    if meta is None:
+        return cleaned, None
+    if not isinstance(meta, dict):
+        raise ValueError(
+            f"`cascade` must be a mapping, got {type(meta).__name__}."
+        )
+    extra = set(meta.keys()) - {'mode'}
+    if extra:
+        raise ValueError(
+            f"Unknown keys under `cascade`: {sorted(extra)} "
+            f"(only `mode` is supported)."
+        )
+    mode = meta.get('mode')
+    if mode is None:
+        return cleaned, None
+    if mode not in _CASCADE_MODE_TO_TRIPLE:
+        raise ValueError(
+            f"`cascade.mode` must be one of "
+            f"{sorted(_CASCADE_MODE_TO_TRIPLE)}, got {mode!r}."
+        )
+    return cleaned, mode
+
+
 class _ConfigLayeringMixin:
     """Field-merge / lock / delete / wipe config-layering engine for ANXChart.
 
