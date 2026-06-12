@@ -101,6 +101,41 @@ When `--config` is provided without an `INPUT_FILE`, a config-only chart is crea
 anxwritter --config org_defaults.yaml -o output/empty_chart.anx
 ```
 
+### Self-describing layers: `cascade.mode`
+
+A config file can carry a top-level `cascade` block whose `mode` field declares
+how the file *intends to be applied as a layer*. Bare `--config FILE` honors it
+automatically; explicit `--config-lock` / `--config-wipe` / `--config-delete`
+flags override.
+
+```yaml
+# org_baseline.yaml
+cascade:
+  mode: lock          # one of: merge (default), wipe, delete, lock
+
+entity_types:
+  - name: Person
+    color: Blue
+```
+
+```bash
+# bare --config now reads cascade.mode: lock from org_baseline.yaml,
+# so user_preset.yaml's attempts to override become locked_override errors.
+anxwritter --config org_baseline.yaml --config user_preset.yaml data.json -o out.anx
+```
+
+**Precedence:** explicit CLI flag > file's `cascade.mode` > default merge. The
+`cascade` block is stripped silently by `from_dict` / `from_yaml` / `from_json`
+(those are construction APIs — there's no layer to apply against), but
+malformed cascade metadata still raises `ValueError` on the construction path.
+Unknown keys under `cascade` or invalid `mode` values are rejected at load
+time, not at `validate()`-time.
+
+Python equivalents: `apply_config(data)` / `apply_config_file(path)` /
+`from_config(source)` / `from_config_file(path)` all honor `cascade.mode` when
+called with the default kwargs (`operation=None`, `wipe_previous=None`,
+`lock=None`). Passing an explicit value overrides.
+
 ---
 
 ## Inspecting the resolved config

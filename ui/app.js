@@ -221,8 +221,26 @@ function updateAutosavePill(state) {
   document.getElementById('btn-reset').addEventListener('click', () => {
     if (!confirm('Reset all fields to empty? (this also wipes the saved copy in your browser)')) return;
     CONFIG = {};
+    syncCascadeMode();  // back to merge
     clearAutosave();
     renderAll();
+  });
+
+  // Cascade mode dropdown — writes `cascade: { mode: <value> }` into CONFIG
+  // when not merge; deletes the key entirely when merge (the default has no
+  // semantic effect, so emitting it is pure YAML noise). Initial value comes
+  // from the autosave restore (or imported file) via syncCascadeMode().
+  const cascadeSelect = document.getElementById('cascade-mode');
+  syncCascadeMode();
+  cascadeSelect.addEventListener('change', () => {
+    const mode = cascadeSelect.value;
+    if (mode === 'merge') {
+      delete CONFIG.cascade;
+    } else {
+      CONFIG.cascade = { mode };
+    }
+    cascadeSelect.classList.toggle('non-default', mode !== 'merge');
+    refreshUI();
   });
 
   const importBtn = document.getElementById('btn-import');
@@ -1276,10 +1294,14 @@ function applyHideUnset() {
   hideEmptyContainer('.sub-nav');
   hideEmptyContainer('.nav-group');
 
-  // Placeholder shows when hide-mode is on AND the whole chart is empty.
+  // Placeholder shows when hide-mode is on AND the whole chart (excluding the
+  // `cascade` meta block) is empty. Cascade alone shouldn't make the chart
+  // appear non-empty — it's metadata, not data.
   const empty = document.getElementById('empty-state');
   if (empty) {
-    const chartEmpty = pruneEmpty(CONFIG) === undefined;
+    const dataOnly = Object.assign({}, CONFIG);
+    delete dataOnly.cascade;
+    const chartEmpty = pruneEmpty(dataOnly) === undefined;
     empty.classList.toggle('visible', hideOn && chartEmpty);
   }
 
@@ -1525,6 +1547,16 @@ function pruneEmpty(val) {
   return val;
 }
 
+// Read cascade.mode out of CONFIG into the topbar dropdown. Call after any
+// CONFIG mutation (Reset / Import / restore-from-autosave). Default merge.
+function syncCascadeMode() {
+  const sel = document.getElementById('cascade-mode');
+  if (!sel) return;
+  const mode = (CONFIG && CONFIG.cascade && CONFIG.cascade.mode) || 'merge';
+  sel.value = ['merge', 'wipe', 'delete', 'lock'].includes(mode) ? mode : 'merge';
+  sel.classList.toggle('non-default', sel.value !== 'merge');
+}
+
 function importYamlText(text, fileName) {
   let parsed;
   try {
@@ -1549,6 +1581,7 @@ function importYamlText(text, fileName) {
   }
 
   CONFIG = parsed;
+  syncCascadeMode();
   renderAll();
   scheduleAutosave();
   toast(`imported ${fileName}`);

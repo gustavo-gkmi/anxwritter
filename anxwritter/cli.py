@@ -29,20 +29,25 @@ class _ConfigLayerAction(argparse.Action):
     The flag name selects the layer mode so cross-flag order is preserved
     (all four flags share ``dest='config_layers'``):
 
-      --config         -> merge
-      --config-wipe    -> merge + wipe_previous (clear mentioned sections first)
-      --config-delete  -> delete (subtract by shape)
-      --config-lock    -> merge + lock (freeze this layer's declared leaves)
+      --config         -> read file's ``cascade.mode`` (or fall back to merge)
+      --config-wipe    -> force merge + wipe_previous (overrides cascade.mode)
+      --config-delete  -> force delete (overrides cascade.mode)
+      --config-lock    -> force merge + lock (overrides cascade.mode)
+
+    ``None`` sentinels in the triple mean "let the file's ``cascade.mode``
+    decide"; non-None values force the operation regardless of cascade.
     """
     _MODES = {
-        '--config': ('merge', False, False),
+        # Bare --config: pass None sentinels so apply_config_file honors the
+        # file's cascade.mode (or falls through to merge if unset).
+        '--config': (None, None, None),
         '--config-wipe': ('merge', True, False),
         '--config-delete': ('delete', False, False),
         '--config-lock': ('merge', False, True),
     }
 
     def __call__(self, parser, namespace, values, option_string=None):
-        op, wipe, lock = self._MODES.get(option_string, ('merge', False, False))
+        op, wipe, lock = self._MODES.get(option_string, (None, None, None))
         layers = getattr(namespace, self.dest, None) or []
         layers.append((values, op, wipe, lock))
         setattr(namespace, self.dest, layers)
@@ -236,9 +241,12 @@ def main(argv: list[str] | None = None) -> None:
         help="Config file path (JSON or YAML). Repeatable. Layers apply "
              "left-to-right and can be interleaved with --config-wipe / "
              "--config-delete / --config-lock; the rule applies per-layer at "
-             "the moment that layer is processed. Default: field-merge by "
-             "identity (name/key); append + exact-text dedup for grades / "
-             "source_types; deep-merge for settings.",
+             "the moment that layer is processed. With bare --config, the "
+             "file's top-level `cascade.mode` is honored if present (one of "
+             "merge/wipe/delete/lock); otherwise the default is field-merge "
+             "by identity (name/key), append + exact-text dedup for grades "
+             "/ source_types, deep-merge for settings. Explicit --config-* "
+             "flags override `cascade.mode`.",
     )
     parser.add_argument(
         "--config-wipe",

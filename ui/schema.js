@@ -1,6 +1,6 @@
 window.SCHEMA = {
   "_meta": {
-    "anxwritterVersion": "1.15.0",
+    "anxwritterVersion": "1.16.0",
     "schemaVersion": 1,
     "notes": "Hand-curated. tests/test_ui_schema_sync.py verifies sync with the library."
   },
