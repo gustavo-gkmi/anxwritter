@@ -94,6 +94,99 @@ Errors that originate from a config-tagged entry (see [`source_name`](constructo
 | `display_overlap_conflict` | Two display entries fight over one slot. | Two same-specificity entries could paint the same slot — the label, or the same `attribute_name` — for an overlapping `(kind, type)`. Scope them to disjoint types or merge them. A `type`-scoped entry beats an untyped one (no conflict). |
 | `locked_override` | A config layer changed a locked leaf. | A later config layer tried to change a leaf frozen by an earlier `lock=True` layer (merge, or delete). The locked value is preserved; carries `locked_value` / `attempted_value` and (when known) `config_source`. |
 | `delete_contract` | Bad `operation='delete'` layer entry. | A non-identity field in a delete layer carries a non-null value. Write `field:` (null) to unset a field, or list only the identity to remove the whole entry. |
+| `id_pattern_mismatch` | Entity/link `id` fails its type's `enforce.id_pattern`. | `EntityType.enforce.id_pattern` (or `LinkType.enforce.id_pattern`) declared a regex; the `id` value didn't match. Carries `entity_id`/`link_index`, `entity_type`/`link_type`, `received_value`, `pattern`, `description`, `rule_source=entity_type[<name>]`/`link_type[<name>]`. |
+| `attribute_pattern_mismatch` | Attribute value fails a pattern rule. | `AttributeClass.enforce.pattern` or a top-level `validators[]` entry's `pattern` failed for an attribute on an entity/link. Carries `entity_id`/`link_index`, `attribute_name`, `received_value`, `pattern`, `description`, `rule_source` (`attribute_class[<name>]` or `validator[<synthetic_key>]`). |
+| `attribute_value_not_allowed` | Attribute value not in `allowed_values`. | `AttributeClass.enforce.allowed_values` or a `validators[]` entry's `allowed_values` rejected the value. Carries `received_value`, `allowed_values`, and the same identity / rule_source fields as `attribute_pattern_mismatch`. |
+| `required_attribute_missing` | A required attribute is absent. | `EntityType.enforce.required_attributes` (or `LinkType.enforce.required_attributes`) named an attribute that isn't on the entity/link. |
+| `validator_invalid_scope` | Validator entry's scope is malformed. | Top-level `validators[]` entry sets both `entity_type` AND `link_type`, or neither. Set exactly one. |
+| `validator_invalid_shape` | Validator entry's shape is malformed. | `pattern` AND `allowed_values` both set in one entry, or neither. Set exactly one. |
+| `validator_reserved_attribute` | Validator targets the reserved `id` attribute. | Use `EntityType.enforce.id_pattern` (or `LinkType.enforce.id_pattern`) for entity/link identity rules. |
+| `validator_unknown_type` | Validator references an unregistered type. | The `entity_type` / `link_type` named in the validator entry isn't registered in `entity_types` / `link_types`. |
+| `validator_duplicate_key` | Two validators synthesize the same key. | Two entries with the same `(entity_type|link_type, attribute)` scope in the same layer. Only one rule per pair is allowed. (Cross-layer duplicates field-merge — that's how overrides work.) |
+| `pattern_missing_description` | `pattern` declared without `description`. | Regex is unreadable to non-developers; the description is the user-facing error message. Required for any `pattern` declaration (`AttributeClass.enforce.pattern`, `EntityType.enforce.id_pattern`, `LinkType.enforce.id_pattern`, `Validator.pattern`). `allowed_values` is self-documenting and doesn't need one. |
+
+---
+
+## Value enforcement (1.17.0)
+
+Declarative value rules for entity/link `id` format, required attributes, and
+attribute value constraints (regex or closed enum). Three places to declare them:
+
+| Where | Field | Purpose |
+|---|---|---|
+| `AttributeClass.enforce.pattern` / `allowed_values` | (with `description`) | Wide rule: every value of this attribute, wherever it appears (entity or link), must satisfy the rule. |
+| `EntityType.enforce.id_pattern` / `required_attributes` | (with `id_pattern_description`) | Per-type identity format + required-attribute list. |
+| `LinkType.enforce.id_pattern` / `required_attributes` | (with `id_pattern_description`) | Same shape as EntityType. (`id_pattern` is a no-op until `link_id` becomes external; `required_attributes` works today.) |
+| Top-level `validators[]` | scope: `entity_type` OR `link_type`, `attribute`, + `pattern` OR `allowed_values` | Flexible per-(type, attribute) rule. Synthesized key `E::<type>::<attr>` / `L::<type>::<attr>` is the identity for layering, lock, delete, and error `rule_source`. |
+
+**Compound AND semantics.** When both an AC-level rule and a top-level
+`validators[]` rule target the same value, both fire. Each error dict
+carries `rule_source` (`attribute_class[<name>]` or
+`validator[<synthetic_key>]`) so consumers can route, dedupe, or group.
+
+**No normalization.** The library never rewrites values to satisfy
+patterns. Drift surfaces as errors so the consumer pipeline knows it's
+broken. If you want to accept both masked and unmasked CPF, express it
+in the regex (e.g. `^\d{3}\.?\d{3}\.?\d{3}-?\d{2}$|^\d{11}$`).
+
+**Library is locale-neutral.** No bundled named validators (CPF, SSN,
+NHS, etc.). Regex covers format; closed enums use `allowed_values`.
+Check-digit / locale-specific validation is the consumer's responsibility.
+
+**Pattern matching uses `re.fullmatch`** — the entire string must match.
+Anchors (`^` / `$`) are optional. Bad regex raises at config load
+(`ValueError` at dataclass construction).
+
+**Cross-layer shape switch.** Changing a validator entry from `pattern`
+to `allowed_values` across config layers requires explicitly nulling the
+previous field in the overriding layer (e.g. `pattern: null` alongside
+`allowed_values: [...]`); otherwise field-merge leaves both set and
+surfaces as `validator_invalid_shape` at validate time.
+
+### Minimal YAML
+
+```yaml
+entity_types:
+  - name: Person
+    icon_file: person
+    enforce:
+      id_pattern: '^\d{11}$'
+      id_pattern_description: 'CPF — 11 digits, no punctuation'
+      required_attributes: [Name, CPF]
+
+link_types:
+  - name: Transfer
+    enforce:
+      required_attributes: [Amount, Currency]
+
+attribute_classes:
+  - name: CPF
+    type: text
+    enforce:
+      pattern: '^\d{11}$'
+      description: 'CPF — 11 digits, no punctuation'
+  - name: Country
+    type: text
+    enforce:
+      allowed_values: ['BR', 'US', 'UK', 'PT']
+
+validators:
+  - entity_type: Person
+    attribute: CPF
+    pattern: '^[1-9]\d{10}$'
+    description: 'CPF must not start with 0'
+  - link_type: Transfer
+    attribute: Currency
+    allowed_values: ['BRL', 'USD', 'EUR']
+```
+
+### Smart-truncating error message
+
+`str(ANXValidationError)` groups errors by `(rule_source, type)` and
+shows up to 5 examples per group with a "... N more" tail. The
+underlying `errors` list stays uncapped for programmatic consumers.
+The formatted string format is explicitly **unstable** — match on the
+dict keys, not `str(exc)`.
 
 ---
 

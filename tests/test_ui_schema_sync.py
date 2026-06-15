@@ -324,12 +324,15 @@ def _apply_overrides(sample: dict) -> dict:
             entry.pop("type", None)
 
         # DisplayAttribute.attribute_class must NOT carry name/type (it's a
-        # styling template; the synthesized AC is auto-named/typed).
+        # styling template; the synthesized AC is auto-named/typed). Also
+        # strip any inner `enforce` block — value rules belong on the
+        # registered AC, not on the styling template.
         for entry in (extra.get("display_attribute") or []):
             inner = entry.get("attribute_class")
             if isinstance(inner, dict):
                 inner.pop("name", None)
                 inner.pop("type", None)
+                inner.pop("enforce", None)
 
     # GeoMapCfg: attribute_name must match an attribute on at least one
     # entity — but the round-trip has no entities, so the geo_map block
@@ -358,6 +361,47 @@ def _apply_overrides(sample: dict) -> dict:
             intensity["attribute"] = "sample_intensity_attr"
         if isinstance(categorical, dict):
             categorical["attribute"] = "sample_categorical_attr"
+
+    # Value enforcement (1.17.0): pattern XOR allowed_values within each
+    # enforce / Validator block, and EntityType.enforce / LinkType.enforce
+    # need id_pattern + id_pattern_description paired. Drop allowed_values
+    # from AC.enforce (keep pattern); on Validator entries, scope to one
+    # of entity_type/link_type and keep just pattern.
+    for entry in (sample.get("attribute_classes") or []):
+        enf = entry.get("enforce") if isinstance(entry, dict) else None
+        if isinstance(enf, dict):
+            enf.pop("allowed_values", None)
+            if enf.get("pattern") and not enf.get("description"):
+                enf["description"] = "sample description"
+    for entry in (sample.get("entity_types") or []):
+        enf = entry.get("enforce") if isinstance(entry, dict) else None
+        if isinstance(enf, dict):
+            if enf.get("id_pattern") and not enf.get("id_pattern_description"):
+                enf["id_pattern_description"] = "sample id pattern"
+    for entry in (sample.get("link_types") or []):
+        enf = entry.get("enforce") if isinstance(entry, dict) else None
+        if isinstance(enf, dict):
+            if enf.get("id_pattern") and not enf.get("id_pattern_description"):
+                enf["id_pattern_description"] = "sample id pattern"
+
+    # Top-level validators: keep one consistent shape — entity_type set,
+    # link_type cleared, pattern kept, allowed_values dropped, scoped to a
+    # registered EntityType + non-`id` attribute.
+    et_for_validator = (
+        (sample.get("entity_types") or [{}])[0].get("name")
+        if sample.get("entity_types") else None
+    )
+    for entry in (sample.get("validators") or []):
+        if not isinstance(entry, dict):
+            continue
+        entry.pop("link_type", None)
+        entry.pop("allowed_values", None)
+        if et_for_validator:
+            entry["entity_type"] = et_for_validator
+        if entry.get("attribute") in (None, "", "id"):
+            entry["attribute"] = "sample_attr"
+        if entry.get("pattern") and not entry.get("description"):
+            entry["description"] = "sample description"
 
     return sample
 

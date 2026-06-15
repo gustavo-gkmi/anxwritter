@@ -308,4 +308,24 @@ window.HELP = {
   "SemanticProperty.abstract":      "Whether this is an abstract type. Default false.",
   "SemanticProperty.synonyms":      "List of synonym strings.",
   "SemanticProperty.description":   "Description text.",
+
+  // ── Value enforcement (1.17.0) ─────────────────────────────────────────
+  "EntityTypeEnforce.id_pattern":             "Regex (re.fullmatch) every entity.id of this type must satisfy. Anchors ^/$ optional. Bad regex is rejected at config load.",
+  "EntityTypeEnforce.id_pattern_description": "User-facing message shown in errors when id_pattern fails. REQUIRED whenever id_pattern is set — regex is unreadable to non-developers.",
+  "EntityTypeEnforce.required_attributes":    "List of attribute names that must be present on every entity of this type. Missing → required_attribute_missing.",
+
+  "LinkTypeEnforce.id_pattern":             "Regex every link.link_id of this type must satisfy. link_id is currently internal-only, so this is a no-op unless link_id is explicitly set.",
+  "LinkTypeEnforce.id_pattern_description": "User-facing description; REQUIRED when id_pattern is set.",
+  "LinkTypeEnforce.required_attributes":    "Attribute names that must be present on every link of this type.",
+
+  "AttributeClassEnforce.pattern":        "Regex every value of this attribute (entity OR link) must satisfy. Wide rule — applies wherever the attribute appears. Anchors optional (fullmatch).",
+  "AttributeClassEnforce.description":    "User-facing message shown in errors. REQUIRED whenever pattern is set.",
+  "AttributeClassEnforce.allowed_values": "Closed set of allowed string values. Case-sensitive. Mutually exclusive with pattern. List is self-documenting; description is optional.",
+
+  "Validator.entity_type":   "Scope: registered EntityType name. Exactly one of entity_type / link_type must be set.",
+  "Validator.link_type":     "Scope: registered LinkType name. Exactly one of entity_type / link_type must be set.",
+  "Validator.attribute":     "Attribute name this rule targets. 'id' is reserved — use EntityType.enforce.id_pattern for entity identity instead.",
+  "Validator.pattern":       "Regex (re.fullmatch) the attribute value must satisfy. Mutually exclusive with allowed_values. Compiled eagerly — bad regex is rejected at construction.",
+  "Validator.allowed_values": "Closed set of allowed values. Case-sensitive. Mutually exclusive with pattern.",
+  "Validator.description":   "User-facing message shown in errors. REQUIRED when pattern is set; optional with allowed_values. Identity is the synthesized key E::<entity_type>::<attribute> or L::<link_type>::<attribute>.",
 };

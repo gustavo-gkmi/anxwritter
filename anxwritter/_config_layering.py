@@ -13,11 +13,13 @@ from typing import Any, Dict, Optional
 
 from .errors import ErrorType
 from .models import (
-    AttributeClass, DateTimeFormat, DisplayAttribute, DisplayLabel,
-    EntityType, Font, GradeCollection, LegendItem, LinkType, Palette,
-    PaletteAttributeEntry, SemanticEntity, SemanticLink, SemanticProperty,
-    Settings, Strength, StrengthCollection,
+    AttributeClass, DateTimeFormat, DisplayAttribute,
+    DisplayLabel, EntityType, Font, GradeCollection,
+    LegendItem, LinkType, Palette, PaletteAttributeEntry,
+    SemanticEntity, SemanticLink, SemanticProperty, Settings, Strength,
+    StrengthCollection, Validator,
 )
+from .utils import synthesize_validator_key
 
 
 # Sentinel for "key absent" (distinct from an explicit None value) in the
@@ -231,33 +233,50 @@ class _ConfigLayeringMixin:
 
     def _merge_keyed_section(self, *, section, backing, cls, identity, incoming,
                              operation, lock, wipe_previous, source_name,
-                             coerce_nested=None) -> None:
+                             coerce_nested=None, identity_fn=None,
+                             identity_field_names=None) -> None:
         """Field-merge / delete / lock one keyed list (named registries +
         the two ``extra_cfg`` synthesizer lists). ``backing`` is mutated in
-        place; ``identity`` is ``'name'`` or ``'key'``."""
+        place; ``identity`` is ``'name'`` or ``'key'``.
+
+        ``identity_fn`` (optional) computes the identity value from a raw
+        entry — dataclass instance OR dict — for sections whose identity
+        is SYNTHESIZED rather than stored on the entry (e.g. ``validators``
+        whose key is derived from scope fields). When given, it overrides
+        the ``identity`` field lookup on both the backing list and the
+        incoming layer.
+        """
         if operation == 'merge' and wipe_previous:
             backing.clear()
             self._config_locked.pop(section, None)
             self._drop_section_state(section)
 
-        by_id = {
-            getattr(e, identity): i
-            for i, e in enumerate(backing) if getattr(e, identity, None)
-        }
+        def _id_of(e):
+            if identity_fn is not None:
+                return identity_fn(e)
+            if dataclasses.is_dataclass(e) and not isinstance(e, type):
+                return getattr(e, identity, None)
+            if isinstance(e, dict):
+                return e.get(identity)
+            return None
+
+        by_id = {}
+        for i, e in enumerate(backing):
+            key = _id_of(e)
+            if key:
+                by_id[key] = i
         locked_data = self._config_locked.get(section, {})
 
         for raw in incoming:
             is_obj = dataclasses.is_dataclass(raw) and not isinstance(raw, type)
-            if is_obj:
-                idv = getattr(raw, identity, None)
-            elif isinstance(raw, dict):
-                idv = raw.get(identity)
-            else:
+            idv = _id_of(raw)
+            if not is_obj and not isinstance(raw, dict):
                 continue
 
             if operation == 'delete':
                 self._delete_keyed_entry(
                     section, backing, by_id, identity, raw, idv, source_name,
+                    identity_field_names=identity_field_names,
                 )
                 continue
 
@@ -304,14 +323,22 @@ class _ConfigLayeringMixin:
             self._config_locked[section] = locked_data
 
     def _delete_keyed_entry(self, section, backing, by_id, identity, raw, idv,
-                            source_name) -> None:
-        """Apply a delete-layer entry to one keyed section (subtract by shape)."""
+                            source_name, identity_field_names=None) -> None:
+        """Apply a delete-layer entry to one keyed section (subtract by shape).
+
+        ``identity_field_names`` is an iterable of dict field names treated as
+        identity-bearing (excluded from the "mentioned non-identity field"
+        check). Defaults to ``{identity}``. Sections whose identity is
+        synthesized from multiple fields (e.g. ``validators``: scope from
+        ``entity_type`` / ``link_type`` / ``attribute``) pass the full set.
+        """
         if not idv:
             return  # nothing to address
+        id_fields = set(identity_field_names) if identity_field_names else {identity}
         # Determine which non-identity fields the layer mentioned, and whether
         # any carry a (forbidden) non-null value.
         if isinstance(raw, dict):
-            mentioned = {k: v for k, v in raw.items() if k != identity}
+            mentioned = {k: v for k, v in raw.items() if k not in id_fields}
         else:
             mentioned = {}  # dataclass instance → whole-entry delete only
         non_null = [k for k, v in mentioned.items() if v is not None]
@@ -553,6 +580,19 @@ class _ConfigLayeringMixin:
             d['font'] = Font(**{k: v for k, v in d['font'].items() if v is not None})
         return d
 
+    @staticmethod
+    def _validator_identity(raw) -> Optional[str]:
+        """Return the synthesized scope key for a ``validators`` entry,
+        whether given as a :class:`Validator` instance or a raw dict."""
+        if isinstance(raw, Validator):
+            return raw.key
+        if isinstance(raw, dict):
+            return synthesize_validator_key(
+                raw.get('entity_type'), raw.get('link_type'),
+                raw.get('attribute'),
+            )
+        return None
+
     def _apply_config_layer(self, data, *, operation, wipe_previous, lock,
                             source_name) -> None:
         """Apply one config layer (is_config=True path)."""
@@ -580,6 +620,18 @@ class _ConfigLayeringMixin:
                 identity='name', incoming=(data.get(section) or []),
                 operation=operation, lock=lock, wipe_previous=wipe_previous,
                 source_name=source_name, coerce_nested=coerce,
+            )
+
+        # ── validators (top-level, synthesized identity from scope) ──
+        if 'validators' in data:
+            self._merge_keyed_section(
+                section='validators', backing=self._validators, cls=Validator,
+                identity='key',  # property; only used as fallback
+                identity_fn=self._validator_identity,
+                identity_field_names={'entity_type', 'link_type', 'attribute'},
+                incoming=(data.get('validators') or []),
+                operation=operation, lock=lock, wipe_previous=wipe_previous,
+                source_name=source_name,
             )
 
         # ── palettes / legend_items: append-only (whole-section ops only) ──
@@ -971,6 +1023,10 @@ class _ConfigLayeringMixin:
             else:
                 setattr(self, key, gc)
 
+        # ── validators (data path; no config-vs-data conflict semantics) ──
+        if 'validators' in data:
+            self._apply_validators_data(data.get('validators'))
+
         # ── source_types ──
         if 'source_types' in data:
             val = data.get('source_types')
@@ -995,6 +1051,44 @@ class _ConfigLayeringMixin:
                         self._config_conflicts.append(err)
                 else:
                     self.source_types = val
+
+    def _apply_validators_data(self, raw_validators) -> None:
+        """Append validators contributed by a data file (data path).
+
+        Mirrors the data-side treatment of entity_types / link_types / etc.:
+        the section is recognised and entries are appended in order, with
+        no config-vs-data conflict semantics. ``validate_validators_config``
+        catches scope/shape/reserved-attribute/unknown-type/duplicate-key
+        issues after load — for both this path and the config path.
+        Validators were originally specified as config-only, but allowing
+        them in data files keeps the loader symmetric.
+        """
+        for raw in (raw_validators or []):
+            if isinstance(raw, Validator):
+                self._validators.append(raw)
+                continue
+            if not isinstance(raw, dict):
+                continue
+            clean = {k: v for k, v in raw.items() if v is not None}
+            try:
+                self._validators.append(Validator(**clean))
+            except (TypeError, ValueError):
+                # Eager-compile / both-shape rejections at construction
+                # time: rebuild a partial Validator that retains the
+                # scope/shape fields so validate_validators_config can
+                # surface the right error type.
+                partial = {
+                    k: clean.get(k)
+                    for k in ('entity_type', 'link_type', 'attribute',
+                              'description')
+                }
+                # Drop pattern/allowed_values both, so __post_init__ accepts
+                # the partial; validate_validators_config will then emit
+                # validator_invalid_shape.
+                try:
+                    self._validators.append(Validator(**partial))
+                except Exception:
+                    continue
 
     def _append_data_conflict(self, section, name, config_value, data_value) -> None:
         """Record a config-vs-data ``config_conflict`` for a named section."""

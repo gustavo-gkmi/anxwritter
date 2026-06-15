@@ -41,6 +41,7 @@ from .models import (
     StylingCfg, LinkStylingCfg, IntensityCfg, IntensityWidthCfg,
     IntensityColorCfg, CategoricalCfg, CategoricalStyleCfg,
     DisplayAttribute, DisplayLabel, DisplaySource,
+    Validator, AttributeClassEnforce, EntityTypeEnforce, LinkTypeEnforce,
 )
 
 try:
@@ -81,6 +82,8 @@ __all__ = [
     'StylingCfg', 'LinkStylingCfg', 'IntensityCfg', 'IntensityWidthCfg',
     'IntensityColorCfg', 'CategoricalCfg', 'CategoricalStyleCfg',
     'DisplayAttribute', 'DisplayLabel', 'DisplaySource',
+    # Value enforcement (1.17.0)
+    'Validator', 'AttributeClassEnforce', 'EntityTypeEnforce', 'LinkTypeEnforce',
     # Enums
     'MergeBehaviour',
     'DotStyle',

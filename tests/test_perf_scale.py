@@ -16,7 +16,7 @@ import time
 
 import pytest
 
-from anxwritter import ANXChart, Icon, Link
+from anxwritter import ANXChart, Icon, Link, ANXValidationError
 
 
 pytestmark = pytest.mark.perf
@@ -112,4 +112,70 @@ class TestLinkScale:
         assert elapsed < 20.0, (
             f"Link auto-offset with 10k overlapping links took {elapsed:.2f}s, "
             f"budget is 20s. Possible O(n^2) regression in compute_link_offsets."
+        )
+
+
+class TestValueEnforcementScale:
+    """Value enforcement guardrails (1.17.0)."""
+
+    def test_10k_entities_with_validators(self):
+        """10k entities + 5 validators (mix of pattern + allowed_values) +
+        AC.enforce.pattern. validate() must stay roughly proportional —
+        budget 10x slack on baseline."""
+        chart = ANXChart()
+        chart.apply_config({
+            "entity_types": [
+                {"name": "Person", "icon_file": "person",
+                 "enforce": {"id_pattern": r"^E\d+$",
+                             "id_pattern_description": "E + digits",
+                             "required_attributes": ["CPF"]}},
+            ],
+            "attribute_classes": [
+                {"name": "CPF", "type": "text",
+                 "enforce": {"pattern": r"^\d{11}$", "description": "11 digits"}},
+                {"name": "Status", "type": "text",
+                 "enforce": {"allowed_values": ["Active", "Inactive"]}},
+            ],
+            "validators": [
+                {"entity_type": "Person", "attribute": "CPF",
+                 "pattern": r"^[1-9]\d{10}$",
+                 "description": "first digit non-zero"},
+                {"entity_type": "Person", "attribute": "Status",
+                 "allowed_values": ["Active", "Inactive"]},
+                {"entity_type": "Person", "attribute": "Country",
+                 "allowed_values": ["BR", "US", "UK"]},
+            ],
+        })
+        chart.add_all(
+            Icon(id=f"E{i:05d}", type="Person",
+                 attributes={"CPF": f"{i+1000000000:011d}",
+                             "Status": "Active",
+                             "Country": "BR"})
+            for i in range(10_000)
+        )
+        _result, elapsed = _elapsed(chart.validate)
+        # Pattern checks are O(n) on entities; should complete in under 5s
+        # for 10k entities × 3 attributes × 2 rule sources.
+        assert elapsed < 10.0, (
+            f"Validation with 10k entities + 5 validators took {elapsed:.2f}s, "
+            f"budget is 10s. Possible O(n^2) regression in value enforcement."
+        )
+
+    def test_smart_truncation_handles_many_failures(self):
+        """A 50k-row failure should not blow up message rendering."""
+        chart = ANXChart()
+        chart.apply_config({
+            "entity_types": [{"name": "P", "icon_file": "person",
+                              "enforce": {"id_pattern": r"^\d+$",
+                                          "id_pattern_description": "digits"}}],
+        })
+        for i in range(5_000):
+            chart.add_icon(id=f"bad-{i}", type="P")
+        errors = chart.validate()
+        assert len(errors) == 5_000
+        # str(ANXValidationError) must finish quickly even at this scale.
+        _msg, elapsed = _elapsed(lambda: str(ANXValidationError(errors)))
+        assert elapsed < 1.0, (
+            f"str(ANXValidationError(5000 errors)) took {elapsed:.2f}s, "
+            f"budget is 1s. Possible O(n^2) in smart truncation."
         )

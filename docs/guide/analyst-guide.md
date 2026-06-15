@@ -1263,3 +1263,50 @@ chart.add_link(from_id='Alice', to_id='Bob', type='Associate',
 path = chart.to_anx('output/configured_attributes')
 print(f'Written: {path}')
 ```
+
+## Org-level value enforcement (1.17.0)
+
+If you receive data from multiple sources, you almost certainly want a
+common identity format across all charts — otherwise the same person ends
+up as two entities in ANB, and the "find matching items" feature can't
+merge them. Declare the format once in an org config and let
+`validate()` flag every drift:
+
+```yaml
+entity_types:
+  - name: Person
+    icon_file: person
+    enforce:
+      id_pattern: '^\d{11}$'
+      id_pattern_description: 'CPF — 11 digits, no punctuation'
+      required_attributes: [Name, CPF]
+
+attribute_classes:
+  - name: CPF
+    type: text
+    enforce:
+      pattern: '^\d{11}$'
+      description: 'CPF — digits only'
+  - name: Status
+    type: text
+    enforce:
+      allowed_values: [Active, Inactive, Suspended]
+
+validators:
+  - entity_type: Person
+    attribute: CPF
+    pattern: '^[1-9]\d{10}$'
+    description: 'CPF must not start with 0'
+```
+
+Three places to declare rules:
+
+- **`AttributeClass.enforce`** — wide rule, applies to every value of
+  that attribute name (entity or link).
+- **`EntityType.enforce` / `LinkType.enforce`** — per-type `id_pattern`
+  and `required_attributes`.
+- **Top-level `validators:`** — flexible per-(type, attribute) rule.
+
+The library never rewrites values to satisfy patterns; it surfaces
+mismatches so the upstream pipeline can be fixed. Full reference:
+[validation.md → Value enforcement](../reference/validation.md#value-enforcement-1170).

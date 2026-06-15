@@ -126,3 +126,36 @@ def _validate_time(val: Any) -> bool:
         except ValueError:
             continue
     return False
+
+
+# ── Validator synthetic-key helper (1.17.0) ──────────────────────────────────
+
+
+def synthesize_validator_key(
+    entity_type: Optional[str],
+    link_type: Optional[str],
+    attribute: Optional[str],
+) -> Optional[str]:
+    """Build the canonical synthetic key for a top-level ``validators`` entry.
+
+    Format: ``E::<EntityType>::<attribute>`` or ``L::<LinkType>::<attribute>``.
+    The double-colon ``::`` reads as C++/Rust scope resolution and won't appear
+    in YAML mapping keys without quoting, so it's an unambiguous separator
+    against attribute names that may contain dots or single colons.
+
+    Returns ``None`` when the scope is incomplete or invalid (both
+    ``entity_type`` and ``link_type`` set, or neither set, or ``attribute``
+    missing) — callers should then raise ``validator_invalid_scope`` /
+    ``missing_required`` rather than synthesising a misleading key.
+    """
+    if not attribute:
+        return None
+    has_et = bool(entity_type)
+    has_lt = bool(link_type)
+    if has_et and has_lt:
+        return None
+    if not (has_et or has_lt):
+        return None
+    if has_et:
+        return f"E::{entity_type}::{attribute}"
+    return f"L::{link_type}::{attribute}"
