@@ -34,6 +34,11 @@ KNOWN_DEAD_ERROR_TYPES = {
     # scan below only reads validation.py, so these read as "dead" here.
     ErrorType.LOCKED_OVERRIDE,
     ErrorType.DELETE_CONTRACT,
+    # Raised as ValueError from Validator/AttributeClassEnforce/...Enforce
+    # __post_init__ at dataclass construction time (eager regex compile),
+    # never reaches the error-dict path. Reserved for future use if regex
+    # compilation ever moves out of __post_init__.
+    ErrorType.INVALID_VALIDATOR_PATTERN,
 }
 
 

@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from .models import (
         Card, Link, AttributeClass, LegendItem, EntityType, LinkType,
         Palette, DateTimeFormat, GradeCollection, StrengthCollection,
-        SemanticEntity, SemanticLink, SemanticProperty,
+        SemanticEntity, SemanticLink, SemanticProperty, Validator,
     )
 
 
@@ -2258,3 +2258,656 @@ def validate_display_label(
         entity_type_names, link_type_names,
         family='label', base_loc='settings.extra_cfg.display_label',
     )
+
+
+# ── Value enforcement (1.17.0) ───────────────────────────────────────────────
+#
+# Three places declare value rules:
+#   - AttributeClass.enforce.pattern / allowed_values  (wide; any AC of that name)
+#   - EntityType.enforce.id_pattern  + .required_attributes  (per-type)
+#   - LinkType.enforce.id_pattern    + .required_attributes  (per-type)
+#   - top-level validators[]   (per-(type, attribute) flexible)
+#
+# Multiple rules can target the same value; all fire. Each error carries
+# `rule_source` so consumers can route/dedupe.
+
+_RESERVED_VALIDATOR_ATTRIBUTE = 'id'
+
+
+def _maybe_tag_source(err: Dict[str, Any], source: Optional[str]) -> None:
+    if source:
+        err['source'] = source
+
+
+def _match_pattern(compiled: Optional['re.Pattern'], value: Any) -> bool:
+    """Return True when ``value`` (stringified) fully matches ``compiled``.
+
+    ``None`` value → not matched (caller decides whether to fire). Uses
+    ``fullmatch`` so the entire stringified value has to satisfy the regex —
+    anchor characters (``^``/``$``) become optional in the org's pattern.
+    """
+    if compiled is None or value is None:
+        return False
+    return compiled.fullmatch(str(value)) is not None
+
+
+def _check_attr_pattern(
+    *,
+    value: Any,
+    compiled: 're.Pattern',
+    pattern_str: str,
+    description: Optional[str],
+    rule_source: str,
+    attribute_name: str,
+    location: str,
+    errors: List[Dict[str, Any]],
+    item_id_key: str,
+    item_id_value: Any,
+    source: Optional[str],
+) -> None:
+    """Emit ``attribute_pattern_mismatch`` when ``value`` fails ``compiled``."""
+    if value is None:
+        return
+    if compiled.fullmatch(str(value)) is not None:
+        return
+    msg = f"value {str(value)!r} for attribute '{attribute_name}' fails enforcement"
+    if description:
+        msg += f": {description}"
+    err: Dict[str, Any] = {
+        'type': ErrorType.ATTRIBUTE_PATTERN_MISMATCH.value,
+        'message': msg,
+        'location': location,
+        'attribute_name': attribute_name,
+        'received_value': value,
+        'pattern': pattern_str,
+        'rule_source': rule_source,
+        item_id_key: item_id_value,
+    }
+    if description:
+        err['description'] = description
+    _maybe_tag_source(err, source)
+    errors.append(err)
+
+
+def _check_attr_allowed(
+    *,
+    value: Any,
+    allowed: List[Any],
+    description: Optional[str],
+    rule_source: str,
+    attribute_name: str,
+    location: str,
+    errors: List[Dict[str, Any]],
+    item_id_key: str,
+    item_id_value: Any,
+    source: Optional[str],
+) -> None:
+    """Emit ``attribute_value_not_allowed`` when ``value`` is not in ``allowed``."""
+    if value is None:
+        return
+    if value in allowed:
+        return
+    msg = (
+        f"value {value!r} for attribute '{attribute_name}' not in allowed "
+        f"values {list(allowed)!r}"
+    )
+    if description:
+        msg += f": {description}"
+    err: Dict[str, Any] = {
+        'type': ErrorType.ATTRIBUTE_VALUE_NOT_ALLOWED.value,
+        'message': msg,
+        'location': location,
+        'attribute_name': attribute_name,
+        'received_value': value,
+        'allowed_values': list(allowed),
+        'rule_source': rule_source,
+        item_id_key: item_id_value,
+    }
+    if description:
+        err['description'] = description
+    _maybe_tag_source(err, source)
+    errors.append(err)
+
+
+def validate_id_patterns(
+    entities: List['_BaseEntity'],
+    links: List['Link'],
+    entity_types: List['EntityType'],
+    link_types: List['LinkType'],
+    et_sources: Optional[Dict[str, str]] = None,
+    lt_sources: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """Check ``EntityType.enforce.id_pattern`` against every entity.id and
+    ``LinkType.enforce.id_pattern`` against every link.link_id.
+
+    Per ANB's identity model: entity `id` is the natural identity and the
+    common target for enforcement. `link.link_id` is currently internal-only
+    so the check is effectively a no-op for it unless a user explicitly sets
+    link_id values — the wiring is kept for symmetry / future surfacing.
+    """
+    errors: List[Dict[str, Any]] = []
+
+    et_rules: Dict[str, tuple] = {}
+    for et in entity_types:
+        if et.name and et.enforce and et.enforce._compiled_id_pattern:
+            et_rules[et.name] = (
+                et.enforce._compiled_id_pattern,
+                et.enforce.id_pattern,
+                et.enforce.id_pattern_description,
+            )
+
+    lt_rules: Dict[str, tuple] = {}
+    for lt in link_types:
+        if lt.name and lt.enforce and lt.enforce._compiled_id_pattern:
+            lt_rules[lt.name] = (
+                lt.enforce._compiled_id_pattern,
+                lt.enforce.id_pattern,
+                lt.enforce.id_pattern_description,
+            )
+
+    if not et_rules and not lt_rules:
+        return errors
+
+    src_et = et_sources or {}
+    src_lt = lt_sources or {}
+
+    for i, entity in enumerate(entities):
+        if not entity.id or not entity.type:
+            continue
+        rule = et_rules.get(entity.type)
+        if not rule:
+            continue
+        compiled, pattern_str, description = rule
+        if compiled.fullmatch(str(entity.id)) is not None:
+            continue
+        msg = f"entity id {entity.id!r} fails id_pattern for type '{entity.type}'"
+        if description:
+            msg += f": {description}"
+        err: Dict[str, Any] = {
+            'type': ErrorType.ID_PATTERN_MISMATCH.value,
+            'message': msg,
+            'location': f"entities[{i}] ({type(entity).__name__})",
+            'entity_id': entity.id,
+            'entity_type': entity.type,
+            'received_value': entity.id,
+            'pattern': pattern_str,
+            'rule_source': f"entity_type[{entity.type}]",
+        }
+        if description:
+            err['description'] = description
+        _maybe_tag_source(err, src_et.get(entity.type))
+        errors.append(err)
+
+    for i, link in enumerate(links):
+        if not link.type or not link.link_id:
+            continue
+        rule = lt_rules.get(link.type)
+        if not rule:
+            continue
+        compiled, pattern_str, description = rule
+        if compiled.fullmatch(str(link.link_id)) is not None:
+            continue
+        msg = f"link.link_id {link.link_id!r} fails id_pattern for type '{link.type}'"
+        if description:
+            msg += f": {description}"
+        err = {
+            'type': ErrorType.ID_PATTERN_MISMATCH.value,
+            'message': msg,
+            'location': f"links[{i}]",
+            'link_index': i,
+            'link_type': link.type,
+            'received_value': link.link_id,
+            'pattern': pattern_str,
+            'rule_source': f"link_type[{link.type}]",
+        }
+        if description:
+            err['description'] = description
+        _maybe_tag_source(err, src_lt.get(link.type))
+        errors.append(err)
+
+    return errors
+
+
+def validate_required_attributes(
+    entities: List['_BaseEntity'],
+    links: List['Link'],
+    entity_types: List['EntityType'],
+    link_types: List['LinkType'],
+    et_sources: Optional[Dict[str, str]] = None,
+    lt_sources: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """Check ``required_attributes`` per type for entities and links."""
+    errors: List[Dict[str, Any]] = []
+    src_et = et_sources or {}
+    src_lt = lt_sources or {}
+
+    et_required = {
+        et.name: list(et.enforce.required_attributes)
+        for et in entity_types
+        if et.name and et.enforce and et.enforce.required_attributes
+    }
+    lt_required = {
+        lt.name: list(lt.enforce.required_attributes)
+        for lt in link_types
+        if lt.name and lt.enforce and lt.enforce.required_attributes
+    }
+
+    if not et_required and not lt_required:
+        return errors
+
+    for i, entity in enumerate(entities):
+        if not entity.type:
+            continue
+        required = et_required.get(entity.type)
+        if not required:
+            continue
+        attrs = getattr(entity, 'attributes', None) or {}
+        for attr_name in required:
+            if attr_name in attrs:
+                continue
+            err: Dict[str, Any] = {
+                'type': ErrorType.REQUIRED_ATTRIBUTE_MISSING.value,
+                'message': (
+                    f"required attribute {attr_name!r} missing on entity "
+                    f"{entity.id!r} of type {entity.type!r}"
+                ),
+                'location': f"entities[{i}] ({type(entity).__name__})",
+                'entity_id': entity.id,
+                'entity_type': entity.type,
+                'attribute_name': attr_name,
+                'rule_source': f"entity_type[{entity.type}]",
+            }
+            _maybe_tag_source(err, src_et.get(entity.type))
+            errors.append(err)
+
+    for i, link in enumerate(links):
+        if not link.type:
+            continue
+        required = lt_required.get(link.type)
+        if not required:
+            continue
+        attrs = getattr(link, 'attributes', None) or {}
+        for attr_name in required:
+            if attr_name in attrs:
+                continue
+            err = {
+                'type': ErrorType.REQUIRED_ATTRIBUTE_MISSING.value,
+                'message': (
+                    f"required attribute {attr_name!r} missing on link "
+                    f"{i} of type {link.type!r}"
+                ),
+                'location': f"links[{i}]",
+                'link_index': i,
+                'link_type': link.type,
+                'attribute_name': attr_name,
+                'rule_source': f"link_type[{link.type}]",
+            }
+            _maybe_tag_source(err, src_lt.get(link.type))
+            errors.append(err)
+
+    return errors
+
+
+def validate_ac_value_rules(
+    entities: List['_BaseEntity'],
+    links: List['Link'],
+    attribute_classes: List['AttributeClass'],
+    ac_sources: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """Run AttributeClass.enforce (wide rules) against every entity/link
+    attribute whose name matches."""
+    errors: List[Dict[str, Any]] = []
+    src_ac = ac_sources or {}
+
+    rules: Dict[str, tuple] = {}
+    for ac in attribute_classes:
+        if not ac.name or not ac.enforce:
+            continue
+        enf = ac.enforce
+        if enf._compiled_pattern is not None:
+            rules[ac.name] = (
+                'pattern', enf._compiled_pattern, enf.pattern, enf.description,
+            )
+        elif enf.allowed_values is not None:
+            rules[ac.name] = (
+                'allowed', enf.allowed_values, None, enf.description,
+            )
+
+    if not rules:
+        return errors
+
+    def _emit_for_items(items, item_kind):
+        for i, item in enumerate(items):
+            attrs = getattr(item, 'attributes', None) or {}
+            if not attrs:
+                continue
+            for attr_name, value in attrs.items():
+                rule = rules.get(attr_name)
+                if not rule:
+                    continue
+                kind = rule[0]
+                src = src_ac.get(attr_name)
+                location = (
+                    f"entities[{i}] ({type(item).__name__})"
+                    if item_kind == 'entity' else f"links[{i}]"
+                )
+                if item_kind == 'entity':
+                    id_key, id_value = 'entity_id', getattr(item, 'id', None)
+                else:
+                    id_key, id_value = 'link_index', i
+                if kind == 'pattern':
+                    _, compiled, pattern_str, description = rule
+                    _check_attr_pattern(
+                        value=value, compiled=compiled,
+                        pattern_str=pattern_str, description=description,
+                        rule_source=f"attribute_class[{attr_name}]",
+                        attribute_name=attr_name, location=location,
+                        errors=errors, item_id_key=id_key,
+                        item_id_value=id_value, source=src,
+                    )
+                else:
+                    _, allowed, _, description = rule
+                    _check_attr_allowed(
+                        value=value, allowed=allowed, description=description,
+                        rule_source=f"attribute_class[{attr_name}]",
+                        attribute_name=attr_name, location=location,
+                        errors=errors, item_id_key=id_key,
+                        item_id_value=id_value, source=src,
+                    )
+
+    _emit_for_items(entities, 'entity')
+    _emit_for_items(links, 'link')
+    return errors
+
+
+def validate_validator_rules(
+    entities: List['_BaseEntity'],
+    links: List['Link'],
+    validators: List['Validator'],
+    sources: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """Run top-level ``validators[]`` against matching entity/link attributes."""
+    errors: List[Dict[str, Any]] = []
+    if not validators:
+        return errors
+    src_map = sources or {}
+
+    et_rules: Dict[tuple, tuple] = {}  # (entity_type, attribute) -> (kind, ...)
+    lt_rules: Dict[tuple, tuple] = {}
+    for v in validators:
+        key = v.key
+        if key is None or not v.attribute:
+            continue
+        if v._compiled_pattern is not None:
+            spec = ('pattern', v._compiled_pattern, v.pattern, v.description, key)
+        elif v.allowed_values is not None:
+            spec = ('allowed', v.allowed_values, None, v.description, key)
+        else:
+            continue  # validator_invalid_shape caught at config-load
+        if v.entity_type:
+            et_rules[(v.entity_type, v.attribute)] = spec
+        elif v.link_type:
+            lt_rules[(v.link_type, v.attribute)] = spec
+
+    if not et_rules and not lt_rules:
+        return errors
+
+    for i, entity in enumerate(entities):
+        if not entity.type:
+            continue
+        attrs = getattr(entity, 'attributes', None) or {}
+        for attr_name, value in attrs.items():
+            spec = et_rules.get((entity.type, attr_name))
+            if not spec:
+                continue
+            kind = spec[0]
+            key = spec[4]
+            src = src_map.get(key)
+            location = f"entities[{i}] ({type(entity).__name__})"
+            if kind == 'pattern':
+                _, compiled, pattern_str, description, _ = spec
+                _check_attr_pattern(
+                    value=value, compiled=compiled, pattern_str=pattern_str,
+                    description=description,
+                    rule_source=f"validator[{key}]",
+                    attribute_name=attr_name, location=location,
+                    errors=errors, item_id_key='entity_id',
+                    item_id_value=entity.id, source=src,
+                )
+            else:
+                _, allowed, _, description, _ = spec
+                _check_attr_allowed(
+                    value=value, allowed=allowed, description=description,
+                    rule_source=f"validator[{key}]",
+                    attribute_name=attr_name, location=location,
+                    errors=errors, item_id_key='entity_id',
+                    item_id_value=entity.id, source=src,
+                )
+
+    for i, link in enumerate(links):
+        if not link.type:
+            continue
+        attrs = getattr(link, 'attributes', None) or {}
+        for attr_name, value in attrs.items():
+            spec = lt_rules.get((link.type, attr_name))
+            if not spec:
+                continue
+            kind = spec[0]
+            key = spec[4]
+            src = src_map.get(key)
+            location = f"links[{i}]"
+            if kind == 'pattern':
+                _, compiled, pattern_str, description, _ = spec
+                _check_attr_pattern(
+                    value=value, compiled=compiled, pattern_str=pattern_str,
+                    description=description,
+                    rule_source=f"validator[{key}]",
+                    attribute_name=attr_name, location=location,
+                    errors=errors, item_id_key='link_index',
+                    item_id_value=i, source=src,
+                )
+            else:
+                _, allowed, _, description, _ = spec
+                _check_attr_allowed(
+                    value=value, allowed=allowed, description=description,
+                    rule_source=f"validator[{key}]",
+                    attribute_name=attr_name, location=location,
+                    errors=errors, item_id_key='link_index',
+                    item_id_value=i, source=src,
+                )
+
+    return errors
+
+
+def validate_validators_config(
+    validators: List['Validator'],
+    et_names: Dict[str, str],
+    lt_names: Dict[str, str],
+    sources: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """Config-load checks for top-level ``validators[]`` entries.
+
+    Catches:
+    - ``validator_invalid_scope``: both or neither of entity_type/link_type set.
+    - ``validator_invalid_shape``: both or neither of pattern/allowed_values set.
+    - ``validator_reserved_attribute``: ``attribute: id``.
+    - ``validator_unknown_type``: referenced type not registered.
+    - ``pattern_missing_description``: ``pattern`` set without ``description``.
+    - ``validator_duplicate_key``: two entries with identical synthetic key.
+    """
+    errors: List[Dict[str, Any]] = []
+    if not validators:
+        return errors
+    src_map = sources or {}
+    seen_keys: Dict[str, int] = {}
+
+    for i, v in enumerate(validators):
+        loc = f"validators[{i}]"
+        has_et = bool(v.entity_type)
+        has_lt = bool(v.link_type)
+        if has_et == has_lt:
+            err: Dict[str, Any] = {
+                'type': ErrorType.VALIDATOR_INVALID_SCOPE.value,
+                'message': (
+                    "validator entry must declare exactly one of "
+                    "'entity_type' or 'link_type'"
+                    + ("" if has_et else " (neither was set)")
+                ),
+                'location': loc,
+            }
+            _maybe_tag_source(err, src_map.get(v.key) if v.key else None)
+            errors.append(err)
+            continue
+
+        if not v.attribute:
+            err = {
+                'type': ErrorType.MISSING_REQUIRED.value,
+                'message': "validator entry is missing required 'attribute' field",
+                'location': loc,
+            }
+            errors.append(err)
+            continue
+
+        if v.attribute == _RESERVED_VALIDATOR_ATTRIBUTE:
+            err = {
+                'type': ErrorType.VALIDATOR_RESERVED_ATTRIBUTE.value,
+                'message': (
+                    "validator entry cannot target 'id' — use "
+                    "EntityType.enforce.id_pattern (or LinkType.enforce.id_pattern) "
+                    "for entity/link identity rules"
+                ),
+                'location': loc,
+            }
+            _maybe_tag_source(err, src_map.get(v.key) if v.key else None)
+            errors.append(err)
+            continue
+
+        has_pattern = v.pattern is not None
+        has_allowed = v.allowed_values is not None
+        if has_pattern == has_allowed:
+            err = {
+                'type': ErrorType.VALIDATOR_INVALID_SHAPE.value,
+                'message': (
+                    "validator entry must declare exactly one of "
+                    "'pattern' or 'allowed_values'"
+                    + ("" if has_pattern else " (neither was set)")
+                ),
+                'location': loc,
+            }
+            _maybe_tag_source(err, src_map.get(v.key) if v.key else None)
+            errors.append(err)
+            continue
+
+        if has_pattern and not v.description:
+            err = {
+                'type': ErrorType.PATTERN_MISSING_DESCRIPTION.value,
+                'message': (
+                    "validator entry uses 'pattern' but is missing "
+                    "'description' (required for pattern-based rules so the "
+                    "user-facing error message can name what's expected)"
+                ),
+                'location': loc,
+            }
+            _maybe_tag_source(err, src_map.get(v.key) if v.key else None)
+            errors.append(err)
+
+        target_name = v.entity_type or v.link_type
+        target_kind = 'entity_type' if has_et else 'link_type'
+        registry = et_names if has_et else lt_names
+        if target_name not in registry:
+            err = {
+                'type': ErrorType.VALIDATOR_UNKNOWN_TYPE.value,
+                'message': (
+                    f"validator entry references unknown {target_kind} "
+                    f"{target_name!r}"
+                ),
+                'location': loc,
+            }
+            _maybe_tag_source(err, src_map.get(v.key) if v.key else None)
+            errors.append(err)
+
+        key = v.key
+        if key is not None:
+            if key in seen_keys:
+                err = {
+                    'type': ErrorType.VALIDATOR_DUPLICATE_KEY.value,
+                    'message': (
+                        f"validator entry synthesizes the same key {key!r} "
+                        f"as validators[{seen_keys[key]}] — only one rule "
+                        f"per (type, attribute) pair is allowed"
+                    ),
+                    'location': loc,
+                }
+                _maybe_tag_source(err, src_map.get(key))
+                errors.append(err)
+            else:
+                seen_keys[key] = i
+
+    return errors
+
+
+def validate_enforce_descriptions(
+    entity_types: List['EntityType'],
+    link_types: List['LinkType'],
+    attribute_classes: List['AttributeClass'],
+    et_sources: Optional[Dict[str, str]] = None,
+    lt_sources: Optional[Dict[str, str]] = None,
+    ac_sources: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """Check that ``description`` accompanies every ``pattern`` declaration
+    inside ``enforce`` blocks (regex is unreadable to end users; description
+    is the user-facing message). Allowed_values needs no description."""
+    errors: List[Dict[str, Any]] = []
+    src_et = et_sources or {}
+    src_lt = lt_sources or {}
+    src_ac = ac_sources or {}
+
+    for i, et in enumerate(entity_types):
+        if not et.enforce or not et.enforce.id_pattern:
+            continue
+        if et.enforce.id_pattern_description:
+            continue
+        err = {
+            'type': ErrorType.PATTERN_MISSING_DESCRIPTION.value,
+            'message': (
+                f"EntityType '{et.name}' declares enforce.id_pattern but is "
+                f"missing 'id_pattern_description'"
+            ),
+            'location': f"entity_types[{i}].enforce",
+        }
+        _maybe_tag_source(err, src_et.get(et.name))
+        errors.append(err)
+
+    for i, lt in enumerate(link_types):
+        if not lt.enforce or not lt.enforce.id_pattern:
+            continue
+        if lt.enforce.id_pattern_description:
+            continue
+        err = {
+            'type': ErrorType.PATTERN_MISSING_DESCRIPTION.value,
+            'message': (
+                f"LinkType '{lt.name}' declares enforce.id_pattern but is "
+                f"missing 'id_pattern_description'"
+            ),
+            'location': f"link_types[{i}].enforce",
+        }
+        _maybe_tag_source(err, src_lt.get(lt.name))
+        errors.append(err)
+
+    for i, ac in enumerate(attribute_classes):
+        if not ac.enforce or not ac.enforce.pattern:
+            continue
+        if ac.enforce.description:
+            continue
+        err = {
+            'type': ErrorType.PATTERN_MISSING_DESCRIPTION.value,
+            'message': (
+                f"AttributeClass '{ac.name}' declares enforce.pattern but is "
+                f"missing 'description'"
+            ),
+            'location': f"attribute_classes[{i}].enforce",
+        }
+        _maybe_tag_source(err, src_ac.get(ac.name))
+        errors.append(err)
+
+    return errors

@@ -1,6 +1,6 @@
 window.SCHEMA = {
   "_meta": {
-    "anxwritterVersion": "1.16.0",
+    "anxwritterVersion": "1.17.0",
     "schemaVersion": 1,
     "notes": "Hand-curated. tests/test_ui_schema_sync.py verifies sync with the library."
   },
@@ -325,6 +325,42 @@ window.SCHEMA = {
       ]
     },
 
+    "EntityTypeEnforce": {
+      "dataclass": "EntityTypeEnforce",
+      "fields": [
+        {"name": "id_pattern", "type": "text"},
+        {"name": "id_pattern_description", "type": "text"},
+        {"name": "required_attributes", "type": "list-of-text"}
+      ]
+    },
+    "LinkTypeEnforce": {
+      "dataclass": "LinkTypeEnforce",
+      "fields": [
+        {"name": "id_pattern", "type": "text"},
+        {"name": "id_pattern_description", "type": "text"},
+        {"name": "required_attributes", "type": "list-of-text"}
+      ]
+    },
+    "AttributeClassEnforce": {
+      "dataclass": "AttributeClassEnforce",
+      "fields": [
+        {"name": "pattern", "type": "text"},
+        {"name": "description", "type": "text"},
+        {"name": "allowed_values", "type": "list-of-text"}
+      ]
+    },
+    "Validator": {
+      "dataclass": "Validator",
+      "fields": [
+        {"name": "entity_type", "type": "text"},
+        {"name": "link_type", "type": "text"},
+        {"name": "attribute", "type": "text"},
+        {"name": "pattern", "type": "text"},
+        {"name": "allowed_values", "type": "list-of-text"},
+        {"name": "description", "type": "text"}
+      ]
+    },
+
     "EntityType": {
       "dataclass": "EntityType",
       "fields": [
@@ -333,7 +369,8 @@ window.SCHEMA = {
         {"name": "color", "type": "color"},
         {"name": "shade_color", "type": "color"},
         {"name": "representation", "type": "enum", "enum": "Representation"},
-        {"name": "semantic_type", "type": "text"}
+        {"name": "semantic_type", "type": "text"},
+        {"name": "enforce", "ref": "EntityTypeEnforce"}
       ]
     },
     "LinkType": {
@@ -341,7 +378,8 @@ window.SCHEMA = {
       "fields": [
         {"name": "name", "type": "text", "required": true},
         {"name": "color", "type": "color"},
-        {"name": "semantic_type", "type": "text"}
+        {"name": "semantic_type", "type": "text"},
+        {"name": "enforce", "ref": "LinkTypeEnforce"}
       ]
     },
 
@@ -368,7 +406,8 @@ window.SCHEMA = {
         {"name": "semantic_type", "type": "text"},
         {"name": "merge_behaviour", "type": "enum", "enum": "MergeBehaviour"},
         {"name": "paste_behaviour", "type": "enum", "enum": "MergeBehaviour"},
-        {"name": "font", "ref": "Font"}
+        {"name": "font", "ref": "Font"},
+        {"name": "enforce", "ref": "AttributeClassEnforce"}
       ]
     },
 
@@ -487,7 +526,8 @@ window.SCHEMA = {
     "legend_items":        {"list_of": "LegendItem"},
     "semantic_entities":   {"list_of": "SemanticEntity"},
     "semantic_links":      {"list_of": "SemanticLink"},
-    "semantic_properties": {"list_of": "SemanticProperty"}
+    "semantic_properties": {"list_of": "SemanticProperty"},
+    "validators":          {"list_of": "Validator"}
   }
 }
 ;

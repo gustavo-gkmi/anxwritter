@@ -3,10 +3,12 @@ Typed dataclasses for anxwritter's public API.
 """
 from __future__ import annotations
 import dataclasses
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, List, Type, Union, get_args, get_origin, get_type_hints
 
 from .enums import AttributeType, MergeBehaviour, DotStyle, Multiplicity, ThemeWiring, Representation, LegendItemType, Color
+from .utils import synthesize_validator_key
 
 
 # ── Settings group helpers ───────────────────────────────────────────────────
@@ -808,6 +810,158 @@ class Card:
         return out
 
 
+# ── Value enforcement — Enforce sub-blocks (1.17.0) ─────────────────────────
+
+
+@dataclass
+class AttributeClassEnforce:
+    """Wide value rule for an ``AttributeClass``.
+
+    Lives under ``AttributeClass.enforce``. Exactly one of ``pattern`` /
+    ``allowed_values`` may be set (both → ``validator_invalid_shape`` at
+    validate time, also rejected here in ``__post_init__``). ``description``
+    is required when ``pattern`` is set (regex is unreadable to non-developers;
+    the description is the user-facing message).
+
+    ``pattern`` is compiled eagerly in ``__post_init__`` — a bad regex raises
+    ``ValueError`` at construction time and surfaces as
+    ``invalid_validator_pattern`` from the YAML loader path. The compiled
+    object is stored on ``_compiled_pattern`` (private; not part of the dict
+    contract).
+
+    The rule fires on every entity/link attribute whose name matches the
+    parent ``AttributeClass.name``, regardless of type. To scope by type,
+    use a top-level ``validators`` entry instead (or in addition — both
+    rules compound, no precedence).
+    """
+    pattern: Optional[str] = None
+    description: Optional[str] = None
+    allowed_values: Optional[List[Any]] = None
+
+    def __post_init__(self):
+        if self.pattern is not None and self.allowed_values is not None:
+            raise ValueError(
+                "AttributeClassEnforce: set exactly one of 'pattern' or "
+                "'allowed_values', not both."
+            )
+        self._compiled_pattern: Optional[re.Pattern] = None
+        if self.pattern is not None:
+            try:
+                self._compiled_pattern = re.compile(self.pattern)
+            except re.error as exc:
+                raise ValueError(
+                    f"AttributeClassEnforce.pattern is not a valid regex: "
+                    f"{self.pattern!r} ({exc})"
+                ) from exc
+
+
+@dataclass
+class EntityTypeEnforce:
+    """Per-type rules on entity instances.
+
+    Lives under ``EntityType.enforce``. ``id_pattern`` constrains the entity
+    ``id`` string (compiled eagerly; bad regex → ``ValueError``).
+    ``id_pattern_description`` is required when ``id_pattern`` is set.
+    ``required_attributes`` lists attribute names that must be present on
+    every entity of this type (present-but-wrong is a separate concern —
+    use ``AttributeClass.enforce`` or a top-level ``validators`` entry).
+    """
+    id_pattern: Optional[str] = None
+    id_pattern_description: Optional[str] = None
+    required_attributes: List[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        self._compiled_id_pattern: Optional[re.Pattern] = None
+        if self.id_pattern is not None:
+            try:
+                self._compiled_id_pattern = re.compile(self.id_pattern)
+            except re.error as exc:
+                raise ValueError(
+                    f"EntityTypeEnforce.id_pattern is not a valid regex: "
+                    f"{self.id_pattern!r} ({exc})"
+                ) from exc
+
+
+@dataclass
+class LinkTypeEnforce:
+    """Per-type rules on link instances.
+
+    Same shape as :class:`EntityTypeEnforce`. ``id_pattern`` is plumbed
+    against the (currently internal) ``Link.link_id`` field — declared for
+    symmetry with EntityType but a no-op until ``link_id`` becomes
+    external-facing. ``required_attributes`` fires on every link of this type.
+    """
+    id_pattern: Optional[str] = None
+    id_pattern_description: Optional[str] = None
+    required_attributes: List[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        self._compiled_id_pattern: Optional[re.Pattern] = None
+        if self.id_pattern is not None:
+            try:
+                self._compiled_id_pattern = re.compile(self.id_pattern)
+            except re.error as exc:
+                raise ValueError(
+                    f"LinkTypeEnforce.id_pattern is not a valid regex: "
+                    f"{self.id_pattern!r} ({exc})"
+                ) from exc
+
+
+@dataclass
+class Validator:
+    """Flexible per-``(type, attribute)`` value rule.
+
+    Lives in the top-level ``validators`` config section. Each entry targets
+    exactly one of ``entity_type`` / ``link_type`` plus a non-``id``
+    ``attribute`` name, and declares exactly one of ``pattern`` /
+    ``allowed_values``. Both-shape, both-scope, neither-scope, and
+    ``attribute='id'`` are config-load errors
+    (``validator_invalid_shape`` / ``validator_invalid_scope`` /
+    ``validator_reserved_attribute``).
+
+    Identity for layering, lock, delete, and the ``rule_source`` field in
+    errors is the SYNTHESIZED key (``E::<EntityType>::<attribute>`` or
+    ``L::<LinkType>::<attribute>``) — derived from the scope, never set by
+    the user. Two entries with the same scope in one layer are a
+    ``validator_duplicate_key`` config-load error.
+
+    Compound semantics with ``AttributeClass.enforce``: when both target the
+    same value, both fire. Each error carries its own ``rule_source`` so
+    consumers can route and dedupe.
+    """
+    entity_type: Optional[str] = None
+    link_type: Optional[str] = None
+    attribute: Optional[str] = None
+    pattern: Optional[str] = None
+    allowed_values: Optional[List[Any]] = None
+    description: Optional[str] = None
+
+    def __post_init__(self):
+        self._compiled_pattern: Optional[re.Pattern] = None
+        if self.pattern is not None and self.allowed_values is not None:
+            raise ValueError(
+                "Validator: set exactly one of 'pattern' or "
+                "'allowed_values', not both."
+            )
+        if self.pattern is not None:
+            try:
+                self._compiled_pattern = re.compile(self.pattern)
+            except re.error as exc:
+                raise ValueError(
+                    f"Validator.pattern is not a valid regex: "
+                    f"{self.pattern!r} ({exc})"
+                ) from exc
+
+    @property
+    def key(self) -> Optional[str]:
+        """Synthesized scope key (``E::Person::CPF``); ``None`` when the
+        scope is incomplete or invalid — the loader surfaces the issue as
+        ``validator_invalid_scope`` / ``missing_required``."""
+        return synthesize_validator_key(
+            self.entity_type, self.link_type, self.attribute,
+        )
+
+
 @dataclass
 class AttributeClass:
     """Chart-level configuration for a named attribute type."""
@@ -833,6 +987,13 @@ class AttributeClass:
     merge_behaviour: Optional[MergeBehaviour] = None
     paste_behaviour: Optional[MergeBehaviour] = None
     font: Font = field(default_factory=Font)
+    enforce: Optional[AttributeClassEnforce] = None  # Value enforcement (1.17.0)
+
+    def __post_init__(self):
+        if isinstance(self.enforce, dict):
+            self.enforce = AttributeClassEnforce(
+                **{k: v for k, v in self.enforce.items() if v is not None}
+            )
 
 
 @dataclass
@@ -958,6 +1119,13 @@ class EntityType:
     shade_color: Optional[Union[int, str, Color]] = None   # IconShadingColour — COLORREF int, named color, or '#RRGGBB'
     representation: Optional[Union[str, Representation]] = None             # 'Icon', 'Box', 'Circle', 'ThemeLine', 'EventFrame', 'TextBlock', 'Label'
     semantic_type: Optional[str] = None              # SemanticTypeGuid — either a name registered via add_semantic_entity, or a raw 'guid…' literal (passthrough, unchecked).
+    enforce: Optional[EntityTypeEnforce] = None      # Per-type id pattern + required_attributes (1.17.0)
+
+    def __post_init__(self):
+        if isinstance(self.enforce, dict):
+            self.enforce = EntityTypeEnforce(
+                **{k: v for k, v in self.enforce.items() if v is not None}
+            )
 
 
 @dataclass
@@ -967,6 +1135,13 @@ class LinkType:
     name: str = ''
     color: Optional[Union[int, str, Color]] = None   # COLORREF int, named color, or '#RRGGBB'
     semantic_type: Optional[str] = None         # SemanticTypeGuid — either a name registered via add_semantic_link, or a raw 'guid…' literal (passthrough, unchecked).
+    enforce: Optional[LinkTypeEnforce] = None   # Per-type id pattern + required_attributes (1.17.0)
+
+    def __post_init__(self):
+        if isinstance(self.enforce, dict):
+            self.enforce = LinkTypeEnforce(
+                **{k: v for k, v in self.enforce.items() if v is not None}
+            )
 
 
 @dataclass

@@ -56,6 +56,7 @@ from .models import (
     SemanticEntity, SemanticLink, SemanticProperty,
     GradeCollection, StrengthCollection,
     Settings, Font, Frame, Show, TimeZone, CustomProperty,
+    Validator,
 )
 from .timing import PhaseTimer
 from .utils import _enum_val
@@ -200,6 +201,12 @@ class ANXChart(_ConfigLayeringMixin):
         self.grades_two: GradeCollection = GradeCollection()
         self.grades_three: GradeCollection = GradeCollection()
         self.source_types: List[str] = []
+        # Top-level value-enforcement rules (1.17.0). Identity is the
+        # synthesized key (`E::Person::CPF` / `L::Transfer::Currency`)
+        # computed from `entity_type`/`link_type` + `attribute`. Layering
+        # uses `_merge_keyed_section` with an `identity_fn` so the key never
+        # needs to live as a field on the dataclass.
+        self._validators: List[Validator] = []
 
         # Settings: accept Settings instance, dict (converted via from_dict), or None.
         if settings is None:
@@ -683,6 +690,13 @@ class ANXChart(_ConfigLayeringMixin):
                 self._palette_to_dict(pal, full=False) for pal in self._palettes
             ]
 
+        # Validators (1.17.0). Excludes the private _compiled_pattern attr
+        # because it isn't a dataclass field.
+        if self._validators:
+            result['validators'] = [
+                self._dc_to_clean_dict(v) for v in self._validators
+            ]
+
         return result
 
     def to_config(self, path: str) -> str:
@@ -739,6 +753,8 @@ class ANXChart(_ConfigLayeringMixin):
             self.settings.extra_cfg.display_attribute.append(item)
         elif isinstance(item, DisplayLabel):
             self.settings.extra_cfg.display_label.append(item)
+        elif isinstance(item, Validator):
+            self.add_validator(item)
         else:
             raise TypeError(f"Cannot add item of type {type(item).__name__}")
 
@@ -936,6 +952,29 @@ class ANXChart(_ConfigLayeringMixin):
         self._register(self._palettes, Palette, name_or_obj, kwargs,
                        upsert=False, coerce=self._coerce_palette_kwargs)
 
+    def add_validator(self, obj=None, **kwargs) -> None:
+        """Add or update a :class:`Validator` (1.17.0).
+
+        Pass a ``Validator`` instance or keyword args matching its fields
+        (``entity_type`` | ``link_type``, ``attribute``, ``pattern`` |
+        ``allowed_values``, ``description``). Upsert is by the synthesized
+        key — a later call with the same ``(entity_type|link_type,
+        attribute)`` scope replaces the earlier entry. Bad regex / both
+        shapes set raise ``ValueError`` at construction; missing or
+        ambiguous scope is caught by :meth:`validate`.
+        """
+        if isinstance(obj, Validator):
+            v = obj
+        else:
+            v = Validator(**kwargs)
+        new_key = v.key
+        if new_key is not None:
+            for i, existing in enumerate(self._validators):
+                if existing.key == new_key:
+                    self._validators[i] = v
+                    return
+        self._validators.append(v)
+
     # ------------------------------------------------------------------
     # Convenience constructors
     # ------------------------------------------------------------------
@@ -1063,6 +1102,12 @@ class ANXChart(_ConfigLayeringMixin):
             validate_styling,
             validate_display_attribute,
             validate_display_label,
+            validate_id_patterns,
+            validate_required_attributes,
+            validate_ac_value_rules,
+            validate_validator_rules,
+            validate_validators_config,
+            validate_enforce_descriptions,
         )
 
         errors: List[Dict[str, Any]] = []
@@ -1195,6 +1240,38 @@ class ANXChart(_ConfigLayeringMixin):
             ac_names,
             et_name_set,
             lt_name_set,
+        ))
+
+        # ── Value enforcement (1.17.0) — runs after AC + display synthesizers
+        # so synthesized AC values participate in pattern checks.
+        validator_sources = _src_map('validators')
+
+        errors.extend(validate_validators_config(
+            self._validators, et_names, lt_names, validator_sources or None,
+        ))
+        errors.extend(validate_enforce_descriptions(
+            self._entity_types, self._link_types, self._attribute_classes,
+            et_sources or None, lt_sources or None, ac_sources or None,
+        ))
+        errors.extend(validate_id_patterns(
+            self._entities, self._links,
+            self._entity_types, self._link_types,
+            et_sources or None, lt_sources or None,
+        ))
+        errors.extend(validate_required_attributes(
+            self._entities, self._links,
+            self._entity_types, self._link_types,
+            et_sources or None, lt_sources or None,
+        ))
+        errors.extend(validate_ac_value_rules(
+            self._entities, self._links,
+            self._attribute_classes,
+            ac_sources or None,
+        ))
+        errors.extend(validate_validator_rules(
+            self._entities, self._links,
+            self._validators,
+            validator_sources or None,
         ))
 
         return errors

@@ -1217,8 +1217,64 @@ Every error dict has `type`, `message`, and (almost always) `location`. The
 `config_conflict` error additionally includes `section`, `name`,
 `config_value`, and `data_value`.
 
+Value-enforcement errors (1.17.0 — `attribute_pattern_mismatch`,
+`attribute_value_not_allowed`, `id_pattern_mismatch`,
+`required_attribute_missing`) carry an extra `rule_source` field naming
+which rule fired (`attribute_class[<name>]` or
+`validator[<synthetic_key>]`) so consumers can route or dedupe.
+
 Full list of error types and their triggers:
 [validation.md](../reference/validation.md).
+
+---
+
+## Org-level value enforcement (1.17.0)
+
+YAML for declaring value rules — see [validation.md →
+Value enforcement](../reference/validation.md#value-enforcement-1170) for
+the full reference.
+
+```yaml
+entity_types:
+  - name: Person
+    icon_file: person
+    enforce:
+      id_pattern: '^\d{11}$'
+      id_pattern_description: 'CPF — 11 digits'
+      required_attributes: [Name, CPF]
+
+attribute_classes:
+  - name: CPF
+    type: text
+    enforce:
+      pattern: '^\d{11}$'
+      description: 'CPF — digits only'
+  - name: Status
+    type: text
+    enforce:
+      allowed_values: [Active, Inactive, Suspended]
+
+validators:
+  - entity_type: Person
+    attribute: CPF
+    pattern: '^[1-9]\d{10}$'
+    description: 'CPF must not start with 0'
+  - link_type: Transfer
+    attribute: Currency
+    allowed_values: [BRL, USD, EUR]
+```
+
+YAML quoting tips that bite here too: `^\d+$` needs single quotes (the `\`
+otherwise gets interpreted); `[BRL, USD, EUR]` is a flow-style list of
+strings; for very large `allowed_values` use block-style:
+
+```yaml
+    enforce:
+      allowed_values:
+        - BRL
+        - USD
+        - EUR
+```
 
 ---
 

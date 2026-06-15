@@ -104,6 +104,20 @@ class ErrorType(str, Enum):
     LOCKED_OVERRIDE = 'locked_override'
     DELETE_CONTRACT = 'delete_contract'
 
+    # Value enforcement (1.17.0) — id_pattern on EntityType/LinkType,
+    # value_pattern / allowed_values on AttributeClass, top-level validators.
+    ID_PATTERN_MISMATCH = 'id_pattern_mismatch'
+    ATTRIBUTE_PATTERN_MISMATCH = 'attribute_pattern_mismatch'
+    ATTRIBUTE_VALUE_NOT_ALLOWED = 'attribute_value_not_allowed'
+    REQUIRED_ATTRIBUTE_MISSING = 'required_attribute_missing'
+    INVALID_VALIDATOR_PATTERN = 'invalid_validator_pattern'
+    VALIDATOR_UNKNOWN_TYPE = 'validator_unknown_type'
+    VALIDATOR_INVALID_SCOPE = 'validator_invalid_scope'
+    VALIDATOR_INVALID_SHAPE = 'validator_invalid_shape'
+    VALIDATOR_DUPLICATE_KEY = 'validator_duplicate_key'
+    VALIDATOR_RESERVED_ATTRIBUTE = 'validator_reserved_attribute'
+    PATTERN_MISSING_DESCRIPTION = 'pattern_missing_description'
+
 
 class ANXValidationError(Exception):
     """Raised when chart data contains validation errors.
@@ -116,18 +130,23 @@ class ANXValidationError(Exception):
     ``config_conflict`` errors) identifies the config layer that contributed
     the offending entry; present only when the entry was applied via
     :meth:`ANXChart.apply_config` / :meth:`ANXChart.apply_config_file` with a
-    known ``source_name``. The string returned by ``str(exc)`` is intentionally
-    NOT a stable contract — match on the dict keys, not the formatted message.
+    known ``source_name``. The optional ``rule_source`` key (added in 1.17.0
+    on value-enforcement errors) identifies which value rule fired —
+    ``attribute_class[<name>]`` or ``validator[<synthetic_key>]``.
+
+    The string returned by ``str(exc)`` is intentionally NOT a stable contract
+    — match on the dict keys, not the formatted message. The renderer
+    smart-truncates rule-grouped errors (1.17.0) so a 50k-row failure produces
+    a readable summary instead of 50k lines; the underlying ``errors`` list is
+    kept uncapped for programmatic consumers.
     """
 
     def __init__(self, errors: List[Dict[str, Any]]) -> None:
         self.errors = errors
-        msg = f"{len(errors)} validation error(s) in chart data:\n" + \
-              "\n".join(_format_error_line(e) for e in errors)
-        super().__init__(msg)
+        super().__init__(_format_validation_message(errors))
 
 
-def _format_error_line(err: Dict[str, Any]) -> str:
+def _format_error_line(err: Dict[str, Any], indent: str = '  - ') -> str:
     """Format one error dict for the ANXValidationError message body.
 
     Appends a ``(source: X)`` suffix when ``err`` has a ``source`` key, or a
@@ -135,9 +154,68 @@ def _format_error_line(err: Dict[str, Any]) -> str:
     ``config_source``. Message-string format is documented as unstable —
     callers should consume the dict keys, not parse this output.
     """
-    line = f"  - [{err['type']}] {err['message']}"
+    line = f"{indent}[{err['type']}] {err['message']}"
     src = err.get('source') or err.get('config_source')
     if src:
         label = 'config source' if 'config_source' in err and 'source' not in err else 'source'
         line += f" ({label}: {src})"
     return line
+
+
+def _format_validation_message(
+    errors: List[Dict[str, Any]],
+    max_per_group: int = 5,
+) -> str:
+    """Build the ``str(exc)`` body for ``ANXValidationError``.
+
+    Errors carrying a ``rule_source`` key (value-enforcement errors from
+    AttributeClass.enforce / EntityType.enforce / LinkType.enforce / the
+    top-level ``validators`` section) are grouped by ``(rule_source, type)``;
+    groups above ``max_per_group`` are truncated with a "... N more" tail.
+
+    Errors without ``rule_source`` render one per line (the pre-1.17.0
+    behaviour), so existing error shapes are unaffected.
+
+    The string format is explicitly unstable — consumers should match on
+    the dict keys in ``ANXValidationError.errors``.
+    """
+    if not errors:
+        return "0 validation error(s) in chart data."
+
+    grouped: Dict[tuple, List[Dict[str, Any]]] = {}
+    ungrouped: List[Dict[str, Any]] = []
+    for e in errors:
+        rs = e.get('rule_source')
+        if rs:
+            grouped.setdefault((rs, e.get('type', '?')), []).append(e)
+        else:
+            ungrouped.append(e)
+
+    lines = [f"{len(errors)} validation error(s) in chart data:"]
+
+    # Ungrouped errors first — preserves existing format and ordering.
+    for e in ungrouped:
+        lines.append(_format_error_line(e))
+
+    # Grouped errors — small groups render normally, large groups truncate.
+    for key in sorted(grouped.keys()):
+        rs, etype = key
+        group = grouped[key]
+        count = len(group)
+        if count <= max_per_group:
+            for e in group:
+                lines.append(_format_error_line(e))
+        else:
+            lines.append(
+                f"  [{etype}] from {rs} ({count} rows — "
+                f"showing first {max_per_group}):"
+            )
+            for e in group[:max_per_group]:
+                lines.append(_format_error_line(e, indent='    - '))
+            remaining = count - max_per_group
+            lines.append(
+                f"    ... {remaining} more "
+                f"(consume chart.validate() for the full list)"
+            )
+
+    return "\n".join(lines)

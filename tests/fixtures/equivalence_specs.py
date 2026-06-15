@@ -55,6 +55,7 @@ from anxwritter import (
     StylingCfg,
     TextBlock,
     ThemeLine,
+    Validator,
 )
 from anxwritter.enums import DotStyle
 
@@ -312,6 +313,8 @@ def _apply_registries_kw(chart: ANXChart, spec: Dict[str, Any]) -> None:
         chart.source_types = list(spec["source_types"])
     for li in spec.get("legend_items", []):
         chart.add_legend_item(**li)
+    for v in spec.get("validators", []):
+        _safe_add_validator_kw(chart, v)
 
 
 def _apply_registries_obj(chart: ANXChart, spec: Dict[str, Any]) -> None:
@@ -342,6 +345,45 @@ def _apply_registries_obj(chart: ANXChart, spec: Dict[str, Any]) -> None:
         chart.source_types = list(spec["source_types"])
     for li in spec.get("legend_items", []):
         chart.add_legend_item(LegendItem(**li))
+    for v in spec.get("validators", []):
+        _safe_add_validator_obj(chart, v)
+
+
+def _safe_add_validator_kw(chart: ANXChart, raw: Dict[str, Any]) -> None:
+    """Append a Validator from spec dict via Python API, matching the
+    loader's append-only data-path semantics: malformed entries fall back
+    to a partial Validator so ``validate_validators_config`` can still
+    surface the right error (matches the from_dict behaviour)."""
+    clean = {k: v for k, v in raw.items() if v is not None}
+    try:
+        chart._validators.append(Validator(**clean))
+    except (TypeError, ValueError):
+        partial = {
+            k: clean.get(k)
+            for k in ('entity_type', 'link_type', 'attribute', 'description')
+        }
+        try:
+            chart._validators.append(Validator(**partial))
+        except Exception:
+            return
+
+
+def _safe_add_validator_obj(chart: ANXChart, raw: Dict[str, Any]) -> None:
+    """Same as _safe_add_validator_kw but goes through chart.add() — which
+    routes to add_validator (upsert), so duplicate-key cases need direct
+    append to preserve duplicate detection."""
+    clean = {k: v for k, v in raw.items() if v is not None}
+    try:
+        chart._validators.append(Validator(**clean))
+    except (TypeError, ValueError):
+        partial = {
+            k: clean.get(k)
+            for k in ('entity_type', 'link_type', 'attribute', 'description')
+        }
+        try:
+            chart._validators.append(Validator(**partial))
+        except Exception:
+            return
 
 
 def _norm_cards(raw_cards: List[Dict[str, Any]]) -> List[Card]:

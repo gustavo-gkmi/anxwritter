@@ -188,5 +188,120 @@ window.validateConfig = function validateConfig(CONFIG) {
     });
   }
 
+  // ── 10. Value enforcement (1.17.0) ─────────────────────────────────────
+
+  // 10a. AttributeClass.enforce — pattern XOR allowed_values; description
+  // required when pattern is set; pattern must be a valid regex.
+  acs.forEach((ac, idx) => {
+    if (!ac || !ac.enforce) return;
+    const enf = ac.enforce;
+    const hasPattern = enf.pattern != null && enf.pattern !== '';
+    const hasAllowed = Array.isArray(enf.allowed_values) && enf.allowed_values.length > 0;
+    if (hasPattern && hasAllowed) {
+      push(`attribute_classes[${idx}].enforce`,
+        `enforce: set exactly one of 'pattern' or 'allowed_values', not both.`);
+    }
+    if (hasPattern && !enf.description) {
+      push(`attribute_classes[${idx}].enforce.description`,
+        `enforce.description is required when pattern is set.`);
+    }
+    if (hasPattern) {
+      try { new RegExp(enf.pattern); }
+      catch (e) {
+        push(`attribute_classes[${idx}].enforce.pattern`,
+          `Invalid regex: ${e.message}`);
+      }
+    }
+  });
+
+  // 10b. EntityType.enforce — id_pattern needs id_pattern_description; regex valid.
+  (CONFIG.entity_types || []).forEach((et, idx) => {
+    if (!et || !et.enforce) return;
+    const enf = et.enforce;
+    if (enf.id_pattern) {
+      if (!enf.id_pattern_description) {
+        push(`entity_types[${idx}].enforce.id_pattern_description`,
+          `id_pattern_description is required when id_pattern is set.`);
+      }
+      try { new RegExp(enf.id_pattern); }
+      catch (e) {
+        push(`entity_types[${idx}].enforce.id_pattern`,
+          `Invalid regex: ${e.message}`);
+      }
+    }
+  });
+
+  // 10c. LinkType.enforce — same id_pattern/description coupling.
+  (CONFIG.link_types || []).forEach((lt, idx) => {
+    if (!lt || !lt.enforce) return;
+    const enf = lt.enforce;
+    if (enf.id_pattern) {
+      if (!enf.id_pattern_description) {
+        push(`link_types[${idx}].enforce.id_pattern_description`,
+          `id_pattern_description is required when id_pattern is set.`);
+      }
+      try { new RegExp(enf.id_pattern); }
+      catch (e) {
+        push(`link_types[${idx}].enforce.id_pattern`,
+          `Invalid regex: ${e.message}`);
+      }
+    }
+  });
+
+  // 10d. Top-level validators[]. Exactly one of entity_type/link_type;
+  // exactly one of pattern/allowed_values; description required for pattern;
+  // attribute='id' reserved; referenced types must be registered;
+  // no duplicate synthesized keys; pattern must compile.
+  const validators = Array.isArray(CONFIG.validators) ? CONFIG.validators : [];
+  const seenKeys = new Map();
+  validators.forEach((v, idx) => {
+    if (!v) return;
+    const hasET = !!v.entity_type;
+    const hasLT = !!v.link_type;
+    if (hasET === hasLT) {
+      push(`validators[${idx}]`,
+        `Set exactly one of 'entity_type' or 'link_type'.`);
+      return;
+    }
+    if (!v.attribute) {
+      push(`validators[${idx}].attribute`, `attribute is required.`);
+      return;
+    }
+    if (v.attribute === 'id') {
+      push(`validators[${idx}].attribute`,
+        `'id' is reserved — use EntityType.enforce.id_pattern (or LinkType.enforce.id_pattern) for identity rules.`);
+      return;
+    }
+    const hasPattern = v.pattern != null && v.pattern !== '';
+    const hasAllowed = Array.isArray(v.allowed_values) && v.allowed_values.length > 0;
+    if (hasPattern === hasAllowed) {
+      push(`validators[${idx}]`,
+        `Set exactly one of 'pattern' or 'allowed_values'.`);
+    }
+    if (hasPattern && !v.description) {
+      push(`validators[${idx}].description`,
+        `description is required when pattern is set.`);
+    }
+    if (hasPattern) {
+      try { new RegExp(v.pattern); }
+      catch (e) {
+        push(`validators[${idx}].pattern`, `Invalid regex: ${e.message}`);
+      }
+    }
+    const targetName = v.entity_type || v.link_type;
+    const targetRegistry = hasET ? etNames : ltNames;
+    if (targetName && !targetRegistry.has(targetName)) {
+      push(`validators[${idx}].${hasET ? 'entity_type' : 'link_type'}`,
+        `${hasET ? 'Entity' : 'Link'} type "${targetName}" is not registered.`);
+    }
+    const key = `${hasET ? 'E' : 'L'}::${targetName}::${v.attribute}`;
+    if (seenKeys.has(key)) {
+      push(`validators[${idx}]`,
+        `Duplicate validator scope "${key}" (first at #${seenKeys.get(key) + 1}).`);
+    } else {
+      seenKeys.set(key, idx);
+    }
+  });
+
   return errors;
 };

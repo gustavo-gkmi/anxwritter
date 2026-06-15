@@ -8,6 +8,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
 > changes ship in minor releases with notes here, as below.
 
+## [1.17.0] - 2026-06-15
+
+### Added
+
+- **Org-level value enforcement** — declarative rules for entity/link `id`
+  format, required attributes, and attribute value constraints (regex or
+  closed enum). Three places to declare them:
+
+  - **`AttributeClass.enforce.pattern` / `enforce.allowed_values`** — wide
+    rule applied wherever the attribute appears (entity or link).
+  - **`EntityType.enforce` / `LinkType.enforce`** — per-type `id_pattern` +
+    `required_attributes: [...]`.
+  - **Top-level `validators:`** — flexible per-(type, attribute) rules with
+    synthesized scope keys (`E::Person::CPF`, `L::Transfer::Currency`) used
+    for layering identity, lock / delete targets, and the `rule_source`
+    field in errors.
+
+  ```yaml
+  entity_types:
+    - name: Person
+      icon_file: person
+      enforce:
+        id_pattern: '^\d{11}$'
+        id_pattern_description: 'CPF — 11 digits'
+        required_attributes: [Name, CPF]
+
+  attribute_classes:
+    - name: CPF
+      type: text
+      enforce:
+        pattern: '^\d{11}$'
+        description: 'CPF — digits only'
+    - name: Status
+      type: text
+      enforce:
+        allowed_values: [Active, Inactive, Suspended]
+
+  validators:
+    - entity_type: Person
+      attribute: CPF
+      pattern: '^[1-9]\d{10}$'
+      description: 'CPF must not start with 0'
+    - link_type: Transfer
+      attribute: Currency
+      allowed_values: [BRL, USD, EUR]
+  ```
+
+- New dataclasses (all exported from `anxwritter`): `Validator`,
+  `EntityTypeEnforce`, `LinkTypeEnforce`, `AttributeClassEnforce`.
+- New builder `chart.add_validator(...)` with upsert-by-synthesized-key
+  semantics + generic dispatch `chart.add(Validator(...))`.
+- New `ErrorType` members: `id_pattern_mismatch`,
+  `attribute_pattern_mismatch`, `attribute_value_not_allowed`,
+  `required_attribute_missing`, `invalid_validator_pattern`,
+  `validator_unknown_type`, `validator_invalid_scope`,
+  `validator_invalid_shape`, `validator_duplicate_key`,
+  `validator_reserved_attribute`, `pattern_missing_description`.
+- `ANXValidationError.__str__` now smart-truncates rule-grouped errors —
+  groups by `(rule_source, type)`, shows the first 5 per group, summarizes
+  the rest with a "... N more" tail. The structured `errors` list stays
+  uncapped so programmatic consumers keep full access. The formatted-message
+  string format remains explicitly **unstable** per 1.8.0 — match on dict
+  keys, not `str(exc)`.
+
+### Design notes
+
+- **Compound AND semantics.** AC-level and top-level rules both fire when
+  both target the same value. Each error carries `rule_source`
+  (`attribute_class[<name>]` or `validator[<synthetic_key>]`) so consumers
+  can route, dedupe, or group.
+- **Synthetic keys** are derived from scope: `E::<EntityType>::<attribute>`
+  or `L::<LinkType>::<attribute>`. The double-colon delimiter is unambiguous
+  against attribute names that may contain dots or single colons.
+- **No normalization.** The library never rewrites values to satisfy
+  patterns. Drift surfaces as errors so the consumer pipeline knows it's
+  broken. To accept both masked and unmasked CPF, express it in the regex
+  (e.g. `^\d{3}\.?\d{3}\.?\d{3}-?\d{2}$|^\d{11}$`).
+- **Library stays locale-neutral.** No bundled named validators (CPF, SSN,
+  NHS, etc.). Regex covers format; closed enums use `allowed_values`.
+  Check-digit / locale-specific validation is the consumer's responsibility.
+- **`attribute: id`** in a top-level `validators[]` entry is reserved
+  (`validator_reserved_attribute`) — use `EntityType.enforce.id_pattern` /
+  `LinkType.enforce.id_pattern` for identity rules.
+- **Cross-layer shape switching** (changing a validator from `pattern` to
+  `allowed_values` across config layers) requires explicit `pattern: null`
+  in the overriding layer; otherwise field-merge leaves both set and
+  surfaces as `validator_invalid_shape` at validate time.
+- **Pattern matching** uses `re.fullmatch` — the entire value must match;
+  anchors (`^` / `$`) are optional. Bad regex raises at config-load (eager
+  compile in `__post_init__`).
+- **Configuration layering** — validators participate in the existing
+  field-merge / `lock=True` / `operation='delete'` engine. Identity for
+  layering is the synthesized key. Same-scope entries across layers
+  field-merge (the override pattern); same-scope entries within a single
+  layer raise `validator_duplicate_key`.
+- **Provenance attribution** — 1.8.0's `source_name` plumbing carries
+  through: when a validator/enforce rule fires, the error dict's optional
+  `source` key names the config layer that declared the rule.
+- **Validators in data files** — for symmetry with `entity_types` /
+  `link_types`, the `validators` section is also accepted in data files
+  (entities/links shape via `from_dict` / `from_yaml`); entries upsert by
+  synthesized key. The config-vs-data conflict mechanism is not extended to
+  validators (the section is structurally simple enough that the cost
+  isn't worth it).
+
+### Compatibility
+
+- Strictly additive. All new fields default to `None` / empty. Existing
+  configs and charts work unchanged. The previously-passing test suite of
+  1655 tests stays green; 47 new tests in `tests/test_validators.py` cover
+  the new feature.
+
 ## [1.16.0] - 2026-06-12
 
 ### Added

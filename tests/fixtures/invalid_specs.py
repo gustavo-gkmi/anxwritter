@@ -521,6 +521,161 @@ INVALID_SPECS: List[tuple] = [
         },
         {ErrorType.DISPLAY_OVERLAP_CONFLICT.value},
     ),
+
+    # ── 1.17.0 value enforcement ────────────────────────────────────────────
+
+    # EntityType.enforce.id_pattern fails against entity.id
+    (
+        "id_pattern_mismatch",
+        {
+            "entity_types": [
+                {"name": "Person", "icon_file": "person",
+                 "enforce": {"id_pattern": r"^\d{11}$",
+                             "id_pattern_description": "11 digits"}},
+            ],
+            "entities": {"icons": [{"id": "abc", "type": "Person"}]},
+        },
+        {ErrorType.ID_PATTERN_MISMATCH.value},
+    ),
+
+    # AttributeClass.enforce.pattern fails against attribute value
+    (
+        "attribute_pattern_mismatch",
+        {
+            "attribute_classes": [
+                {"name": "CPF", "type": "text",
+                 "enforce": {"pattern": r"^\d{11}$",
+                             "description": "digits only"}},
+            ],
+            "entities": {
+                "icons": [
+                    {"id": "A", "type": "Person",
+                     "attributes": {"CPF": "123.456.789-01"}},
+                ]
+            },
+        },
+        {ErrorType.ATTRIBUTE_PATTERN_MISMATCH.value},
+    ),
+
+    # AttributeClass.enforce.allowed_values fails against attribute value
+    (
+        "attribute_value_not_allowed",
+        {
+            "attribute_classes": [
+                {"name": "Status", "type": "text",
+                 "enforce": {"allowed_values": ["Active", "Inactive"]}},
+            ],
+            "entities": {
+                "icons": [
+                    {"id": "A", "type": "Person",
+                     "attributes": {"Status": "active"}},
+                ]
+            },
+        },
+        {ErrorType.ATTRIBUTE_VALUE_NOT_ALLOWED.value},
+    ),
+
+    # EntityType.enforce.required_attributes — entity missing a required attr
+    (
+        "required_attribute_missing",
+        {
+            "entity_types": [
+                {"name": "Person", "icon_file": "person",
+                 "enforce": {"required_attributes": ["CPF"]}},
+            ],
+            "entities": {
+                "icons": [{"id": "A", "type": "Person"}],
+            },
+        },
+        {ErrorType.REQUIRED_ATTRIBUTE_MISSING.value},
+    ),
+
+    # validators[]: neither entity_type nor link_type set → invalid scope
+    (
+        "validator_invalid_scope",
+        {
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+            "validators": [
+                {"attribute": "CPF", "pattern": r"^\d{11}$",
+                 "description": "digits"},
+            ],
+        },
+        {ErrorType.VALIDATOR_INVALID_SCOPE.value},
+    ),
+
+    # validators[]: neither pattern nor allowed_values set → invalid shape
+    (
+        "validator_invalid_shape",
+        {
+            "entity_types": [{"name": "Person", "icon_file": "person"}],
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+            "validators": [
+                {"entity_type": "Person", "attribute": "CPF"},
+            ],
+        },
+        {ErrorType.VALIDATOR_INVALID_SHAPE.value},
+    ),
+
+    # validators[]: attribute='id' is reserved
+    (
+        "validator_reserved_attribute",
+        {
+            "entity_types": [{"name": "Person", "icon_file": "person"}],
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+            "validators": [
+                {"entity_type": "Person", "attribute": "id",
+                 "pattern": r"^\d+$", "description": "digits"},
+            ],
+        },
+        {ErrorType.VALIDATOR_RESERVED_ATTRIBUTE.value},
+    ),
+
+    # validators[]: references an unregistered type
+    (
+        "validator_unknown_type",
+        {
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+            "validators": [
+                {"entity_type": "Ghost", "attribute": "CPF",
+                 "pattern": r"^\d{11}$", "description": "digits"},
+            ],
+        },
+        {ErrorType.VALIDATOR_UNKNOWN_TYPE.value},
+    ),
+
+    # validators[]: two entries with the same synthesized key
+    (
+        "validator_duplicate_key",
+        {
+            "entity_types": [{"name": "Person", "icon_file": "person"}],
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+            "validators": [
+                {"entity_type": "Person", "attribute": "CPF",
+                 "pattern": r"^\d{11}$", "description": "v1"},
+                {"entity_type": "Person", "attribute": "CPF",
+                 "allowed_values": ["x", "y"]},
+            ],
+        },
+        # Both `validator_duplicate_key` and (since the duplicate happens via
+        # field-merge in the loader → produces a merged shape with both
+        # pattern AND allowed_values set) `validator_invalid_shape`. The
+        # spec asserts the duplicate-key error; the equivalence runner
+        # tolerates additional emitted error types.
+        {ErrorType.VALIDATOR_DUPLICATE_KEY.value},
+    ),
+
+    # AttributeClass.enforce.pattern WITHOUT enforce.description
+    (
+        "pattern_missing_description",
+        {
+            "attribute_classes": [
+                {"name": "CPF", "type": "text",
+                 "enforce": {"pattern": r"^\d{11}$"}},
+            ],
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+        },
+        {ErrorType.PATTERN_MISSING_DESCRIPTION.value},
+    ),
 ]
 
 
