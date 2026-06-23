@@ -23,16 +23,6 @@ from .models import TimeZone
 _STRFTIME_PROBE_DT = _datetime(2024, 1, 15, 14, 30, 45, 123000)
 
 
-def _is_valid_strftime(fmt: str) -> bool:
-    """Return True if ``fmt`` is a strftime format string that runs cleanly."""
-    if not isinstance(fmt, str) or not fmt:
-        return False
-    try:
-        _STRFTIME_PROBE_DT.strftime(fmt)
-        return True
-    except (ValueError, TypeError):
-        return False
-
 if TYPE_CHECKING:
     from .entities import _BaseEntity
     from .models import (
@@ -2277,18 +2267,6 @@ _RESERVED_VALIDATOR_ATTRIBUTE = 'id'
 def _maybe_tag_source(err: Dict[str, Any], source: Optional[str]) -> None:
     if source:
         err['source'] = source
-
-
-def _match_pattern(compiled: Optional['re.Pattern'], value: Any) -> bool:
-    """Return True when ``value`` (stringified) fully matches ``compiled``.
-
-    ``None`` value → not matched (caller decides whether to fire). Uses
-    ``fullmatch`` so the entire stringified value has to satisfy the regex —
-    anchor characters (``^``/``$``) become optional in the org's pattern.
-    """
-    if compiled is None or value is None:
-        return False
-    return compiled.fullmatch(str(value)) is not None
 
 
 def _check_attr_pattern(

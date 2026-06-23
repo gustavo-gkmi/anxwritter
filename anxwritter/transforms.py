@@ -180,43 +180,6 @@ def _compute_symmetric_offsets(n: int, spacing: int) -> List[int]:
         return result
 
 
-def apply_link_entity_colors(
-    resolved_links: List['ResolvedLink'],
-    links: List['Link'],
-    entity_color_map: Dict[str, int],
-) -> None:
-    """Set link line colors to match their to_id entity's color.
-
-    Only applies to links without explicit line_color set.
-    Modifies resolved links in place.
-
-    Args:
-        resolved_links: List of ResolvedLink objects (same order as links).
-        links: Original Link objects to check for explicit line_color.
-        entity_color_map: Dict mapping entity id to color (from build_entity_color_map).
-    """
-    for rl, link in zip(resolved_links, links, strict=True):
-        if link.line_color is None and link.to_id in entity_color_map:
-            rl.line_color = entity_color_map[link.to_id]
-
-
-def apply_link_auto_offsets(
-    resolved_links: List['ResolvedLink'],
-    links: List['Link'],
-    auto_offsets: Dict[int, int],
-) -> None:
-    """Apply auto-computed offsets to links without explicit offset.
-
-    Args:
-        resolved_links: List of ResolvedLink objects.
-        links: Original Link objects to check for explicit offset.
-        auto_offsets: Dict from compute_link_offsets().
-    """
-    for i, (rl, link) in enumerate(zip(resolved_links, links, strict=True)):
-        if link.offset is None:
-            rl.offset = auto_offsets.get(i, 0)
-
-
 def compute_theme_line_y_offsets(
     theme_lines: List[Tuple[str, Optional[int]]],
     positions: Dict[str, Tuple[int, int]],
