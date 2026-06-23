@@ -30,10 +30,11 @@ import dataclasses
 import json
 import yaml
 import os
+import tempfile
 import time
 from datetime import datetime as _datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 from loguru import logger
 
@@ -1278,12 +1279,28 @@ class ANXChart(_ConfigLayeringMixin):
 
     # ------------------------------------------------------------------
 
-    def to_anx(self, path: Union[str, Path]) -> str:
+    def to_anx(self, path: Union[str, Path], *, stream: bool = True,
+               compact: bool = True) -> str:
         """Build and write the ANX file.
+
+        The write is **atomic**: content goes to a temp file in the destination
+        directory and is then renamed into place with :func:`os.replace`, so a
+        failure mid-build never leaves a partial or corrupt ``.anx`` (and any
+        existing file is preserved until the new one is complete).
 
         Args:
             path: Destination path (``str`` or ``pathlib.Path``).
                   ``.anx`` extension added automatically.
+            stream: When ``True`` (default), serialize and write incrementally —
+                the ``<ChartItem>`` elements are emitted and discarded one at a
+                time, so peak memory is roughly the resolved-item set rather than
+                the whole element tree plus output string (~0.37x the buffered
+                peak; also faster on large charts, negligibly slower on tiny ones).
+                ``stream=False`` builds the whole document first. The written
+                bytes are identical either way.
+            compact: When ``True`` (default), drop indentation (newlines kept) for
+                a smaller file — ANB ignores indentation and imports it identically
+                to the pretty form. ``compact=False`` writes the indented layout.
 
         Returns:
             Absolute path of the written file.
@@ -1294,25 +1311,47 @@ class ANXChart(_ConfigLayeringMixin):
         validation_errors = self.validate()
         if validation_errors:
             raise ANXValidationError(validation_errors)
-        xml_content, build_errors = self._build_xml()
         path = str(path)
         if not path.lower().endswith('.anx'):
             path = path + '.anx'
-        os.makedirs(os.path.dirname(os.path.abspath(path)) or '.', exist_ok=True)
+        abspath = os.path.abspath(path)
+        directory = os.path.dirname(abspath) or '.'
+        os.makedirs(directory, exist_ok=True)
         _t0_write = time.perf_counter()
-        # Remove first to avoid stale trailing bytes (some platforms don't
-        # fully truncate UTF-16 files when the new content is shorter).
-        if os.path.exists(path):
-            os.remove(path)
-        with open(path, 'w', encoding='utf-16') as fh:
-            fh.write(xml_content)
+        # Write to a temp file in the SAME directory, then os.replace() it onto the
+        # destination. Same-filesystem os.replace() is a metadata-only atomic rename
+        # (no data copy, no extra memory) — it guarantees we never publish a partial
+        # .anx if the build raises mid-write, and leaves any existing file untouched
+        # until the new content is fully written. It also fully overwrites (no stale
+        # trailing bytes when the new content is shorter — an old UTF-16 hazard).
+        fd, tmp_path = tempfile.mkstemp(suffix='.anx.tmp', dir=directory)
+        try:
+            with os.fdopen(fd, 'wb') as fh:
+                if stream:
+                    for chunk in self._encode_utf16_stream(self._iter_xml(compact=compact)):
+                        fh.write(chunk)
+                else:
+                    xml_content, _build_errors = self._build_xml(compact=compact)
+                    fh.write(xml_content.encode('utf-16'))
+            os.replace(tmp_path, abspath)
+        except BaseException:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
         logger.debug("File write: {path} ({elapsed:.4f}s)",
-                      path=os.path.abspath(path),
+                      path=abspath,
                       elapsed=time.perf_counter() - _t0_write)
-        return os.path.abspath(path)
+        return abspath
 
-    def to_xml(self) -> str:
+    def to_xml(self, *, compact: bool = False) -> str:
         """Return the ANX XML as a string without writing a file.
+
+        Args:
+            compact: When ``True``, drop indentation (newlines kept). Default
+                ``False`` returns the pretty, indented layout — the human-readable
+                form for inspection, unchanged across releases.
 
         Raises:
             ANXValidationError: If any rows had validation errors.
@@ -1320,8 +1359,54 @@ class ANXChart(_ConfigLayeringMixin):
         validation_errors = self.validate()
         if validation_errors:
             raise ANXValidationError(validation_errors)
-        xml_content, _build_errors = self._build_xml()
+        xml_content, _build_errors = self._build_xml(compact=compact)
         return xml_content
+
+    def iter_xml(self, *, compact: bool = True) -> Iterator[str]:
+        """Yield the ANX XML as string chunks without materializing the whole
+        document — lower peak memory for large charts (the ``<ChartItem>`` elements
+        are serialized and discarded one at a time).
+
+        Args:
+            compact: When ``True`` (default) the output has no indentation (newlines
+                kept) — smaller and the recommended form for machine consumption.
+                When ``False`` the chunks join to the exact pretty bytes of
+                ``to_xml()`` (used for byte-parity testing).
+
+        Raises:
+            ANXValidationError: If the chart is invalid. Validation runs up front,
+                before any chunk is yielded, so callers fail fast.
+        """
+        validation_errors = self.validate()
+        if validation_errors:
+            raise ANXValidationError(validation_errors)
+        return self._iter_xml(compact=compact)
+
+    @staticmethod
+    def _encode_utf16_stream(chunks: Iterator[str]) -> Iterator[bytes]:
+        """Encode str chunks to UTF-16 LE bytes, emitting the BOM exactly once.
+
+        The first chunk is prefixed with the LE BOM (``FF FE``); the rest are plain
+        ``utf-16-le`` (no per-chunk BOM). Concatenated, the bytes match
+        ``to_xml().encode('utf-16')`` on a little-endian host (what ANB expects).
+        """
+        first = True
+        for chunk in chunks:
+            if first:
+                yield b"\xff\xfe" + chunk.encode("utf-16-le")
+                first = False
+            else:
+                yield chunk.encode("utf-16-le")
+
+    def iter_anx_bytes(self, *, compact: bool = True) -> Iterator[bytes]:
+        """Yield the ``.anx`` as UTF-16 LE bytes (BOM first) without materializing
+        the whole document — stream straight into an HTTP response or a file.
+
+        Validates up front (see ``iter_xml``). Concatenated output is identical to
+        the bytes ``to_anx()`` writes.
+        """
+        # iter_xml() validates eagerly here, before any byte is produced.
+        return self._encode_utf16_stream(self.iter_xml(compact=compact))
 
     def _resolve_semantic_types(self, builder: 'ANXBuilder',
                                att_class_config: Dict[str, Dict[str, Any]],
@@ -1475,11 +1560,15 @@ class ANXChart(_ConfigLayeringMixin):
             'custom_properties': custom_props,
         }
 
-    def _build_xml(self) -> Tuple[str, List[str]]:
-        """Build the ANX XML, collecting validation errors without raising.
+    def _assemble_build(self):
+        """Run the full resolve/transform pipeline and return a prepared builder.
+
+        Shared by ``_build_xml`` (non-stream) and ``_iter_xml`` (stream) so the
+        large setup isn't duplicated. Does NOT serialize — the caller decides
+        between ``builder.build()`` and ``builder.iter_build()``.
 
         Returns:
-            (xml_string, errors) — errors is empty when all data is valid.
+            (builder, settings, build_kwargs, errors, timer)
         """
         errors: List[str] = []
         timer = PhaseTimer("ANXChart._build_xml")
@@ -1863,25 +1952,44 @@ class ANXChart(_ConfigLayeringMixin):
                 _geo_bbox[3] + 200,                    # below geo area + margin
             )
 
-        with timer.phase("builder.build()"):
-            xml_str = builder.build(
-                s,
-                att_class_config=att_class_config,
-                strength_config=strength_config,
-                gc1=gc1_config,
-                gc2=gc2_config,
-                gc3=gc3_config,
-                source_types=st_config,
-                legend_items=legend_items,
-                palettes=palette_dicts,
-                summary_config=summary_config,
-                datetime_format_config=datetime_format_config,
-                semantic_config=semantic_config,
-                layout_center=_layout_center,
-            )
+        build_kwargs: Dict[str, Any] = dict(
+            att_class_config=att_class_config,
+            strength_config=strength_config,
+            gc1=gc1_config,
+            gc2=gc2_config,
+            gc3=gc3_config,
+            source_types=st_config,
+            legend_items=legend_items,
+            palettes=palette_dicts,
+            summary_config=summary_config,
+            datetime_format_config=datetime_format_config,
+            semantic_config=semantic_config,
+            layout_center=_layout_center,
+        )
+        return builder, s, build_kwargs, errors, timer
 
+    def _build_xml(self, compact: bool = False) -> Tuple[str, List[str]]:
+        """Build the ANX XML (non-stream), collecting validation errors without
+        raising.
+
+        ``compact`` drops indentation (newlines kept) — used by the streaming
+        parity tests. Default ``False`` preserves the pretty output that
+        ``to_xml()``/``to_anx()`` return and the golden digest pins.
+
+        Returns:
+            (xml_string, errors) — errors is empty when all data is valid.
+        """
+        builder, s, build_kwargs, errors, timer = self._assemble_build()
+        with timer.phase("builder.build()"):
+            xml_str = builder.build(s, compact=compact, **build_kwargs)
         timer.summary(
             extra=f"Entities: {len(self._entities)}, Links: {len(self._links)}",
             sub_timings=[("builder.build()", builder._build_timer)],
         )
         return xml_str, errors
+
+    def _iter_xml(self, compact: bool = True) -> Iterator[str]:
+        """Stream the ANX XML in chunks. Validation is the caller's responsibility
+        (``iter_xml`` validates up front)."""
+        builder, s, build_kwargs, _errors, _timer = self._assemble_build()
+        yield from builder.iter_build(s, compact=compact, **build_kwargs)
