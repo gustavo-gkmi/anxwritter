@@ -102,6 +102,39 @@ the chart is populated, or just let `to_anx()` raise.
 
 ---
 
+## Output: streaming & compact (the defaults)
+
+`to_anx()` **streams** by default and writes **compact** output — it serializes
+the chart items one at a time rather than holding the whole document in memory,
+keeping peak memory low (~0.37× the buffered peak), and drops indentation for a
+smaller file. ANB ignores indentation, so a compact `.anx` opens identically to
+a pretty one. The write is atomic (temp file + rename), so a failure never leaves
+a partial file.
+
+```python
+# Default: streamed, compact, atomic write:
+chart.to_anx('output/big_chart')
+
+# Opt back into the indented layout, or the buffered (whole-document) path:
+chart.to_anx('output/big_chart', compact=False)   # pretty
+chart.to_anx('output/big_chart', stream=False)     # build whole doc first
+
+# Stream UTF-16 .anx bytes (e.g. straight into an HTTP response):
+for chunk in chart.iter_anx_bytes():
+    sink.write(chunk)
+
+# Or stream the XML as text chunks:
+for chunk in chart.iter_xml():
+    ...
+```
+
+`to_xml()` returns the **pretty** (indented) string by default — the
+human-readable inspection form; pass `compact=True` for the unindented form.
+All of these validate the chart first and raise `ANXValidationError` if it is
+invalid.
+
+---
+
 ## What to read next
 
 | If you want to... | Read |

@@ -942,8 +942,12 @@ class ANXBuilder:
                 tz_attrs['Name'] = str(card.timezone_name)
             ET.SubElement(card_el, 'TimeZone', tz_attrs)
 
-    def emit_entity(self, re: 'ResolvedEntity') -> None:
-        """Create XML from a ResolvedEntity and store in _chart_item_elements."""
+    def _build_entity_ci(self, re: 'ResolvedEntity') -> ET.Element:
+        """Build and return the <ChartItem> element for a ResolvedEntity.
+
+        Pure: no storage. ``emit_entity`` is the storing wrapper; the streaming
+        path calls this directly and discards the element after serialization.
+        """
         # Convert resolved attrs back to _AttrTuple for existing _add_attributes
         anb_attrs = [
             _AttrTuple(class_name=name, value=value, attr_type=AttributeType.TEXT)
@@ -1014,10 +1018,14 @@ class ANXBuilder:
                 for card in re.cards:
                     self._emit_resolved_card(card_coll, card)
 
-        self._chart_item_elements.append(ci_el)
+        return ci_el
 
-    def emit_link(self, rl: 'ResolvedLink') -> None:
-        """Create XML from a ResolvedLink and store in _chart_item_elements."""
+    def emit_entity(self, re: 'ResolvedEntity') -> None:
+        """Build a ResolvedEntity's <ChartItem> and store it in _chart_item_elements."""
+        self._chart_item_elements.append(self._build_entity_ci(re))
+
+    def _build_link_ci(self, rl: 'ResolvedLink') -> ET.Element:
+        """Build and return the <ChartItem> element for a ResolvedLink (no storage)."""
         # Convert resolved attrs back to _AttrTuple for existing _add_attributes
         anb_attrs = [
             _AttrTuple(class_name=name, value=value, attr_type=AttributeType.TEXT)
@@ -1077,7 +1085,23 @@ class ANXBuilder:
             if link_el is not None:
                 link_el.set('SemanticTypeGuid', rl.semantic_guid)
 
-        self._chart_item_elements.append(ci_el)
+        return ci_el
+
+    def emit_link(self, rl: 'ResolvedLink') -> None:
+        """Build a ResolvedLink's <ChartItem> and store it in _chart_item_elements."""
+        self._chart_item_elements.append(self._build_link_ci(rl))
+
+    def _emit_one(self, item: Any) -> ET.Element:
+        """Build one resolved item's <ChartItem>, applying its layout position.
+
+        Shared by the non-stream build loop and the streaming serializer so both
+        produce byte-identical elements.
+        """
+        from .resolved import ResolvedEntity
+        if isinstance(item, ResolvedEntity):
+            item.x, item.y = self._positions.get(item.identity, (0, 0))
+            return self._build_entity_ci(item)
+        return self._build_link_ci(item)
 
     # ── XML element builders ──────────────────────────────────────────────────
 
@@ -2132,6 +2156,8 @@ class ANXBuilder:
         summary_config: Optional[Dict[str, Any]] = None,
         semantic_config: Optional[Dict[str, Any]] = None,
         layout_center: tuple = (0, 0),
+        compact: bool = False,
+        stream_items: bool = False,
     ) -> str:
         """Assemble the complete ANX XML and return a pretty-printed string.
 
@@ -2273,20 +2299,14 @@ class ANXBuilder:
             if summary_config:
                 self._emit_summary(root, summary_config)
 
-            # Emit resolved items with layout positions applied
-            from .resolved import ResolvedEntity
-            for item in self._resolved_items:
-                if isinstance(item, ResolvedEntity):
-                    pos = self._positions.get(item.identity, (0, 0))
-                    item.x, item.y = pos
-                    self.emit_entity(item)
-                else:
-                    self.emit_link(item)
-
-            # ChartItemCollection
+            # ChartItemCollection. In stream mode it is left EMPTY here and its
+            # children are serialized one-at-a-time by iter_build() (emit-and-discard
+            # — the memory win). The footer below does not depend on the items, so it
+            # is assembled the same way in both modes.
             cic = ET.SubElement(root, 'ChartItemCollection')
-            for ci_el in self._chart_item_elements:
-                cic.append(ci_el)
+            if not stream_items:
+                for item in self._resolved_items:
+                    cic.append(self._emit_one(item))
 
         with _timer.phase("Connections + palettes"):
             # ConnectionCollection — emit pre-built style_conn dict (no iteration over links)
@@ -2330,9 +2350,41 @@ class ANXBuilder:
         self._emit_legend(root, s, legend_items)
         _timer.record("LegendDefinition", _time.perf_counter() - _t0_legend)
 
+        if stream_items:
+            # Tree assembled with an empty ChartItemCollection; iter_build() walks
+            # it and streams the items in. Stash and return early (no full-tree
+            # serialization, no full output string — that is the whole point).
+            self._stream_root = root
+            self._stream_cic = cic
+            return ''
+
         with _timer.phase("XML serialization"):
-            result = self._pretty_print(root)
+            result = self._pretty_print(root, _INDENT_NONE if compact else _INDENT)
         return result
+
+    def iter_build(self, *args: Any, compact: bool = True, **kwargs: Any):
+        """Streaming counterpart of ``build()``: yield the ANX XML in chunks.
+
+        Assembles the tree with an empty ``<ChartItemCollection>`` (``stream_items
+        =True``), then walks it, serializing each ``<ChartItem>`` one at a time and
+        discarding it — peak memory is the resolved set + one item, not the whole
+        tree. ``compact`` (default True) drops indentation; ``compact=False`` yields
+        the exact pretty bytes of ``build()`` for byte-parity testing.
+        """
+        ind = _INDENT_NONE if compact else _INDENT
+        self.build(*args, stream_items=True, **kwargs)
+        yield from self._iter_serialize(self._stream_root, self._stream_cic, ind)
+
+    def _iter_serialize(self, root: ET.Element, cic: ET.Element, ind: tuple):
+        """Yield declaration + comment + a streamed walk of ``root``."""
+        _init_ns_map()
+        from anxwritter import __version__, __repo_url__
+        yield "<?xml version='1.0' encoding='utf-16'?>\n"
+        comment = f'Built with anxwritter {__version__}'
+        if __repo_url__:
+            comment += f' — {__repo_url__}'
+        yield f'<!-- {comment} -->\n'
+        yield from _walk_stream(root, cic, self._resolved_items, self._emit_one, ind, 0)
 
     # ── Layout ───────────────────────────────────────────────────────────────
 
@@ -2474,8 +2526,9 @@ class ANXBuilder:
     # ── Pretty print ─────────────────────────────────────────────────────────
 
     @staticmethod
-    def _pretty_print(root: ET.Element) -> str:
-        return _fast_serialize(root)
+    def _pretty_print(root: ET.Element, ind: Optional[tuple] = None) -> str:
+        # _INDENT is module-level (defined after this class) → resolve at call time.
+        return _fast_serialize(root, ind if ind is not None else _INDENT)
 
 
 # ── Fast XML serializer ──────────────────────────────────────────────────────
@@ -2502,8 +2555,13 @@ _ESC_TABLE = str.maketrans({
     '"': '&quot;',
 })
 
-# Pre-built indent strings for depths 0–19 (avoids '  ' * depth on every _walk call)
+# Pre-built indent strings for depths 0–19 (avoids '  ' * depth on every _walk call).
+# _INDENT is the pretty default (2-space). _INDENT_NONE is the compact table used by
+# the streaming path: no indentation, newlines preserved. Both are passed as the
+# ``ind`` table to _walk/_fast_serialize; element index 1 is the single indent unit,
+# used for the depth>=len(ind) fallback ('  ' for pretty, '' for compact).
 _INDENT = tuple('  ' * i for i in range(20))
+_INDENT_NONE = ('',) * 20
 
 def _esc(s: str) -> str:
     return s.translate(_ESC_TABLE)
@@ -2522,8 +2580,12 @@ def _resolve_tag(tag: str) -> str:
     _TAG_CACHE[tag] = resolved
     return resolved
 
-def _fast_serialize(root: ET.Element) -> str:
-    """Serialize an ElementTree to a pretty-printed UTF-16 XML string."""
+def _fast_serialize(root: ET.Element, ind: tuple = _INDENT) -> str:
+    """Serialize an ElementTree to a UTF-16 XML string.
+
+    ``ind`` is the indent table (``_INDENT`` pretty, ``_INDENT_NONE`` compact).
+    Newlines are emitted regardless of ``ind``; only leading indentation varies.
+    """
     _init_ns_map()
     parts: list[str] = []
     from anxwritter import __version__, __repo_url__
@@ -2532,11 +2594,11 @@ def _fast_serialize(root: ET.Element) -> str:
     if __repo_url__:
         comment += f' \u2014 {__repo_url__}'
     parts.append(f'<!-- {comment} -->\n')
-    _walk(root, parts, 0)
+    _walk(root, parts, 0, ind)
     return ''.join(parts)
 
-def _walk(el: ET.Element, parts: list[str], depth: int) -> None:
-    indent = _INDENT[depth] if depth < 20 else '  ' * depth
+def _walk(el: ET.Element, parts: list[str], depth: int, ind: tuple = _INDENT) -> None:
+    indent = ind[depth] if depth < len(ind) else ind[1] * depth
     tag = _resolve_tag(el.tag)
 
     # Opening tag — build as a single string to minimise append calls
@@ -2559,7 +2621,8 @@ def _walk(el: ET.Element, parts: list[str], depth: int) -> None:
     if text:
         if has_children:
             # Mixed content — rare in ANX
-            parts.append(f'{open_tag}>\n{_INDENT[depth + 1] if depth + 1 < 20 else "  " * (depth + 1)}{text.translate(_ESC_TABLE)}\n')
+            child_indent = ind[depth + 1] if depth + 1 < len(ind) else ind[1] * (depth + 1)
+            parts.append(f'{open_tag}>\n{child_indent}{text.translate(_ESC_TABLE)}\n')
         else:
             # Text-only element — inline
             parts.append(f'{open_tag}>{text.translate(_ESC_TABLE)}</{tag}>\n')
@@ -2568,6 +2631,65 @@ def _walk(el: ET.Element, parts: list[str], depth: int) -> None:
         parts.append(f'{open_tag}>\n')
 
     for child in el:
-        _walk(child, parts, depth + 1)
+        _walk(child, parts, depth + 1, ind)
 
     parts.append(f'{indent}</{tag}>\n')
+
+
+def _walk_stream(el: ET.Element, cic: ET.Element, items, emit_one, ind: tuple, depth: int):
+    """Generator mirror of ``_walk`` that streams ``<ChartItemCollection>`` children.
+
+    Byte-identical to ``_walk`` for every element EXCEPT ``cic``: when reached, its
+    children are built one-at-a-time from ``items`` via ``emit_one`` and serialized
+    then discarded (the streaming memory win). Any drift from ``_walk`` is caught by
+    the pretty byte-parity test (``iter_build(compact=False) == build()``).
+    """
+    indent = ind[depth] if depth < len(ind) else ind[1] * depth
+    tag = _resolve_tag(el.tag)
+
+    if el.attrib:
+        attrs = ''.join(
+            f' {_resolve_tag(k) if "{" in k else k}="{_esc(str(v))}"'
+            for k, v in el.attrib.items()
+        )
+        open_tag = f'{indent}<{tag}{attrs}'
+    else:
+        open_tag = f'{indent}<{tag}'
+
+    if el is cic:
+        if not items:
+            # Empty collection → self-closing, matching _walk exactly.
+            yield f'{open_tag}/>\n'
+            return
+        yield f'{open_tag}>\n'
+        item_buf: list = []
+        for item in items:
+            ci_el = emit_one(item)
+            item_buf.clear()
+            _walk(ci_el, item_buf, depth + 1, ind)
+            yield ''.join(item_buf)
+            # ci_el + item_buf are released on the next loop iteration.
+        yield f'{indent}</{tag}>\n'
+        return
+
+    has_children = len(el) > 0
+    text = el.text
+
+    if not has_children and not text:
+        yield f'{open_tag}/>\n'
+        return
+
+    if text:
+        if has_children:
+            child_indent = ind[depth + 1] if depth + 1 < len(ind) else ind[1] * (depth + 1)
+            yield f'{open_tag}>\n{child_indent}{text.translate(_ESC_TABLE)}\n'
+        else:
+            yield f'{open_tag}>{text.translate(_ESC_TABLE)}</{tag}>\n'
+            return
+    else:
+        yield f'{open_tag}>\n'
+
+    for child in el:
+        yield from _walk_stream(child, cic, items, emit_one, ind, depth + 1)
+
+    yield f'{indent}</{tag}>\n'

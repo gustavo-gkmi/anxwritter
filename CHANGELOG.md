@@ -8,6 +8,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
 > changes ship in minor releases with notes here, as below.
 
+## [1.18.0] - 2026-06-22
+
+### Added
+
+- **Streaming / compact serialization** — emit large charts with a much lower
+  memory peak, and stream them straight to a file or HTTP response. New public
+  API on `ANXChart`:
+
+  - `iter_xml(*, compact=True) -> Iterator[str]` — yield the ANX XML in chunks
+    without materializing the whole document. The `<ChartItem>` elements are
+    built and serialized one at a time and discarded, so peak memory is roughly
+    the resolved-item set rather than the full element tree + output string.
+    Measured **~0.37×** the buffered peak (steady across chart sizes from a few
+    hundred items up; ~0.47× on a 3k/4k chart, lower as charts grow).
+  - `iter_anx_bytes(*, compact=True) -> Iterator[bytes]` — same, as UTF-16 LE
+    bytes with a single leading BOM (the on-disk `.anx` encoding). Concatenated
+    output is identical to `to_anx()`.
+
+  Implementation: the single `_walk` serializer is parameterized by an indent
+  table (`_INDENT` pretty / `_INDENT_NONE` compact), and a `_walk_stream`
+  generator mirrors it, streaming the `<ChartItemCollection>` children. Both
+  paths share one serializer, so stream and non-stream output are **byte-
+  identical** (verified by parity tests: `iter_xml(compact=False)` joined ==
+  `to_xml()`, and `iter_xml(compact=True)` joined == pretty-minus-indentation).
+  No new dependency.
+
+### Changed
+
+- **`to_anx()` now streams and writes compact output by default**, and writes
+  **atomically**. New signature `to_anx(path, *, stream=True, compact=True)`:
+
+  - `stream=True` (default) keeps peak memory low on large charts (and is faster
+    on them; negligibly slower on tiny ones). `stream=False` builds the whole
+    document first. Bytes are identical either way.
+  - `compact=True` (default) drops indentation (newlines kept) for a smaller file
+    — meaningful in UTF-16, where each indent character is 2 bytes. ANB **ignores
+    indentation and imports a compact `.anx` identically to a pretty one**
+    (verified in ANB 9). `compact=False` writes the indented layout.
+  - The write goes to a temp file in the destination directory and is renamed
+    into place with `os.replace()` (a same-filesystem metadata-only rename) — a
+    failure mid-build never publishes a partial/corrupt `.anx`, and any existing
+    file is preserved until the new one is complete. (Previously the destination
+    was removed up front, so a failed write could leave no file at all.)
+
+  This **changes the default on-disk bytes** (compact instead of pretty). The
+  content is equivalent and opens identically in ANB; pass `compact=False` to
+  restore the indented file.
+
+- **`to_xml()` gains an optional `compact` argument** — `to_xml(*, compact=False)`.
+  Its default is unchanged (pretty / indented, still the golden-pinned inspection
+  form); pass `compact=True` for the unindented string.
+
 ## [1.17.0] - 2026-06-15
 
 ### Added

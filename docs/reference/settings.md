@@ -240,18 +240,39 @@ ANB always groups and displays legend items by type in this fixed rendering orde
 ### `to_anx(path)`
 
 ```python
-chart.to_anx(path: str) -> str
+chart.to_anx(path: str, *, stream: bool = True, compact: bool = True) -> str
 ```
 
 Writes the `.anx` file. The `.anx` extension is added automatically if missing. Returns the absolute path of the written file. Calls `validate()` internally and raises `ANXValidationError` on errors.
 
+The write is **atomic** — content goes to a temp file in the destination directory and is renamed into place with `os.replace()` (a metadata-only rename on the same filesystem). A failure mid-build never publishes a partial/corrupt `.anx`, and any existing file is preserved until the new one is complete.
+
+- `stream=True` (default) — serialize and write incrementally: the `<ChartItem>` elements are emitted and discarded one at a time, so peak memory is roughly the resolved-item set rather than the whole element tree plus output string (~0.37× the buffered peak; also faster on large charts, negligibly slower on tiny ones). `stream=False` builds the whole document first. The written bytes are identical either way.
+- `compact=True` (default) — drop indentation (newlines kept) for a smaller file. ANB ignores indentation and imports a compact file identically to the pretty form. `compact=False` writes the indented layout.
+
 ### `to_xml()`
 
 ```python
-xml_str = chart.to_xml() -> str
+xml_str = chart.to_xml(*, compact: bool = False) -> str
 ```
 
-Returns the ANX XML as a string without writing a file. Also validates internally and raises `ANXValidationError` on errors.
+Returns the ANX XML as a string without writing a file. Also validates internally and raises `ANXValidationError` on errors. Default `compact=False` returns the pretty, indented layout — the human-readable inspection form, unchanged across releases. Pass `compact=True` for the unindented form.
+
+### `iter_xml(*, compact=True)` / `iter_anx_bytes(*, compact=True)`
+
+```python
+for chunk in chart.iter_xml(compact=True):        # Iterator[str]  — XML text chunks
+    ...
+for chunk in chart.iter_anx_bytes(compact=True):  # Iterator[bytes] — UTF-16 LE, BOM first
+    sink.write(chunk)
+```
+
+Stream the chart without materializing the whole document — the `<ChartItem>` elements are serialized and discarded one at a time, so peak memory is roughly the resolved-item set rather than the full element tree plus output string (measured **~0.36× the peak of `to_xml()`** and **~20% faster** on large charts). Ideal for writing straight to a file or an HTTP response.
+
+- Both validate **up front** (before yielding any chunk) and raise `ANXValidationError` if the chart is invalid — same contract as `to_anx()`/`to_xml()`.
+- `compact=True` (default) drops indentation, keeping newlines, for smaller output; `compact=False` yields the **exact bytes** of the pretty `to_xml()`.
+- `iter_anx_bytes` emits the UTF-16 LE BOM once on the first chunk; concatenated output equals what `to_anx()` writes to disk.
+- `to_xml()` with its default `compact=False` is the pretty, indented inspection form, unchanged across releases.
 
 ### `validate()`
 
