@@ -10,7 +10,7 @@ every supported input form in ``tests/test_validation_equivalence.py``.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Set
+from typing import Dict, List, Set
 
 from anxwritter.errors import ErrorType
 
@@ -679,5 +679,4 @@ INVALID_SPECS: List[tuple] = [
 ]
 
 
-SPEC_INDEX: Dict[str, Dict[str, Any]] = {name: spec for name, spec, _ in INVALID_SPECS}
 EXPECTED: Dict[str, Set[str]] = {name: exp for name, _, exp in INVALID_SPECS}

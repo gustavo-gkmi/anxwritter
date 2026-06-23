@@ -51,6 +51,7 @@ dev = [
     "pytest-cov>=5.0",
     "hypothesis>=6.0",
     "ruff>=0.5",
+    "vulture>=2.11",
 ]
 
 [project.scripts]

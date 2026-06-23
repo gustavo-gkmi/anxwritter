@@ -75,42 +75,6 @@ def _parse_positions(xml: str) -> Dict[str, Tuple[int, int]]:
     return positions
 
 
-def _get_entity_attrs(xml: str, label: str) -> Dict[str, str]:
-    """Get attribute name->value for a specific entity label."""
-    root = ET.fromstring(xml)
-    # Build ref_id -> class_name map from AttributeClassCollection
-    ref_map: Dict[str, str] = {}
-    for ac in root.iter('AttributeClass'):
-        ac_id = ac.get('Id', '')
-        ac_name = ac.get('Name', '')
-        if ac_id and ac_name:
-            ref_map[ac_id] = ac_name
-
-    # Find entity by label
-    for ci in root.iter('ChartItem'):
-        if ci.get('Label') != label:
-            continue
-        # Navigate to parent Entity's AttributeCollection
-        break
-    else:
-        return {}
-
-    # Find Entity that contains this ChartItem
-    for entity in root.iter('Entity'):
-        found_ci = entity.find('.//ChartItem')
-        if found_ci is not None and found_ci.get('Label') == label:
-            attrs: Dict[str, str] = {}
-            ac_coll = entity.find('AttributeCollection')
-            if ac_coll is not None:
-                for attr in ac_coll:
-                    ref = attr.get('AttributeClassReference', '')
-                    val = attr.get('Value', '')
-                    name = ref_map.get(ref, ref)
-                    attrs[name] = val
-            return attrs
-    return {}
-
-
 # ── Tests: Position mode ────────────────────────────────────────────────────
 
 
@@ -707,7 +671,7 @@ class TestTransformFunctions:
             'la': [('B', 34.0, -118.2)],
         }
         positions: Dict[str, Tuple[int, int]] = {}
-        bbox = compute_geo_positions(matched, positions, width=1000, height=1000)
+        compute_geo_positions(matched, positions, width=1000, height=1000)
         assert 'A' in positions
         assert 'B' in positions
         assert positions['A'] != positions['B']

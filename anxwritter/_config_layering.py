@@ -217,13 +217,6 @@ class _ConfigLayeringMixin:
             return True
         return False
 
-    def _drop_entry_leaf_locks(self, section, idv) -> None:
-        """Forget every leaf lock recorded for one ``(section, idv)`` entry."""
-        self._config_locked_leaves = {
-            k: v for k, v in self._config_locked_leaves.items()
-            if not (k[0] == section and k[1] == idv)
-        }
-
     def _entry_is_locked(self, section, idv) -> bool:
         """True when any leaf lock exists for ``(section, idv)``."""
         return any(

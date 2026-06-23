@@ -19,7 +19,7 @@ ET.register_namespace('lcx', 'http://www.i2group.com/Schemas/2001-12-07/LCXSchem
 
 from .colors import color_to_colorref, coerce_color
 from .enums import Representation, AttributeType
-from .models import Link  # for type hints in add_link
+from .models import Link  # for type hints in resolve_link
 from .timing import PhaseTimer
 from .utils import _enum_val
 
@@ -510,9 +510,6 @@ class ANXBuilder:
         # Fast-path flag: True when any link sets multiplicity/fan_out/theme_wiring
         self._has_conn_fields: bool = False
 
-        # Accumulated XML elements (in order of insertion)
-        self._chart_item_elements: List[ET.Element] = []
-
         # Resolved items (compute-then-emit architecture)
         self._resolved_items: List = []  # List[ResolvedEntity | ResolvedLink]
 
@@ -614,38 +611,6 @@ class ANXBuilder:
     def _lookup_entity(self, identity: str) -> Optional[Tuple[str, int]]:
         """Look up (chart_item_id, entity_int_id) by entity identity string."""
         return self._entity_registry.get(str(identity))
-
-    # ── Typed object entry points ─────────────────────────────────────────────
-
-    def add_entity(self, entity) -> Optional[Tuple[str, int]]:
-        """Register a single typed entity object.
-
-        Accepts any _BaseEntity subclass: Icon, Box, Circle, ThemeLine,
-        EventFrame, TextBlock, Label.
-        Returns (chart_item_id, entity_int_id) or None if id is empty.
-        """
-        identity = str(entity.id) if entity.id else ''
-        if not identity:
-            return None
-        if identity in self._entity_registry:
-            return self._entity_registry[identity]
-
-        resolved = self.resolve_entity(entity)
-        if resolved is None:
-            return self._entity_registry.get(identity)
-
-        self._resolved_items.append(resolved)
-        return (resolved.ci_id, resolved.entity_int_id)
-
-    def add_link(self, link: Link) -> None:
-        """Register a single typed Link object.
-
-        Resolves from_id/to_id against the entity registry.
-        Both entities must have been added before this link.
-        Raises ValueError if either entity is not found.
-        """
-        resolved = self.resolve_link(link)
-        self._resolved_items.append(resolved)
 
     # ── Resolve methods (compute-then-emit architecture) ────────────────────
 
@@ -1020,10 +985,6 @@ class ANXBuilder:
 
         return ci_el
 
-    def emit_entity(self, re: 'ResolvedEntity') -> None:
-        """Build a ResolvedEntity's <ChartItem> and store it in _chart_item_elements."""
-        self._chart_item_elements.append(self._build_entity_ci(re))
-
     def _build_link_ci(self, rl: 'ResolvedLink') -> ET.Element:
         """Build and return the <ChartItem> element for a ResolvedLink (no storage)."""
         # Convert resolved attrs back to _AttrTuple for existing _add_attributes
@@ -1086,10 +1047,6 @@ class ANXBuilder:
                 link_el.set('SemanticTypeGuid', rl.semantic_guid)
 
         return ci_el
-
-    def emit_link(self, rl: 'ResolvedLink') -> None:
-        """Build a ResolvedLink's <ChartItem> and store it in _chart_item_elements."""
-        self._chart_item_elements.append(self._build_link_ci(rl))
 
     def _emit_one(self, item: Any) -> ET.Element:
         """Build one resolved item's <ChartItem>, applying its layout position.
