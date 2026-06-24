@@ -485,6 +485,12 @@ class ANXBuilder:
         self._link_types:      Dict[str, str] = {}
         self._att_classes:     Dict[str, Tuple[str, str]] = {}  # name → (id, att_type)
         self._att_class_icons: Dict[str, str] = {}              # name → IconFile
+        # Embedded custom icons (1.19.0): composite Id → base64 Data (for dedup),
+        # plus the ordered list of {Id, DataLength, Data} for <CustomImageCollection>.
+        self._custom_image_data: Dict[str, str] = {}
+        self._custom_images:   List[Dict[str, str]] = []
+        # bare entity-icon name → emitted name, for resolving per-entity Icon.icon.
+        self._custom_entity_icon_names: Dict[str, str] = {}
         self._strengths:       Dict[str, str] = {'Default': self._next_id()}
         self._strength_dot_styles: Dict[str, str] = {'Default': 'DotStyleSolid'}  # name → DotStyle
         self._default_strength: str = 'Default'
@@ -606,6 +612,27 @@ class ANXBuilder:
         if name not in self._att_class_icons:
             self._att_class_icons[name] = icon_file
 
+    def add_custom_image(self, emitted_name: str, kind: str, datalength: int, data: str) -> None:
+        """Register an embedded custom icon for ``<CustomImageCollection>``.
+
+        ``emitted_name`` is the already-prefixed name (``anxW_…``); ``kind`` is
+        ``'Icon'`` or ``'Attribute'``. Identical (name, image) pairs dedup to a
+        single entry. The same name with a *different* image raises ``ValueError``.
+        """
+        from .custom_icons import composite_key
+        cid = composite_key(emitted_name, kind)
+        prev = self._custom_image_data.get(cid)
+        if prev is not None:
+            if prev != data:
+                raise ValueError(
+                    f"two different images share the icon name {emitted_name!r}"
+                )
+            return  # identical image already registered — dedup
+        self._custom_image_data[cid] = data
+        self._custom_images.append(
+            {'Id': cid, 'DataLength': str(datalength), 'Data': data}
+        )
+
     # ── Entity/identity lookup ────────────────────────────────────────────────
 
     def _lookup_entity(self, identity: str) -> Optional[Tuple[str, int]]:
@@ -691,9 +718,14 @@ class ANXBuilder:
         representation_style = _entity_style(entity)
         representation_style['strength'] = strength
         if 'type_icon_name' in representation_style:
-            meta = self._etype_meta.get(representation_style['type_icon_name'])
-            if meta and meta.get('icon_file'):
-                representation_style['type_icon_name'] = meta['icon_file']
+            tin = representation_style['type_icon_name']
+            if tin in self._custom_entity_icon_names:
+                # per-entity override pointing at an embedded custom icon
+                representation_style['type_icon_name'] = self._custom_entity_icon_names[tin]
+            else:
+                meta = self._etype_meta.get(tin)
+                if meta and meta.get('icon_file'):
+                    representation_style['type_icon_name'] = meta['icon_file']
 
         # Datetime
         date_set, time_set, dt_str = self._format_datetime(entity.date, entity.time)
@@ -2182,6 +2214,14 @@ class ANXBuilder:
         with _timer.phase("LibraryCatalogue"):
             if semantic_config:
                 self._build_catalogue(root, semantic_config)
+
+        with _timer.phase("CustomImageCollection"):
+            # Embedded custom icons (1.19.0) — child of <Chart>, emitted before
+            # <StrengthCollection>. ANB extracts each on open and renders it.
+            if self._custom_images:
+                cic = ET.SubElement(root, 'CustomImageCollection')
+                for ci in self._custom_images:
+                    ET.SubElement(cic, 'CustomImage', ci)
 
         with _timer.phase("StrengthCollection"):
             # StrengthCollection

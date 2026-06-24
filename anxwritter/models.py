@@ -982,7 +982,7 @@ class AttributeClass:
     is_user: Optional[bool] = None
     user_can_add: Optional[bool] = None
     user_can_remove: Optional[bool] = None
-    icon_file: Optional[str] = None
+    icon_file: Optional[str] = None       # ANB icon key, OR the bare name of a custom icon registered via add_custom_attribute_icon (resolved to its emitted name at build time).
     semantic_type: Optional[str] = None   # SemanticTypeGuid — either a name registered via add_semantic_property, or a raw 'guid…' literal (passthrough, unchecked).
     merge_behaviour: Optional[MergeBehaviour] = None
     paste_behaviour: Optional[MergeBehaviour] = None
@@ -1114,7 +1114,7 @@ class EntityType:
     """
 
     name: str = ''
-    icon_file: Optional[str] = None
+    icon_file: Optional[str] = None       # ANB icon key, OR the bare name of a custom icon registered via add_custom_entity_icon (resolved to its emitted name at build time).
     color: Optional[Union[int, str, Color]] = None        # Colour (line color) — COLORREF int, named color, or '#RRGGBB'
     shade_color: Optional[Union[int, str, Color]] = None   # IconShadingColour — COLORREF int, named color, or '#RRGGBB'
     representation: Optional[Union[str, Representation]] = None             # 'Icon', 'Box', 'Circle', 'ThemeLine', 'EventFrame', 'TextBlock', 'Label'

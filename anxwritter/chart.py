@@ -193,6 +193,9 @@ class ANXChart(_ConfigLayeringMixin):
         self._legend_items: List[LegendItem] = []
         self._entity_types: List[EntityType] = []
         self._link_types: List[LinkType] = []
+        # Embedded custom icons (1.19.0): bare name -> {emitted, data, datalength}
+        self._custom_entity_icons: Dict[str, dict] = {}
+        self._custom_attribute_icons: Dict[str, dict] = {}
         self._palettes: List[Palette] = []
         self._datetime_formats: List[DateTimeFormat] = []
         self._semantic_entities: List['SemanticEntity'] = []
@@ -602,6 +605,20 @@ class ANXChart(_ConfigLayeringMixin):
         """
         if not isinstance(data, dict):
             return
+
+        def _anchor(value: str) -> str:
+            """Anchor a relative filesystem path; leave data: URIs / absolute alone."""
+            if not isinstance(value, str) or not value or value.startswith('data:'):
+                return value
+            p = Path(value)
+            return value if p.is_absolute() else str((base_dir / p).resolve())
+
+        # custom_entity_icons[].image / custom_attribute_icons[].image
+        for section in ('custom_entity_icons', 'custom_attribute_icons'):
+            for entry in (data.get(section) or []):
+                if isinstance(entry, dict) and 'image' in entry:
+                    entry['image'] = _anchor(entry['image'])
+
         settings = data.get('settings')
         if not isinstance(settings, dict):
             return
@@ -697,6 +714,26 @@ class ANXChart(_ConfigLayeringMixin):
             result['validators'] = [
                 self._dc_to_clean_dict(v) for v in self._validators
             ]
+
+        # Custom icons (1.19.0) — export the converted BMP as a data: URI so the
+        # config round-trips (re-import sees a BMP and embeds it verbatim).
+        import base64 as _b64
+        import zlib as _zlib
+        from .custom_icons import EMITTED_PREFIX as _DEFAULT_ICON_PREFIX
+        for section, registry in (('custom_entity_icons', self._custom_entity_icons),
+                                  ('custom_attribute_icons', self._custom_attribute_icons)):
+            if registry:
+                rows = []
+                for name, e in registry.items():
+                    raw_bmp = _zlib.decompress(_b64.b64decode(e['data']))
+                    row = {
+                        'name': name,
+                        'image': 'data:image/bmp;base64,' + _b64.b64encode(raw_bmp).decode(),
+                    }
+                    if e['prefix'] != _DEFAULT_ICON_PREFIX:
+                        row['prefix'] = e['prefix']
+                    rows.append(row)
+                result[section] = rows
 
         return result
 
@@ -1466,12 +1503,95 @@ class ANXChart(_ConfigLayeringMixin):
 
         return resolver.build_config(), entity_semantic_guids, link_semantic_guids
 
+    def _add_custom_icon(self, registry, name, image, prefix, printer, kind):
+        """Shared body of add_custom_entity_icon / add_custom_attribute_icon.
+
+        Converts the image once and upserts ``{emitted, data, datalength}`` into
+        ``registry`` keyed by the bare ``name``. Raises eagerly on bad input.
+        """
+        from . import custom_icons
+        if printer:
+            raise NotImplementedError(
+                "printer=True (high-resolution print icons) is planned but not "
+                "yet shipped; use the default screen icon for now"
+            )
+        if not name or not str(name).strip():
+            raise ValueError("custom icon name is empty")
+        emitted = f"{prefix}{name}"
+        name_err = custom_icons.validate_icon_name(emitted)
+        if name_err:
+            raise ValueError(f"custom icon name {emitted!r}: {name_err}")
+        bmp = custom_icons.prepare_icon_bmp(image)   # raises CustomIconError on bad image / missing Pillow
+        data, dlen = custom_icons.custom_image_payload(bmp)
+        registry[str(name)] = {'emitted': emitted, 'prefix': prefix, 'data': data, 'datalength': dlen}
+
+    def add_custom_entity_icon(self, name, image, *, prefix='anxW_', printer=False) -> None:
+        """Embed a custom **entity-type** icon under ``name``.
+
+        Reference it by the bare ``name`` from ``EntityType.icon_file`` or a
+        per-entity ``Icon.icon``. ``image`` is a path, ``bytes``, a PIL image, or
+        a ``data:...;base64,...`` URI. ``prefix`` is prepended to the emitted
+        name so it can't collide with an ANB built-in (default ``'anxW_'``; pass
+        ``''`` to disable or your own namespace e.g. ``'acme_'``). ``printer`` is
+        reserved for high-resolution print icons (not yet shipped).
+        """
+        self._add_custom_icon(self._custom_entity_icons, name, image, prefix, printer, 'Icon')
+
+    def add_custom_attribute_icon(self, name, image, *, prefix='anxW_', printer=False) -> None:
+        """Embed a custom **attribute-class** icon under ``name``.
+
+        Reference it by the bare ``name`` from ``AttributeClass.icon_file``. See
+        :meth:`add_custom_entity_icon` for the ``image`` / ``prefix`` / ``printer``
+        arguments.
+        """
+        self._add_custom_icon(self._custom_attribute_icons, name, image, prefix, printer, 'Attribute')
+
+    def _extract_custom_icons(self, data):
+        """Register ``custom_entity_icons`` / ``custom_attribute_icons`` sections
+        from a config/data dict and return *data* without them.
+
+        Custom icons are registered eagerly (upsert by name) and don't take part
+        in config layering / lock / delete — so they're handled here, before the
+        layering engine, rather than as a layered section.
+        """
+        if not isinstance(data, dict):
+            return data
+        if 'custom_entity_icons' not in data and 'custom_attribute_icons' not in data:
+            return data
+        data = dict(data)
+        for section, adder in (('custom_entity_icons', self.add_custom_entity_icon),
+                               ('custom_attribute_icons', self.add_custom_attribute_icon)):
+            for entry in (data.pop(section, None) or []):
+                opts = {k: entry[k] for k in ('prefix', 'printer') if k in entry}
+                adder(entry['name'], entry['image'], **opts)
+        return data
+
+    def _resolve_icon_ref(self, value, kind):
+        """Resolve a bare icon name to its emitted name if registered, else
+        pass it through (a built-in / pre-installed name)."""
+        if value is None:
+            return value
+        registry = (self._custom_entity_icons if kind == 'Icon'
+                    else self._custom_attribute_icons)
+        entry = registry.get(str(value))
+        return entry['emitted'] if entry else value
+
     def _register_static_defs(self, builder: 'ANXBuilder') -> None:
         """Pre-register explicit AttributeClass icons, DateTimeFormats, and
         EntityType / LinkType definitions on the builder (before resolution)."""
+        # Push embedded custom icons to the builder + the entity-icon name map
+        # (used to resolve per-entity Icon.icon overrides during resolve_entity).
+        for entry in self._custom_entity_icons.values():
+            builder.add_custom_image(entry['emitted'], 'Icon', entry['datalength'], entry['data'])
+        for entry in self._custom_attribute_icons.values():
+            builder.add_custom_image(entry['emitted'], 'Attribute', entry['datalength'], entry['data'])
+        builder._custom_entity_icon_names = {
+            name: e['emitted'] for name, e in self._custom_entity_icons.items()
+        }
+
         for ac in self._attribute_classes:
             if ac.name and ac.icon_file:
-                builder.set_att_class_icon(ac.name, ac.icon_file)
+                builder.set_att_class_icon(ac.name, self._resolve_icon_ref(ac.icon_file, 'Attribute'))
 
         for dtf in self._datetime_formats:
             if dtf.name:
@@ -1496,7 +1616,8 @@ class ANXChart(_ConfigLayeringMixin):
                 sc = et.shade_color
                 shade_int = sc if isinstance(sc, int) else color_to_colorref(sc)
             rep = _REP_MAP.get(et.representation, Representation.ICON) if et.representation else None
-            builder._entity_type_id(et.name, rep, et.icon_file, color_int, shade_int, et.semantic_type)
+            ic_file = self._resolve_icon_ref(et.icon_file, 'Icon')
+            builder._entity_type_id(et.name, rep, ic_file, color_int, shade_int, et.semantic_type)
 
         for lt in self._link_types:
             if not lt.name:

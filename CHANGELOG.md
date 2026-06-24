@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
 > changes ship in minor releases with notes here, as below.
 
+## [1.19.0] - 2026-06-24
+
+### Added
+
+- **Embedded custom icons** — use your own images as entity-type, per-entity,
+  and attribute-class icons; the image is stored inside the `.anx` and renders
+  for the recipient with **no install and no restart**.
+
+  - New methods `ANXChart.add_custom_entity_icon(name, image, *, prefix='anxW_',
+    printer=False)` and `add_custom_attribute_icon(...)` register an image once
+    under a name. `image` accepts a file path, raw `bytes`, a PIL `Image`, or a
+    `data:...;base64,...` URI.
+  - Reference a registered icon by its **bare name** from `EntityType.icon_file`,
+    a per-entity `Icon.icon` (also `EventFrame.icon` / `ThemeLine.icon`), or
+    `AttributeClass.icon_file`. A name that isn't registered passes through
+    unchanged — so you can also reference a built-in, a pre-installed, or a
+    previously-embedded icon by name.
+  - The image is conditioned automatically: downscaled-only to ≤128 px, padded
+    to square, converted to a 24-bit BMP with magenta `(255, 0, 255)` as the
+    transparent key (alpha flattened to a hard 1-bit edge), then zlib-compressed.
+  - The emitted name is prefixed (default `anxW_`) so it can never collide with
+    an ANB built-in icon; you always reference by the bare name. Pass `prefix=''`
+    to disable or `prefix='org_'` to namespace. Re-registering a name upserts.
+  - New YAML/JSON config sections `custom_entity_icons` / `custom_attribute_icons`
+    (file paths resolved relative to the config file; `data:` URIs for inline
+    bytes). `to_config_dict()` round-trips them as `data:` BMP URIs.
+  - Converting an ordinary image needs the optional **Pillow** dependency:
+    `pip install anxwritter[icons]`. **Without Pillow**, pass raw `bytes` that are
+    already a BMP (or a `data:image/bmp;base64,…` URI) — embedded verbatim with
+    only the standard library (must be 8-/24-bit and ≤256 px; 32-bit and oversize
+    BMPs are rejected because ANB renders them as a black box).
+  - `printer=True` (high-resolution print icons) is reserved and raises a
+    "planned, not yet shipped" error.
+  - New internal module `anxwritter/custom_icons.py`, example
+    `examples/custom_icons.py`, and reference doc `docs/reference/custom-icons.md`.
+
 ## [1.18.0] - 2026-06-22
 
 ### Added
