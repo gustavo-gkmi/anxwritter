@@ -545,6 +545,9 @@ class _ConfigLayeringMixin:
                 "operation='delete' cannot be combined with wipe_previous=True"
             )
 
+        # Custom icons (1.19.0) — registered eagerly; not subject to layering.
+        data = self._extract_custom_icons(data)
+
         if is_config:
             self._apply_config_layer(
                 data, operation=operation, wipe_previous=wipe_previous,
