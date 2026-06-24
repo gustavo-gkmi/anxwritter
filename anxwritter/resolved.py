@@ -26,7 +26,7 @@ class ResolvedAttr(NamedTuple):
     value_str: str
 
 
-@dataclass
+@dataclass(slots=True)
 class ResolvedCard:
     """Fully resolved evidence card — ready for XML emission.
 
@@ -49,7 +49,7 @@ class ResolvedCard:
     timezone_name: Optional[str] = None
 
 
-@dataclass
+@dataclass(slots=True)
 class ResolvedChartItem:
     """Shared fields for both entity and link ChartItems."""
     ci_id: str = ''
@@ -96,7 +96,7 @@ class ResolvedChartItem:
     strength: str = 'Default'
 
 
-@dataclass
+@dataclass(slots=True)
 class ResolvedEntity(ResolvedChartItem):
     """Fully resolved entity — all colors as COLORREF ints, icon names
     translated, datetime parsed, cards resolved."""
@@ -117,7 +117,7 @@ class ResolvedEntity(ResolvedChartItem):
     y: int = 0
 
 
-@dataclass
+@dataclass(slots=True)
 class ResolvedLink(ResolvedChartItem):
     """Fully resolved link — arrow enum resolved, line color as COLORREF int,
     connection style deduped, cards resolved."""
@@ -129,7 +129,8 @@ class ResolvedLink(ResolvedChartItem):
     arrow: str = 'ArrowNone'                    # full ANB name
     line_width: int = 1
     line_color: int = 0                         # resolved COLORREF int
-    strength: str = 'Default'
+    # NOTE: ``strength`` is inherited from ResolvedChartItem — not redeclared
+    # here, because a slotted subclass cannot redeclare a parent slot.
     offset: int = 0
     conn_id: Optional[str] = None
     semantic_guid: Optional[str] = None

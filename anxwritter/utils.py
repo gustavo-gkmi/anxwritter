@@ -95,6 +95,17 @@ def _validate_date(val: Any) -> bool:
     s = val.strip()
     if not s:
         return False
+    # Fast path for the canonical 'YYYY-MM-DD' form (by far the common case):
+    # the date() constructor does exact calendar validation (leap years,
+    # days-per-month) far cheaper than datetime.strptime. A structurally
+    # canonical but invalid date (e.g. '2024-13-01') falls through to the
+    # strptime loop, which also rejects it — so semantics are unchanged.
+    if len(s) == 10 and s[4] == '-' and s[7] == '-':
+        try:
+            _date(int(s[0:4]), int(s[5:7]), int(s[8:10]))
+            return True
+        except ValueError:
+            pass
     for fmt in _DATE_FORMATS:
         try:
             _datetime.strptime(s, fmt)
@@ -119,6 +130,16 @@ def _validate_time(val: Any) -> bool:
     s = val.strip()
     if not s:
         return False
+    # Fast path for the canonical 'HH:MM:SS' form: the time() constructor does
+    # exact range validation (0-23 / 0-59 / 0-59 — matching strptime's
+    # datetime-backed bounds) far cheaper than strptime. The microsecond form
+    # 'HH:MM:SS.ffffff' is longer than 8 chars, so it correctly falls through.
+    if len(s) == 8 and s[2] == ':' and s[5] == ':':
+        try:
+            _time(int(s[0:2]), int(s[3:5]), int(s[6:8]))
+            return True
+        except ValueError:
+            pass
     for fmt in _TIME_FORMATS:
         try:
             _datetime.strptime(s, fmt)
