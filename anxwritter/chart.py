@@ -1853,12 +1853,28 @@ class ANXChart(_ConfigLayeringMixin):
             'custom_properties': custom_props,
         }
 
-    def _assemble_build(self):
+    def _display_targets_links(self) -> bool:
+        """True if any display synthesizer applies to links (``kind`` link/both).
+
+        Used to gate fused resolve→emit: a link-targeting display synthesizer
+        needs the resolved link in the bulk-expansion pass, so the chart can't
+        stream links lazily.
+        """
+        ec = self.settings.extra_cfg
+        for d in list(ec.display_attribute or []) + list(ec.display_label or []):
+            if (getattr(d, 'kind', None) or 'both') in ('link', 'both'):
+                return True
+        return False
+
+    def _assemble_build(self, stream: bool = False):
         """Run the full resolve/transform pipeline and return a prepared builder.
 
         Shared by ``_build_xml`` (non-stream) and ``_iter_xml`` (stream) so the
         large setup isn't duplicated. Does NOT serialize — the caller decides
         between ``builder.build()`` and ``builder.iter_build()``.
+
+        ``stream=True`` lets the link set be fused (resolved→emitted→discarded one
+        at a time) when the chart is fusable — see ``_can_fuse`` below.
 
         Returns:
             (builder, settings, build_kwargs, errors, timer)
@@ -2102,10 +2118,31 @@ class ANXChart(_ConfigLayeringMixin):
             link_spacing = s.extra_cfg.link_arc_offset if s.extra_cfg.link_arc_offset is not None else 20
             _auto_offsets = compute_link_offsets(self._links, link_spacing)
 
-        # ── Resolve all links + apply transforms (no user-object mutation)
+        # ── Fusion gate (decided from config, before any link work) ─────────
+        # Fused resolve→emit (streaming only) builds+emits+discards links one at a
+        # time, so the link set never materializes — peak ≈ the entity set. Gated
+        # off when a transform needs the whole link set: link styling, or a
+        # display synthesizer targeting links. When fusing, registration keeps no
+        # per-link attributes (they're re-resolved lazily) so the pre-pass holds
+        # only the assigned IDs.
+        _styling = s.extra_cfg.styling
+        _link_styling = getattr(_styling, 'links', None) if _styling is not None else None
+        _match_color = s.extra_cfg.link_match_entity_color
+        _can_fuse = (
+            stream
+            and _link_styling is None
+            and not self._display_targets_links()
+        )
+
+        # ── Register all valid links — assigns every link ID, in order ─────
+        # This is the (only) place link IDs are minted. Splitting registration
+        # from object-building is byte-transparent because _build_resolved_link
+        # mints no IDs: registering all links then building all of them produces
+        # the identical _next_id() sequence as the old interleaved loop. It is
+        # also what makes fused resolve→emit possible — the registration pass can
+        # run as a cheap pre-pass while the heavy build runs lazily during emit.
         _t0_links = time.perf_counter()
-        resolved_links = []
-        valid_links: List[Link] = []  # filtered, aligned 1:1 with resolved_links
+        _link_entries: List[Tuple[int, Link, Any]] = []  # (orig_index, link, plan)
         for i, link in enumerate(self._links):
             if not link.from_id or not link.to_id:
                 errors.append(f"Link {i}: missing 'from_id' or 'to_id' — skipped")
@@ -2123,72 +2160,103 @@ class ANXChart(_ConfigLayeringMixin):
             if not from_info or not to_info:
                 continue
 
-            rl = builder.resolve_link(
-                link,
-                extra_cards=_loose_link_cards.get(link.link_id or '', []),
-                semantic_guid=_link_semantic_guids.get(i),
-            )
+            plan = builder._register_link(link, keep_attrs=not _can_fuse)
+            _link_entries.append((i, link, plan))
 
-            # link_match_entity_color — lowest-precedence dynamic source. Runs
-            # before intensity / categorical so they can overwrite it when set.
-            if link.line_color is None and s.extra_cfg.link_match_entity_color and link.to_id in _entity_color_map:
+        # ── Build links — fused (lazy, streaming) or eager (materialized) ──
+        # ``_can_fuse`` was decided from config above. The per-link dynamic
+        # sources (match-color, offset, grade defaults) run lazily when fused.
+        valid_links: List[Link] = [lk for (_i, lk, _p) in _link_entries]
+
+        def _apply_link_dynamics(rl, link, i):
+            # match-color (lowest-precedence dynamic source), then auto-offset.
+            if link.line_color is None and _match_color and link.to_id in _entity_color_map:
                 rl.line_color = _entity_color_map[link.to_id]
-
-            # Auto offset — only when original link had no explicit offset
             if link.offset is None:
                 rl.offset = _auto_offsets.get(i, 0)
 
-            resolved_links.append(rl)
-            valid_links.append(link)
-        timer.record(f"Link resolve ({len(self._links)})", time.perf_counter() - _t0_links)
+        from .transforms import expand_display_attributes, expand_display_labels
 
-        # ── Link styling (intensity then categorical so categorical wins) ─
-        _styling = s.extra_cfg.styling
-        _link_styling = getattr(_styling, 'links', None) if _styling is not None else None
-        if _link_styling is not None:
-            with timer.phase("Link styling (intensity)"):
-                apply_link_intensity(
-                    resolved_links, valid_links,
-                    getattr(_link_styling, 'intensity', None),
+        if _can_fuse:
+            # Edges for layout come from the raw links (resolved links aren't held).
+            builder._raw_edges = [
+                (str(lk.from_id), str(lk.to_id))
+                for (_i, lk, _p) in _link_entries
+                if str(lk.from_id) != str(lk.to_id)
+            ]
+
+            def _lazy_links():
+                for i, link, plan in _link_entries:
+                    rl = builder._build_resolved_link(
+                        link, plan,
+                        extra_cards=_loose_link_cards.get(link.link_id or '', []),
+                        semantic_guid=_link_semantic_guids.get(i),
+                    )
+                    _apply_link_dynamics(rl, link, i)
+                    resolve_grade_names([rl], _grade_resolve_specs)
+                    apply_grade_defaults([rl], _grade_params)
+                    yield rl
+
+            builder._lazy_link_iter = _lazy_links
+            timer.record(f"Link register ({len(self._links)})", time.perf_counter() - _t0_links)
+
+            # Display synthesizers can still target entities (the gate only
+            # excludes link-targeting ones); run on entities with an empty link list.
+            with timer.phase("Display synthesizer expansion"):
+                expand_display_attributes(
+                    resolved_entities, [], self.settings.extra_cfg.display_attribute,
+                    self._attribute_classes, builder, att_class_config,
                 )
-            with timer.phase("Link styling (categorical)"):
-                apply_link_categorical(
-                    resolved_links, valid_links,
-                    getattr(_link_styling, 'categorical', None),
+                expand_display_labels(
+                    resolved_entities, [], self.settings.extra_cfg.display_label,
+                    self._attribute_classes,
                 )
+        else:
+            resolved_links = []
+            for i, link, plan in _link_entries:
+                rl = builder._build_resolved_link(
+                    link, plan,
+                    extra_cards=_loose_link_cards.get(link.link_id or '', []),
+                    semantic_guid=_link_semantic_guids.get(i),
+                )
+                _apply_link_dynamics(rl, link, i)
+                resolved_links.append(rl)
+            timer.record(f"Link resolve ({len(self._links)})", time.perf_counter() - _t0_links)
 
-        # ── Apply grade defaults to resolved links ─────────────────────
-        with timer.phase("Grade defaults (links)"):
-            resolve_grade_names(resolved_links, _grade_resolve_specs)
-            apply_grade_defaults(resolved_links, _grade_params)
+            # ── Link styling (intensity then categorical so categorical wins) ─
+            if _link_styling is not None:
+                with timer.phase("Link styling (intensity)"):
+                    apply_link_intensity(
+                        resolved_links, valid_links,
+                        getattr(_link_styling, 'intensity', None),
+                    )
+                with timer.phase("Link styling (categorical)"):
+                    apply_link_categorical(
+                        resolved_links, valid_links,
+                        getattr(_link_styling, 'categorical', None),
+                    )
 
-        # ── Store resolved links for lazy emit in build() ───────────────
-        builder._resolved_items.extend(resolved_links)
+            # ── Apply grade defaults to resolved links ─────────────────────
+            with timer.phase("Grade defaults (links)"):
+                resolve_grade_names(resolved_links, _grade_resolve_specs)
+                apply_grade_defaults(resolved_links, _grade_params)
 
-        # ── Display synthesizer expansion ───────────────────────────────
-        # Must run after both entity AND link resolution and before
-        # builder.build() consumes att_class_config. Attribute siblings are
-        # expanded first so a synthesized AC could (in principle) be
-        # referenced by a label source.
-        with timer.phase("Display synthesizer expansion"):
-            from .transforms import (
-                expand_display_attributes,
-                expand_display_labels,
-            )
-            expand_display_attributes(
-                resolved_entities,
-                resolved_links,
-                self.settings.extra_cfg.display_attribute,
-                self._attribute_classes,
-                builder,
-                att_class_config,
-            )
-            expand_display_labels(
-                resolved_entities,
-                resolved_links,
-                self.settings.extra_cfg.display_label,
-                self._attribute_classes,
-            )
+            # ── Store resolved links for lazy emit in build() ───────────────
+            builder._resolved_items.extend(resolved_links)
+
+            # ── Display synthesizer expansion ───────────────────────────────
+            # Must run after both entity AND link resolution and before
+            # builder.build() consumes att_class_config.
+            with timer.phase("Display synthesizer expansion"):
+                expand_display_attributes(
+                    resolved_entities, resolved_links,
+                    self.settings.extra_cfg.display_attribute,
+                    self._attribute_classes, builder, att_class_config,
+                )
+                expand_display_labels(
+                    resolved_entities, resolved_links,
+                    self.settings.extra_cfg.display_label, self._attribute_classes,
+                )
 
         # ── Build configs ─────────────────────────────────────────────────
         with timer.phase("Build configs"):
@@ -2294,5 +2362,5 @@ class ANXChart(_ConfigLayeringMixin):
     def _iter_xml(self, compact: bool = True) -> Iterator[str]:
         """Stream the ANX XML in chunks. Validation is the caller's responsibility
         (``iter_xml`` validates up front)."""
-        builder, s, build_kwargs, _errors, _timer = self._assemble_build()
+        builder, s, build_kwargs, _errors, _timer = self._assemble_build(stream=True)
         yield from builder.iter_build(s, compact=compact, **build_kwargs)
