@@ -303,5 +303,24 @@ window.validateConfig = function validateConfig(CONFIG) {
     }
   });
 
+  // ── Custom icons: a config must carry baked icons only ───────────────
+  // Mirrors the library's config Pillow gate. An in-browser-baked icon is a
+  // data:image/bmp URI (or a compiled data/datalength entry); anything else
+  // (a path, PNG, data:image/png) must be baked first.
+  for (const section of ['custom_entity_icons', 'custom_attribute_icons']) {
+    const list = CONFIG[section];
+    if (!Array.isArray(list)) continue;
+    list.forEach((entry, idx) => {
+      if (!entry || typeof entry !== 'object') return;
+      if (!entry.name) push(`${section}[${idx}].name`, 'Icon name is required.');
+      const baked = (entry.data !== undefined && entry.datalength !== undefined) ||
+        (typeof entry.image === 'string' && entry.image.startsWith('data:image/bmp'));
+      if (!baked) {
+        push(`${section}[${idx}].image`,
+          'Icon must be baked (a data:image/bmp URI). Pick the image again to bake it in-browser.');
+      }
+    });
+  }
+
   return errors;
 };

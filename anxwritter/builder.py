@@ -491,6 +491,10 @@ class ANXBuilder:
         self._custom_images:   List[Dict[str, str]] = []
         # bare entity-icon name → emitted name, for resolving per-entity Icon.icon.
         self._custom_entity_icon_names: Dict[str, str] = {}
+        # Referenced-mode pruning (1.20.0): emitted names actually used by a type /
+        # attribute class / per-entity override, observed during resolution.
+        self._used_custom_images: set = set()
+        self._custom_icons_include: str = 'referenced'  # 'referenced' | 'all'
         self._strengths:       Dict[str, str] = {'Default': self._next_id()}
         self._strength_dot_styles: Dict[str, str] = {'Default': 'DotStyleSolid'}  # name → DotStyle
         self._default_strength: str = 'Default'
@@ -721,7 +725,9 @@ class ANXBuilder:
             tin = representation_style['type_icon_name']
             if tin in self._custom_entity_icon_names:
                 # per-entity override pointing at an embedded custom icon
-                representation_style['type_icon_name'] = self._custom_entity_icon_names[tin]
+                emitted = self._custom_entity_icon_names[tin]
+                representation_style['type_icon_name'] = emitted
+                self._used_custom_images.add(emitted)
             else:
                 meta = self._etype_meta.get(tin)
                 if meta and meta.get('icon_file'):
@@ -2219,9 +2225,16 @@ class ANXBuilder:
             # Embedded custom icons (1.19.0) — child of <Chart>, emitted before
             # <StrengthCollection>. ANB extracts each on open and renders it.
             if self._custom_images:
-                cic = ET.SubElement(root, 'CustomImageCollection')
-                for ci in self._custom_images:
-                    ET.SubElement(cic, 'CustomImage', ci)
+                # Referenced-mode (default) prunes any image no type / attribute
+                # class / per-entity override actually used. 'all' keeps every one.
+                kept = self._custom_images if self._custom_icons_include == 'all' else [
+                    ci for ci in self._custom_images
+                    if ci['Id'].split(',', 1)[0] in self._used_custom_images
+                ]
+                if kept:
+                    cic = ET.SubElement(root, 'CustomImageCollection')
+                    for ci in kept:
+                        ET.SubElement(cic, 'CustomImage', ci)
 
         with _timer.phase("StrengthCollection"):
             # StrengthCollection

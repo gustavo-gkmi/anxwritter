@@ -117,6 +117,67 @@ A `data:` URI carries the image inline (handy for the HTTP server, which has no
 filesystem). `to_config_dict()` exports registered icons as `data:` BMP URIs so a
 config round-trips.
 
+The example above is a **data document** (it has `entities:`), so it is loaded
+through the data path (`from_dict` / `from_yaml` / the CLI data file) where a
+`image:` source is converted with Pillow as needed. A **config layer** is
+stricter — see *Catalogs* below.
+
+## Catalogs
+
+A **catalog** is a reusable library of icons you build once and pull into many
+charts. It is a plain config file — the same `custom_entity_icons` /
+`custom_attribute_icons` sections — but with the images **baked** (already a BMP),
+so consuming it needs no Pillow.
+
+Build one with `IconCatalog` (Pillow is used here, only to convert a non-BMP
+image), then export:
+
+```python
+from anxwritter import IconCatalog
+
+cat = IconCatalog()
+cat.add_custom_entity_icon('suspect', 'suspect.png')
+cat.add_custom_attribute_icon('cpf', 'cpf.png')
+cat.validate()                      # blob integrity — catches a black-box BMP early
+cat.export_catalog('org_icons.yaml')   # baked → Pillow-free to consume
+```
+
+Consume it (no Pillow needed):
+
+```python
+from anxwritter import ANXChart, IconCatalog
+
+chart = ANXChart()
+chart.apply_icon_catalog('org_icons.yaml')          # path, dict, or IconCatalog
+# or fold the icons into an existing config file in place:
+IconCatalog.from_file('org_icons.yaml').include_in_config('org_config.yaml')
+```
+
+A catalog file drops straight into `--config` / `apply_config_file` and honours
+the full layering vocabulary — `merge` (default), `wipe`, `lock`, `delete`, and
+an in-file `cascade: {mode: ...}` — exactly like every other config section.
+
+### `referenced` vs `all`
+
+By default a chart writes only the icons it actually **references** (named by a
+registered entity type, attribute class, or per-entity override), so a chart that
+uses 6 icons from a 200-icon catalog carries only 6. Set the whole-library mode
+explicitly when you need it:
+
+```python
+chart.apply_icon_catalog('org_icons.yaml', include='all')   # emit every icon
+# equivalently: settings.extra_cfg.custom_icons_include = 'all'
+```
+
+### The config Pillow gate
+
+A config layer must carry **baked** icons — a ready BMP (`data:image/bmp` /
+BMP bytes) or a compiled `data`/`datalength` payload. A source that would need
+conversion (a path, PNG, PIL image, or `data:image/png`) raises, pointing you at
+`IconCatalog`. This keeps a shared config self-contained and Pillow-free for
+everyone who consumes it. The data path and the direct `add_custom_*_icon` API
+are unaffected — they still convert via Pillow.
+
 ## Bringing your own BMP (no Pillow)
 
 Pass `image` as raw `bytes` that are already a BMP (or a `data:image/bmp;base64,…`

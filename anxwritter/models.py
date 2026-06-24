@@ -628,6 +628,7 @@ class ExtraCfg:
     styling: Optional[StylingCfg] = None           # Data-driven link styling (intensity + categorical)
     display_attribute: List[DisplayAttribute] = field(default_factory=list)  # Template → synthesized text-sibling AC
     display_label: List[DisplayLabel] = field(default_factory=list)  # Template → entity/link label
+    custom_icons_include: Optional[str] = None     # Embedded custom icons emitted: 'referenced' (default) / 'all'
 
 
 # Forward references resolved after all classes defined — see bottom of Settings class

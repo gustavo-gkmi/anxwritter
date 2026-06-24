@@ -8,6 +8,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
 > changes ship in minor releases with notes here, as below.
 
+## [1.20.0] - 2026-06-24
+
+### Added
+
+- **Custom-icon catalogs** — package a reusable library of embedded icons in a
+  YAML/JSON file and pull it into any chart.
+
+  - New `IconCatalog` class (exported at top level). Author with the same verbs
+    as the chart — `cat.add_custom_entity_icon(name, image)` /
+    `add_custom_attribute_icon(name, image)` (Pillow used here, only to convert a
+    non-BMP image) — then `cat.export_catalog('icons.yaml')` writes a standalone,
+    **baked** config file that is Pillow-free to consume. `cat.validate()` checks
+    every blob (decodes to a sane 8-/24-bit, ≤256 px BMP) so a corrupt payload is
+    caught before it renders as a black box in ANB. `cat.include_in_config(path)`
+    folds the baked icons into an existing config file in place;
+    `IconCatalog.from_file` / `from_files` load and merge catalogs.
+  - New `ANXChart.apply_icon_catalog(catalog, *, include=None)` merges a catalog
+    (an `IconCatalog`, a file path, or a dict) into a chart;
+    `ANXChart.export_icon_catalog(path)` harvests a chart's registered icons back
+    out as a catalog.
+  - A catalog file **is** a plain config — its `custom_entity_icons` /
+    `custom_attribute_icons` sections drop straight into `--config` /
+    `apply_config_file`, and now honour the full layering vocabulary
+    (`merge` / `wipe` / `lock` / `delete`, including an in-file
+    `cascade: {mode: ...}`), mirroring every other config section.
+
+- **`extra_cfg.custom_icons_include`** (`'referenced'` / `'all'`) controls how
+  many embedded icons land in a chart.
+
+### Changed
+
+- **Breaking (behaviour): embedded custom icons now default to `referenced`** —
+  only icons actually used by a registered entity type, attribute class, or
+  per-entity override are written into the `.anx`. 1.19.0 emitted *every*
+  registered icon; that was wasteful for a large shared library, where each chart
+  would otherwise carry the whole set. Set
+  `settings.extra_cfg.custom_icons_include = 'all'` to restore the 1.19.0
+  emit-everything behaviour.
+- **Config layers must carry baked icons.** A `custom_entity_icons` /
+  `custom_attribute_icons` entry applied through a **config** (`--config` /
+  `apply_config_file` / `apply_config` / `apply_icon_catalog`) must be a ready
+  BMP (`data:image/bmp` or BMP bytes) or a compiled `data`/`datalength` payload;
+  a source that would need Pillow conversion (a path, PNG, PIL image, or
+  `data:image/png`) now raises, pointing at `IconCatalog`. The **data** path
+  (`from_dict` / `from_yaml` / CLI data file) and the direct `add_custom_*_icon`
+  API still convert via Pillow. This keeps shared configs self-contained and
+  Pillow-free to consume.
+
 ## [1.19.0] - 2026-06-24
 
 ### Added

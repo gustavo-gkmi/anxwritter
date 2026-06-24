@@ -251,6 +251,18 @@ INVALID_SPECS: List[tuple] = [
         {ErrorType.INVALID_GEO_MAP.value},
     ),
 
+    # ── Invalid custom_icons_include value ─────────────────────────────────
+    (
+        "invalid_custom_icons_include",
+        {
+            "settings": {
+                "extra_cfg": {"custom_icons_include": "bogus"}
+            },
+            "entities": {"icons": [{"id": "A", "type": "Person"}]},
+        },
+        {ErrorType.INVALID_CUSTOM_ICONS_INCLUDE.value},
+    ),
+
     # ── Styling: intensity without attribute ───────────────────────────────
     (
         "intensity_missing_attribute",

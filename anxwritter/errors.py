@@ -78,6 +78,9 @@ class ErrorType(str, Enum):
     # Geo-map errors
     INVALID_GEO_MAP = 'invalid_geo_map'
 
+    # Custom-icon catalog (1.20.0)
+    INVALID_CUSTOM_ICONS_INCLUDE = 'invalid_custom_icons_include'
+
     # Styling errors (extra_cfg.styling.links.{intensity,categorical})
     INVALID_INTENSITY_CONFIG = 'invalid_intensity_config'
     INVALID_INTENSITY_ATTRIBUTE = 'invalid_intensity_attribute'

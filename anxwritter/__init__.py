@@ -29,6 +29,7 @@ from .errors import ANXValidationError, ErrorType
 from .colors import NAMED_COLORS, color_to_colorref, rgb_to_colorref
 from .enums import VALID_SHADING_COLORS, MergeBehaviour, DotStyle, Enlargement, AttributeType, Multiplicity, ThemeWiring, ArrowStyle, Representation, LegendItemType, Color, IntensityScale, ColorSpace, MissingPolicy
 from .entities import Icon, Box, Circle, ThemeLine, EventFrame, TextBlock, Label
+from .custom_icons import IconCatalog, CustomIconError
 from .models import (
     Card, Link, AttributeClass, Strength, LegendItem,
     EntityType, LinkType,
@@ -75,6 +76,8 @@ __all__ = [
     'Palette', 'PaletteAttributeEntry',
     'DateTimeFormat',
     'SemanticEntity', 'SemanticLink', 'SemanticProperty',
+    # Embedded custom icons (1.19.0) + catalog (1.20.0)
+    'IconCatalog', 'CustomIconError',
     # Settings dataclasses
     'Font', 'Frame', 'Show', 'TimeZone', 'CustomProperty', 'Settings',
     'ChartCfg', 'ViewCfg', 'GridCfg', 'WiringCfg', 'LinksCfg', 'TimeCfg',

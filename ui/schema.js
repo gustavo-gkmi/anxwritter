@@ -1,6 +1,6 @@
 window.SCHEMA = {
   "_meta": {
-    "anxwritterVersion": "1.18.0",
+    "anxwritterVersion": "1.20.0",
     "schemaVersion": 1,
     "notes": "Hand-curated. tests/test_ui_schema_sync.py verifies sync with the library."
   },
@@ -305,7 +305,8 @@ window.SCHEMA = {
         {"name": "geo_map", "ref": "GeoMapCfg"},
         {"name": "styling", "ref": "StylingCfg"},
         {"name": "display_attribute", "list_of": "DisplayAttribute"},
-        {"name": "display_label", "list_of": "DisplayLabel"}
+        {"name": "display_label", "list_of": "DisplayLabel"},
+        {"name": "custom_icons_include", "type": "select", "options": ["referenced", "all"]}
       ]
     },
 
@@ -527,7 +528,9 @@ window.SCHEMA = {
     "semantic_entities":   {"list_of": "SemanticEntity"},
     "semantic_links":      {"list_of": "SemanticLink"},
     "semantic_properties": {"list_of": "SemanticProperty"},
-    "validators":          {"list_of": "Validator"}
+    "validators":          {"list_of": "Validator"},
+    "custom_entity_icons":    {"type": "custom_icons", "scope": "Icon"},
+    "custom_attribute_icons": {"type": "custom_icons", "scope": "Attribute"}
   }
 }
 ;

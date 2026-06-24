@@ -16,8 +16,10 @@ library — see :func:`prepare_icon_bmp`.
 
 import base64
 import io
+import json
 import zlib
-from typing import Any, Optional, Tuple
+from pathlib import Path
+from typing import Any, Iterable, List, Optional, Tuple, Union
 
 try:  # optional dependency
     from PIL import Image
@@ -200,3 +202,237 @@ def custom_image_payload(bmp: bytes) -> Tuple[str, int]:
 def packed_dib(bmp: bytes) -> bytes:
     """Strip the 14-byte ``BITMAPFILEHEADER`` → packed DIB (for ``<IconPicture>``)."""
     return bmp[14:]
+
+
+def decode_payload(data: str) -> bytes:
+    """Inverse of :func:`custom_image_payload`'s encoding: base64-decode then
+    zlib-inflate back to the raw BMP bytes (for validation / preview / round-trip)."""
+    return zlib.decompress(base64.b64decode(data))
+
+
+def is_baked(image: Any) -> bool:
+    """True if *image* can embed with **no Pillow** — a ready BMP, given either as
+    raw ``bytes`` or a ``data:image/bmp;base64,...`` URI.
+
+    Used by the config Pillow gate: a config layer may only carry baked icons, so
+    anything that would need conversion (a path, PNG/JPEG, PIL image, or a
+    ``data:image/png`` URI) returns ``False`` here.
+    """
+    try:
+        return is_bmp(coerce_image_source(image))
+    except CustomIconError:
+        return False
+
+
+# ── IconCatalog: a reusable library of baked icons ────────────────────────────
+
+#: ``_meta.format`` marker written by :meth:`IconCatalog.export_catalog`.
+CATALOG_FORMAT = "anxwritter-icon-catalog"
+#: ``_meta.version`` — the catalog *file* schema version (not the library version).
+CATALOG_VERSION = 1
+
+
+def _load_catalog_doc(path: Union[str, Path]) -> dict:
+    """Read a YAML or JSON catalog/config file → dict (``.json`` ⇒ JSON, else YAML)."""
+    text = Path(path).read_text(encoding="utf-8")
+    if str(path).lower().endswith(".json"):
+        return json.loads(text) or {}
+    import yaml  # mandatory dependency (pyyaml)
+    return yaml.safe_load(text) or {}
+
+
+def _dump_doc(doc: dict, path: Path, fmt: str) -> str:
+    if fmt == "json":
+        text = json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
+    else:
+        import yaml
+        text = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
+    path.write_text(text, encoding="utf-8")
+    return str(path.resolve())
+
+
+class IconCatalog:
+    """A reusable library of baked custom icons (entity + attribute scopes).
+
+    **Authoring** (Pillow is needed only to convert a non-BMP image)::
+
+        cat = IconCatalog()
+        cat.add_custom_entity_icon('suspect', 'suspect.png')
+        cat.add_custom_attribute_icon('cpf', 'cpf.png')
+        cat.export_catalog('org_icons.yaml')      # baked → Pillow-free thereafter
+
+    The exported file is a plain anxwritter config — ``custom_entity_icons`` /
+    ``custom_attribute_icons`` sections with compiled (``data`` / ``datalength``)
+    payloads — so it drops straight into ``--config`` / ``apply_config_file`` /
+    :meth:`ANXChart.apply_icon_catalog`. A config layer is **baked-only**: a
+    teammate or server consuming the catalog needs no Pillow.
+
+    **Consuming** (no Pillow)::
+
+        cat = IconCatalog.from_file('org_icons.yaml')
+        chart.apply_icon_catalog(cat, include='referenced')
+    """
+
+    def __init__(self) -> None:
+        # name -> {emitted, prefix, data, datalength}
+        self._entity: dict = {}
+        self._attribute: dict = {}
+
+    # ── authoring ─────────────────────────────────────────────────────────
+    def add_custom_entity_icon(self, name: str, image: Any, *,
+                               prefix: str = EMITTED_PREFIX, printer: bool = False) -> None:
+        """Bake *image* and register it under *name* as an **entity** icon."""
+        self._bake_into(self._entity, name, image, prefix, printer)
+
+    def add_custom_attribute_icon(self, name: str, image: Any, *,
+                                  prefix: str = EMITTED_PREFIX, printer: bool = False) -> None:
+        """Bake *image* and register it under *name* as an **attribute** icon."""
+        self._bake_into(self._attribute, name, image, prefix, printer)
+
+    @staticmethod
+    def _bake_into(registry: dict, name: str, image: Any, prefix: str, printer: bool) -> None:
+        if printer:
+            raise NotImplementedError(
+                "printer=True (high-resolution print icons) is planned but not "
+                "yet shipped; use the default screen icon for now"
+            )
+        if not name or not str(name).strip():
+            raise ValueError("custom icon name is empty")
+        emitted = f"{prefix}{name}"
+        err = validate_icon_name(emitted)
+        if err:
+            raise ValueError(f"custom icon name {emitted!r}: {err}")
+        bmp = prepare_icon_bmp(image)
+        data, dlen = custom_image_payload(bmp)
+        registry[str(name)] = {"emitted": emitted, "prefix": prefix,
+                               "data": data, "datalength": dlen}
+
+    # ── inspection / validation ───────────────────────────────────────────
+    def validate(self) -> List[dict]:
+        """Return a list of error dicts (empty == valid).
+
+        Checks every entry's emitted name and **blob integrity** — that the
+        compiled payload decodes to a sane BMP (8- or 24-bit, ≤256px). A corrupt
+        or oversize blob otherwise renders as a *black box* in ANB with no
+        diagnostic; this catches it before export/import.
+        """
+        errors: List[dict] = []
+        for scope, registry in (("custom_entity_icons", self._entity),
+                                ("custom_attribute_icons", self._attribute)):
+            for name, e in registry.items():
+                err = validate_icon_name(e["emitted"])
+                if err:
+                    errors.append({"type": "invalid_icon_name",
+                                   "location": f"{scope}[{name}]", "message": err})
+                try:
+                    bpp, w, h = _bmp_header(decode_payload(e["data"]))
+                    if bpp not in (8, 24):
+                        errors.append({"type": "invalid_icon_blob",
+                                       "location": f"{scope}[{name}]",
+                                       "message": f"BMP must be 8- or 24-bit (got {bpp}-bit)"})
+                    if max(w, h) > MAX_PASSTHROUGH:
+                        errors.append({"type": "invalid_icon_blob",
+                                       "location": f"{scope}[{name}]",
+                                       "message": f"BMP too large ({w}x{h}; max {MAX_PASSTHROUGH}px)"})
+                except Exception as ex:  # noqa: BLE001 - report any decode failure
+                    errors.append({"type": "invalid_icon_blob",
+                                   "location": f"{scope}[{name}]", "message": str(ex)})
+        return errors
+
+    # ── serialization ─────────────────────────────────────────────────────
+    @staticmethod
+    def _entry_dict(name: str, e: dict) -> dict:
+        row = {"name": name, "datalength": e["datalength"], "data": e["data"]}
+        if e["prefix"] != EMITTED_PREFIX:
+            row["prefix"] = e["prefix"]
+        return row
+
+    def to_dict(self) -> dict:
+        """Return the config-dict form (compiled payloads, sorted by name —
+        deterministic). Shape: ``{custom_entity_icons: [...], custom_attribute_icons: [...]}``."""
+        out: dict = {}
+        for key, registry in (("custom_entity_icons", self._entity),
+                              ("custom_attribute_icons", self._attribute)):
+            if registry:
+                out[key] = [self._entry_dict(n, registry[n]) for n in sorted(registry)]
+        return out
+
+    def export_catalog(self, filepath: Union[str, Path], *, format: str = "yaml",
+                       cascade_mode: Optional[str] = None) -> str:
+        """Write the catalog as a standalone config file (Pillow-free to consume).
+
+        *format* is ``'yaml'`` (default) or ``'json'``. *cascade_mode* writes a
+        ``cascade: {mode: ...}`` block (``merge``/``wipe``/``lock``/``delete``) so
+        the file self-describes how it layers. Deterministic — no timestamp.
+        """
+        if format not in ("yaml", "json"):
+            raise ValueError(f"format must be 'yaml' or 'json', got {format!r}")
+        doc: dict = {"_meta": {"format": CATALOG_FORMAT, "version": CATALOG_VERSION}}
+        if cascade_mode:
+            doc["cascade"] = {"mode": cascade_mode}
+        doc.update(self.to_dict())
+        return _dump_doc(doc, Path(filepath), format)
+
+    def include_in_config(self, config_path: Union[str, Path], *,
+                          format: Optional[str] = None) -> str:
+        """Fold this catalog's baked icons into an existing config file in place.
+
+        Reads *config_path* (or starts empty if absent), upserts the two icon
+        sections by name, and writes it back. Lets a user keep one org config
+        instead of juggling a separate catalog file.
+        """
+        path = Path(config_path)
+        doc = _load_catalog_doc(path) if path.exists() else {}
+        mine = self.to_dict()
+        for key in ("custom_entity_icons", "custom_attribute_icons"):
+            if key in mine:
+                merged = {e["name"]: e for e in (doc.get(key) or [])}
+                for row in mine[key]:
+                    merged[row["name"]] = row
+                doc[key] = list(merged.values())
+        fmt = format or ("json" if str(path).lower().endswith(".json") else "yaml")
+        return _dump_doc(doc, path, fmt)
+
+    # ── loading ───────────────────────────────────────────────────────────
+    def _load_entry(self, section: str, entry: dict) -> None:
+        registry = self._entity if section == "custom_entity_icons" else self._attribute
+        name = entry["name"]
+        prefix = entry.get("prefix", EMITTED_PREFIX)
+        if "data" in entry and "datalength" in entry:   # compiled — no Pillow
+            emitted = f"{prefix}{name}"
+            err = validate_icon_name(emitted)
+            if err:
+                raise ValueError(f"custom icon name {emitted!r}: {err}")
+            registry[str(name)] = {"emitted": emitted, "prefix": prefix,
+                                   "data": entry["data"], "datalength": entry["datalength"]}
+        elif "image" in entry:                           # source — may need Pillow
+            self._bake_into(registry, name, entry["image"], prefix,
+                            bool(entry.get("printer", False)))
+        else:
+            raise ValueError(
+                f"icon catalog entry {name!r} has neither 'data' nor 'image'"
+            )
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "IconCatalog":
+        """Build a catalog from a config-dict (compiled or ``image`` entries)."""
+        cat = cls()
+        for section in ("custom_entity_icons", "custom_attribute_icons"):
+            for entry in (d.get(section) or []):
+                cat._load_entry(section, entry)
+        return cat
+
+    @classmethod
+    def from_file(cls, path: Union[str, Path]) -> "IconCatalog":
+        """Load a single catalog/config file (YAML or JSON)."""
+        return cls.from_dict(_load_catalog_doc(path))
+
+    @classmethod
+    def from_files(cls, paths: Iterable[Union[str, Path]]) -> "IconCatalog":
+        """Load and merge several catalogs left-to-right (later wins by name)."""
+        cat = cls()
+        for p in paths:
+            other = cls.from_file(p)
+            cat._entity.update(other._entity)
+            cat._attribute.update(other._attribute)
+        return cat

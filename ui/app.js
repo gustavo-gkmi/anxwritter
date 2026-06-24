@@ -21,6 +21,8 @@ const MACRO_GROUPS = [
     sections: ['palettes', 'legend_items'] },
   { label: 'Semantic catalogue',
     sections: ['semantic_entities', 'semantic_links', 'semantic_properties'] },
+  { label: 'Custom icons',
+    sections: ['custom_entity_icons', 'custom_attribute_icons'] },
 ];
 
 // Flat order — derived from MACRO_GROUPS so it can't drift.
@@ -43,6 +45,8 @@ const SECTION_LABEL = {
   semantic_entities: 'Semantic entities',
   semantic_links: 'Semantic links',
   semantic_properties: 'Semantic properties',
+  custom_entity_icons: 'Custom entity icons',
+  custom_attribute_icons: 'Custom attribute icons',
 };
 
 const SECTION_HINT = {
@@ -62,6 +66,8 @@ const SECTION_HINT = {
   semantic_entities: 'Custom entity semantic types for the embedded i2 LibraryCatalogue.',
   semantic_links: 'Custom link semantic types.',
   semantic_properties: 'Custom property semantic types (attribute schema).',
+  custom_entity_icons: 'Embed your own images as entity-type / per-entity icons. Reference by name from entity_types.icon_file or an entity icon. Images are baked to BMP in your browser (no upload).',
+  custom_attribute_icons: 'Embed your own images as attribute-class icons. Reference by name from attribute_classes.icon_file. Baked in-browser.',
 };
 
 // Virtual sections: UI-only top-level entries that don't exist in the schema's
@@ -519,6 +525,9 @@ function renderSection(name, spec) {
   } else if (spec.type === 'list-of-text') {
     if (!Array.isArray(CONFIG[name])) CONFIG[name] = [];
     wrap.appendChild(renderListOfPrimitive(CONFIG[name], 'text'));
+  } else if (spec.type === 'custom_icons') {
+    if (!Array.isArray(CONFIG[name])) CONFIG[name] = [];
+    wrap.appendChild(renderCustomIcons(CONFIG[name]));
   } else {
     const p = document.createElement('p');
     p.textContent = `(unsupported section shape: ${JSON.stringify(spec)})`;
@@ -1137,6 +1146,97 @@ function renderListOfPrimitive(list, kind) {
   return wrap;
 }
 
+// ── Custom icons (client-side baking) ──────────────────────────────────
+// Each entry is { name, image: 'data:image/bmp;base64,...', prefix? }. The
+// image is baked to a 24-bit BMP in the browser (icon_bake.js) so it's already
+// "baked" and passes the library's config gate. zlib compression is the
+// library's job at build time.
+
+function renderCustomIcons(list) {
+  const wrap = document.createElement('div');
+  wrap.className = 'list-prim custom-icons';
+  const inner = document.createElement('div');
+  wrap.appendChild(inner);
+
+  const rebuild = () => {
+    inner.innerHTML = '';
+    list.forEach((entry, idx) => {
+      if (!entry || typeof entry !== 'object') return;
+      const row = document.createElement('div');
+      row.className = 'item icon-row';
+
+      const preview = document.createElement('img');
+      preview.className = 'icon-preview';
+      preview.alt = '';
+      preview.style.cssText = 'width:32px;height:32px;object-fit:contain;background:#ddd;border:1px solid #bbb;border-radius:3px;flex:0 0 auto;';
+      if (entry.image) preview.src = entry.image;
+      row.appendChild(preview);
+
+      const nameInp = document.createElement('input');
+      nameInp.type = 'text';
+      nameInp.placeholder = 'name';
+      if (entry.name) nameInp.value = entry.name;
+      nameInp.addEventListener('input', () => { entry.name = nameInp.value; markUnset(nameInp); });
+      markUnset(nameInp);
+      row.appendChild(nameInp);
+
+      const prefixInp = document.createElement('input');
+      prefixInp.type = 'text';
+      prefixInp.placeholder = 'prefix (anxW_)';
+      prefixInp.style.maxWidth = '8rem';
+      if (entry.prefix !== undefined) prefixInp.value = entry.prefix;
+      prefixInp.addEventListener('input', () => {
+        if (prefixInp.value === '') delete entry.prefix; else entry.prefix = prefixInp.value;
+      });
+      row.appendChild(prefixInp);
+
+      const replace = document.createElement('label');
+      replace.className = 'ghost';
+      replace.style.cssText = 'cursor:pointer;white-space:nowrap;';
+      replace.textContent = entry.image ? '↺ image' : '+ image';
+      const file = document.createElement('input');
+      file.type = 'file'; file.accept = 'image/*'; file.style.display = 'none';
+      file.addEventListener('change', () => {
+        const f = file.files && file.files[0];
+        if (!f) return;
+        window.IconBake.bakeFile(f).then(uri => {
+          entry.image = uri; rebuild(); refreshUI();
+        }).catch(err => alert('Could not bake image: ' + err.message));
+      });
+      replace.appendChild(file);
+      row.appendChild(replace);
+
+      const del = document.createElement('button');
+      del.type = 'button'; del.className = 'danger'; del.textContent = '×';
+      del.addEventListener('click', () => { list.splice(idx, 1); rebuild(); refreshUI(); });
+      row.appendChild(del);
+
+      inner.appendChild(row);
+    });
+  };
+  rebuild();
+
+  const add = document.createElement('label');
+  add.className = 'ghost add-row';
+  add.style.cursor = 'pointer';
+  add.textContent = '+ Add icon (pick an image)';
+  const addFile = document.createElement('input');
+  addFile.type = 'file'; addFile.accept = 'image/*'; addFile.style.display = 'none';
+  addFile.addEventListener('change', () => {
+    const f = addFile.files && addFile.files[0];
+    if (!f) return;
+    window.IconBake.bakeFile(f).then(uri => {
+      const base = (f.name || 'icon').replace(/\.[^.]+$/, '').replace(/[<>:"/\\|?*,]/g, '_');
+      list.push({ name: base, image: uri });
+      addFile.value = '';
+      rebuild(); refreshUI();
+    }).catch(err => alert('Could not bake image: ' + err.message));
+  });
+  add.appendChild(addFile);
+  wrap.appendChild(add);
+  return wrap;
+}
+
 // ── Quick filter ───────────────────────────────────────────────────────
 // Substring match on field name + help text. Non-matching fields dim;
 // containers dim only when no descendant field matches (so a section with
@@ -1220,6 +1320,10 @@ function countSection(name) {
   if (spec.type === 'list-of-text') {
     const list = Array.isArray(slice) ? slice : [];
     return { set: list.filter(v => v !== null && v !== undefined && v !== '').length, total: list.length };
+  }
+  if (spec.type === 'custom_icons') {
+    const list = Array.isArray(slice) ? slice : [];
+    return { set: list.filter(r => r && r.name && r.image).length, total: list.length };
   }
   return { set: 0, total: 0 };
 }
