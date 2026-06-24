@@ -115,6 +115,16 @@ window.HELP = {
   "GeoMapCfg.data_file":          "Path to an external JSON or YAML file with the same {key: [lat, lon]} shape. Relative paths resolve against the config file's directory.",
   "GeoMapCfg.accent_insensitive": "Fold Unicode diacritics during matching — 'São Paulo', 'SAO PAULO', and 'sao paulo' all match the same key. Default: true. Set false for strict matching.",
 
+  // ── IconMapCfg / IconRule ──────────────────────────────────────────
+  "IconMapCfg.rules":             "Ordered list of icon-mapping rules. Precedence is by tier: explicit per-entity icon > id rule > typed attribute rule > untyped attribute rule; within one tier the last matching rule wins. Entity-only (Icon / EventFrame / ThemeLine).",
+  "IconRule.match":               "'attribute' (default) maps an attribute value → icon; 'id' maps an entity id → icon. On an id rule, default / default_when_absent / type are rejected.",
+  "IconRule.attribute_name":      "Entity attribute to look up (required for match='attribute'). The attribute's value is matched against the mapping keys.",
+  "IconRule.type":                "Optional entity-type filter — restrict this rule to one entity type (e.g. 'BankAccount'). Must reference a registered or observed type. Attribute rules only.",
+  "IconRule.mapping":             "Lookup of attribute value (or entity id) → bare icon name. Icon names resolve like the per-entity Icon.icon field: native/pre-installed ANB key, registered entity-type name, or registered custom icon name.",
+  "IconRule.default":             "Icon used when the attribute is present but its value isn't in the mapping. Omit to skip (leave the type default). Attribute rules only.",
+  "IconRule.default_when_absent": "Icon used when the entity lacks the attribute entirely. Omit to skip. Attribute rules only. (To require the attribute, use EntityType.enforce.required_attributes instead.)",
+  "IconRule.strict_match":        "Match attribute values exactly. Default false = case- and accent-insensitive (folds like geo_map / categorical styling).",
+
   // ── CategoricalStyleCfg ────────────────────────────────────────────
   "CategoricalStyleCfg.line_color": "Link line color for this category value.",
   "CategoricalStyleCfg.line_width": "Link line thickness (integer) for this category value.",

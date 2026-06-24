@@ -322,5 +322,44 @@ window.validateConfig = function validateConfig(CONFIG) {
     });
   }
 
+  // ── 11. icon_map rules (extra_cfg.icon_map) ──────────────────────────
+  // Mirrors validation.validate_icon_map: match enum, non-empty mapping,
+  // id rules reject default/default_when_absent/type, attribute rules need
+  // attribute_name, and a type filter must reference a known entity type.
+  const iconMap = CONFIG.settings &&
+                  CONFIG.settings.extra_cfg &&
+                  CONFIG.settings.extra_cfg.icon_map;
+  const iconRules = (iconMap && Array.isArray(iconMap.rules)) ? iconMap.rules : [];
+  iconRules.forEach((rule, idx) => {
+    if (!rule || typeof rule !== 'object') return;
+    const base = `settings.extra_cfg.icon_map.rules[${idx}]`;
+    const match = (rule.match || 'attribute');
+    if (match !== 'attribute' && match !== 'id') {
+      push(`${base}.match`, `match must be 'attribute' or 'id', got "${match}".`);
+      return;
+    }
+    const mapping = rule.mapping;
+    const hasMapping = mapping && typeof mapping === 'object' &&
+      Object.keys(mapping).length > 0;
+    if (!hasMapping) {
+      push(`${base}.mapping`, `A non-empty 'mapping' is required.`);
+    }
+    if (match === 'id') {
+      for (const f of ['default', 'default_when_absent', 'type']) {
+        if (rule[f] != null && rule[f] !== '') {
+          push(`${base}.${f}`, `'${f}' is only valid on attribute rules, not match='id'.`);
+        }
+      }
+      return;
+    }
+    // attribute rule
+    if (!rule.attribute_name) {
+      push(`${base}.attribute_name`, `'attribute_name' is required for match='attribute'.`);
+    }
+    if (rule.type && etNames.size && !etNames.has(rule.type)) {
+      push(`${base}.type`, `Type "${rule.type}" is not registered in entity_types.`);
+    }
+  });
+
   return errors;
 };

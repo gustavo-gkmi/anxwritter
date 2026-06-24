@@ -82,6 +82,27 @@ def test_link_styling_builds(link_styling_module, tmp_path, monkeypatch):
 
 
 @pytest.fixture(scope="module")
+def icon_map_module():
+    sys.path.insert(0, str(EXAMPLES_DIR.parent))
+    try:
+        mod = importlib.import_module("examples.icon_map")
+    finally:
+        sys.path.pop(0)
+    return mod
+
+
+def test_icon_map_builds(icon_map_module, tmp_path, monkeypatch):
+    """The attribute/id → icon walkthrough builds clean."""
+    monkeypatch.chdir(tmp_path)
+
+    chart = icon_map_module.build()
+    path = chart.to_anx(tmp_path / "icon_map")
+
+    assert Path(path).exists(), f"Expected .anx file at {path}"
+    assert Path(path).stat().st_size > 0
+
+
+@pytest.fixture(scope="module")
 def display_synthesizers_module():
     sys.path.insert(0, str(EXAMPLES_DIR.parent))
     try:

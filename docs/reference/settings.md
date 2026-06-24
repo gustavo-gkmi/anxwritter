@@ -87,6 +87,7 @@ These fields control anxwritter behavior only. They are NOT written to the ANX X
 | `layout_scale` | `Optional[float]` | `None` (= `1.0`) | Uniform spread multiplier applied to every layout algorithm. `2.0` doubles the distance between entities; `0.5` halves it. Useful when default spacing feels too tight or too loose for a particular chart. Pinned entity positions are absolute and ignore `layout_scale`. Non-positive or non-numeric values silently fall back to `1.0`. |
 | `link_arc_offset` | `Optional[int]` | `None` (= `20`) | Default pixel offset between parallel links sharing the same entity pair. Set to `0` to disable auto-spacing. An explicit `offset` on a `Link` always wins. |
 | `geo_map` | `Optional[GeoMapCfg]` | `None` | Geographic positioning configuration. Maps entity attribute values to lat/lon coordinates for canvas positioning and/or ANB Esri Maps integration. See `GeoMapCfg` fields below. |
+| `icon_map` | `Optional[IconMapCfg]` | `None` | Attribute-value / id → icon mapping. Sets each matching entity's icon at build time from a central lookup, instead of setting `icon=` per entity. See `IconMapCfg` / `IconRule` fields below. |
 
 ### `GeoMapCfg` fields
 
@@ -102,6 +103,72 @@ These fields control anxwritter behavior only. They are NOT written to the ANX X
 | `data` | `Optional[Dict[str, List[float]]]` | `None` | Inline lookup: `{key: [lat, lon]}`. |
 | `data_file` | `Optional[str]` | `None` | Path to an external JSON or YAML file with the same shape as `data`. Inline `data` takes precedence on key conflicts. |
 | `accent_insensitive` | `Optional[bool]` | `None` (= `True`) | Fold Unicode diacritics during matching, so `São Paulo`, `SAO PAULO`, and `sao paulo` all match the same key. Applied symmetrically to lookup keys and entity attribute values. Set to `False` for strict matching when your keys intentionally distinguish accented and unaccented forms. |
+
+### `IconMapCfg` / `IconRule` fields
+
+`IconMapCfg` (in `anxwritter.models`) maps entity **attribute values** or **ids**
+to icons, the same way `geo_map` resolves coordinates — keep one central lookup
+instead of setting `icon=` on every entity. It is a chart-level synthesizer
+(same family as `geo_map` / `styling` / `display_attribute`), applied before
+icon resolution. **Entity-only**, and only on representations that carry an icon
+(`Icon`, `EventFrame`, `ThemeLine`); other representations and links are
+skipped.
+
+Pass either an `IconMapCfg` instance or a nested dict to `extra_cfg.icon_map`.
+`IconMapCfg` has a single field, `rules` (a list of `IconRule`). Builder:
+`chart.add_icon_map_rule(...)`.
+
+The mapped value is a **bare icon name**, resolved exactly like the per-entity
+`Icon.icon` field: a native / pre-installed ANB key, a registered entity-type
+name (translated to its `icon_file`), or a registered **custom icon** name
+(see [custom-icons.md](custom-icons.md)). Icon *values* are not validated — ANB
+icon keys aren't enumerable.
+
+**`IconRule` fields:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `match` | `Optional[str]` | `None` (= `'attribute'`) | `'attribute'` looks up `attribute_name`'s value in `mapping`; `'id'` looks up the entity `id`. |
+| `attribute_name` | `Optional[str]` | `None` | Entity attribute to look up. Required when `match='attribute'`. |
+| `type` | `Optional[str]` | `None` | Optional entity-type filter (attribute rules only). Must reference a registered or observed entity type. |
+| `mapping` | `Dict[str, str]` | `{}` | Lookup of attribute value (or id) → icon name. Required (non-empty). |
+| `default` | `Optional[str]` | `None` | Icon used when the attribute is **present but its value isn't in `mapping`**. Omit to skip. Attribute rules only. |
+| `default_when_absent` | `Optional[str]` | `None` | Icon used when the entity **lacks the attribute entirely**. Omit to skip. Attribute rules only. |
+| `strict_match` | `Optional[bool]` | `None` (= `False`) | Match attribute values exactly. Default folds case and Unicode diacritics (like `geo_map` / categorical styling). |
+
+**Precedence** (highest wins): explicit per-entity `icon` > id rule > typed
+attribute rule > untyped attribute rule. Within a single tier, the **last
+matching rule wins**. Precedence is by tier, not raw list order — a lower-tier
+rule declared later never overrides a higher-tier match.
+
+**Outcomes for an attribute rule:** value in `mapping` → mapped icon; value
+present but unrecognised → `default` (or skip); attribute absent →
+`default_when_absent` (or skip). The rule is purely presentational and never
+raises on data — to *require* an attribute be present, use
+`EntityType.enforce.required_attributes` (see [validation.md](validation.md)).
+
+There is deliberately **no `data_file`** field: an external rule table is just
+another `--config` layer, which can also carry the `custom_entity_icons` the
+rules reference.
+
+```yaml
+extra_cfg:
+  icon_map:
+    rules:
+      - match: attribute
+        attribute_name: bank_code
+        type: Bank Account            # optional type filter
+        mapping: {'341': money, '237': money}
+        default: question             # present but unrecognised
+        default_when_absent: box      # attribute missing entirely
+      - match: id
+        mapping: {acct_1: star}       # id beats the attribute rule above
+```
+
+Validation errors are reported as `icon_map_invalid` (bad `match`, empty
+`mapping`, `default`/`default_when_absent`/`type` on an id rule, an attribute
+rule missing `attribute_name`, or a `type` filter that references an unknown
+entity type).
 
 ---
 
@@ -319,6 +386,7 @@ Every error dict contains a `type`, a human-readable `message`, and (almost alwa
 | `invalid_merge_behaviour` | `AttributeClass.merge_behaviour` is unknown or invalid for the declared attribute type. |
 | `invalid_paste_behaviour` | `AttributeClass.paste_behaviour` is unknown or invalid for the declared attribute type. |
 | `invalid_geo_map` | `extra_cfg.geo_map` configuration is invalid -- missing `attribute_name`, unknown `mode`, non-positive `width`/`height`, negative `spread_radius`, no `data` or `data_file`, or out-of-range lat/lon coordinates. |
+| `icon_map_invalid` | `extra_cfg.icon_map` rule is invalid -- unknown `match`, empty `mapping`, `default`/`default_when_absent`/`type` on an id rule, attribute rule missing `attribute_name`, or a `type` filter referencing an unknown entity type. |
 | `config_conflict` | Data file redefines a config-locked name with different specs (only when a config file was applied). Adds `section`, `name`, `config_value`, `data_value` keys to the error dict. |
 | `palette_unknown_ref` | Palette references an entity type, link type, or attribute class name that is not registered. |
 | `palette_invalid_class` | Palette references an attribute class with `is_user=False` or `user_can_add=False`. ANB rejects these. |

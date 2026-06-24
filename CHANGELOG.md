@@ -8,6 +8,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
 > changes ship in minor releases with notes here, as below.
 
+## [1.21.0] - 2026-06-24
+
+### Added
+
+- **Attribute / id → icon mapping** (`extra_cfg.icon_map`) — set entity icons
+  from a central lookup instead of `icon=` on every entity, the same way
+  `geo_map` resolves coordinates. A chart-level synthesizer (same family as
+  `geo_map` / `styling` / `display_attribute`), applied before icon resolution.
+  - `IconMapCfg(rules=[IconRule(...)])` (both exported at top level). Each
+    `IconRule` is either `match='attribute'` (look up `attribute_name`'s value
+    in `mapping`, with optional `type` filter, `default` for an unrecognised
+    value, and `default_when_absent` for a missing attribute) or `match='id'`
+    (look up the entity `id` in `mapping`). Builder: `chart.add_icon_map_rule()`.
+  - The mapped value is a **bare icon name** resolved exactly like the
+    per-entity `Icon.icon` field — native / pre-installed ANB key, registered
+    entity-type name (→ its `icon_file`), or registered **custom icon** name
+    (1.19.0). Icon values are not validated (ANB keys aren't enumerable).
+  - **Precedence** (highest wins): explicit per-entity `icon` > id rule > typed
+    attribute rule > untyped attribute rule; within a tier the last matching
+    rule wins. Precedence is by tier, not raw list order.
+  - Matching is **case- and accent-insensitive by default** (folds like
+    `styling.categorical` / `geo_map`); set `strict_match=True` for exact.
+  - **Entity-only**, applied to representations that carry an icon (Icon,
+    EventFrame, ThemeLine). Purely presentational and never raises on data — to
+    *require* an attribute be present, use
+    `EntityType.enforce.required_attributes`.
+  - No `data_file` field: an external rule table is just another `--config`
+    layer, which can also carry the `custom_entity_icons` the rules reference.
+  - Round-trips via `to_config_dict`; UI config builder gains the section.
+  - New `ErrorType.ICON_MAP_INVALID`. New example `examples/icon_map.py`. Docs in
+    `docs/reference/settings.md`.
+
 ## [1.20.0] - 2026-06-24
 
 ### Added

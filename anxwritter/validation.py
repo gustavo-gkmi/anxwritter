@@ -1384,6 +1384,98 @@ def validate_geo_map(
     return errors
 
 
+# ── Icon-map validation (extra_cfg.icon_map) ─────────────────────────────────
+
+
+def validate_icon_map(
+    icon_map: Any,
+    entities: List['_BaseEntity'],
+    entity_type_names: set,
+) -> List[Dict[str, Any]]:
+    """Validate ``extra_cfg.icon_map`` rules.
+
+    Accepts an ``IconMapCfg`` dataclass or a raw dict. Checks, per rule:
+
+    - ``match`` is ``'attribute'`` (default) or ``'id'``;
+    - attribute rules declare ``attribute_name`` and a non-empty ``mapping``;
+    - id rules declare a non-empty ``mapping`` and do NOT carry
+      ``default`` / ``default_when_absent`` / ``type`` (meaningless there);
+    - a ``type`` filter references a known entity type (registered via
+      ``add_entity_type`` OR observed on at least one entity).
+
+    Icon *values* are intentionally not validated — ANB icon keys aren't
+    enumerable, matching the per-entity ``icon`` field.
+    """
+    errors: List[Dict[str, Any]] = []
+    if icon_map is None:
+        return errors
+
+    rules = icon_map.get('rules') if isinstance(icon_map, dict) else getattr(icon_map, 'rules', None)
+    rules = rules or []
+    base = 'settings.extra_cfg.icon_map.rules'
+
+    known_types = set(entity_type_names) | {e.type for e in entities if e.type}
+
+    def _g(rule: Any, attr: str, default=None):
+        return rule.get(attr, default) if isinstance(rule, dict) else getattr(rule, attr, default)
+
+    for i, rule in enumerate(rules):
+        loc = f'{base}[{i}]'
+        match = (_g(rule, 'match') or 'attribute')
+        match_l = str(match).lower()
+        mapping = _g(rule, 'mapping') or {}
+
+        if match_l not in ('attribute', 'id'):
+            errors.append({
+                'type': ErrorType.ICON_MAP_INVALID.value,
+                'message': f"icon_map rule[{i}].match must be 'attribute' or 'id', got {match!r}",
+                'location': f'{loc}.match',
+            })
+            continue
+
+        if not mapping:
+            errors.append({
+                'type': ErrorType.ICON_MAP_INVALID.value,
+                'message': f"icon_map rule[{i}] requires a non-empty 'mapping'",
+                'location': f'{loc}.mapping',
+            })
+
+        if match_l == 'id':
+            for forbidden in ('default', 'default_when_absent', 'type'):
+                if _g(rule, forbidden) is not None:
+                    errors.append({
+                        'type': ErrorType.ICON_MAP_INVALID.value,
+                        'message': (
+                            f"icon_map rule[{i}] is a match='id' rule; "
+                            f"{forbidden!r} is only valid on attribute rules"
+                        ),
+                        'location': f'{loc}.{forbidden}',
+                    })
+            continue
+
+        # attribute rule
+        if not _g(rule, 'attribute_name'):
+            errors.append({
+                'type': ErrorType.ICON_MAP_INVALID.value,
+                'message': f"icon_map rule[{i}] (match='attribute') requires 'attribute_name'",
+                'location': f'{loc}.attribute_name',
+            })
+
+        tfilter = _g(rule, 'type')
+        if tfilter and tfilter not in known_types:
+            errors.append({
+                'type': ErrorType.ICON_MAP_INVALID.value,
+                'message': (
+                    f"icon_map rule[{i}].type {tfilter!r} is not registered in "
+                    f"entity_types and no entity has this type (declare via "
+                    f"add_entity_type, fix the typo, or omit the type filter)"
+                ),
+                'location': f'{loc}.type',
+            })
+
+    return errors
+
+
 # ── Styling validation (extra_cfg.styling.links.{intensity,categorical}) ────
 
 

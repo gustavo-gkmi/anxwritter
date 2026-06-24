@@ -648,6 +648,20 @@ function renderField(field, obj, parentSetter, defName, parentPath, dataPath) {
     return wrap;
   }
 
+  // String map — Dict<str, str> (e.g. icon_map mapping value/id → icon name)
+  if (field.type === 'str_map') {
+    wrap.classList.add('full');
+    const label = document.createElement('label');
+    label.textContent = `${field.name} (value/id → icon name)`;
+    attachHelpButton(label, defName, field);
+    wrap.appendChild(label);
+    if (typeof obj[field.name] !== 'object' || obj[field.name] === null || Array.isArray(obj[field.name])) {
+      obj[field.name] = {};
+    }
+    wrap.appendChild(renderStrMap(obj[field.name]));
+    return wrap;
+  }
+
   // Geo data — Dict<str, [lat, lon]>
   if (field.type === 'geo_data') {
     wrap.classList.add('full');
@@ -1100,6 +1114,66 @@ function renderGeoData(dict) {
   return wrap;
 }
 
+// ── String map — Dict<str, str> ─────────────────────────────────────────
+function renderStrMap(dict) {
+  const wrap = document.createElement('div');
+  const inner = document.createElement('div');
+  wrap.appendChild(inner);
+
+  const rebuild = () => {
+    inner.innerHTML = '';
+    for (const key of Object.keys(dict)) {
+      const row = document.createElement('div');
+      row.style.display = 'flex'; row.style.gap = '4px'; row.style.marginBottom = '4px';
+
+      const keyInput = document.createElement('input');
+      keyInput.type = 'text';
+      keyInput.value = key;
+      keyInput.placeholder = 'attribute value / id';
+      keyInput.style.flex = '1';
+
+      const valInput = document.createElement('input');
+      valInput.type = 'text';
+      valInput.value = dict[key] ?? '';
+      valInput.placeholder = 'icon name';
+      valInput.style.flex = '1';
+
+      const del = document.createElement('button');
+      del.type = 'button'; del.className = 'danger';
+      del.textContent = '×';
+      del.addEventListener('click', () => { delete dict[key]; rebuild(); });
+
+      valInput.addEventListener('input', () => { dict[key] = valInput.value; });
+      keyInput.addEventListener('blur', () => {
+        const newKey = keyInput.value.trim();
+        if (newKey && newKey !== key && !(newKey in dict)) {
+          dict[newKey] = dict[key];
+          delete dict[key];
+          rebuild();
+        } else if (!newKey) { keyInput.value = key; }
+      });
+
+      row.appendChild(keyInput);
+      row.appendChild(valInput);
+      row.appendChild(del);
+      inner.appendChild(row);
+    }
+  };
+  rebuild();
+
+  const add = document.createElement('button');
+  add.type = 'button'; add.className = 'ghost add-row';
+  add.textContent = '+ Add mapping';
+  add.addEventListener('click', () => {
+    let n = 1;
+    while ((`value_${n}`) in dict) n++;
+    dict[`value_${n}`] = '';
+    rebuild();
+  });
+  wrap.appendChild(add);
+  return wrap;
+}
+
 // ── List of primitives ──────────────────────────────────────────────────
 
 function renderListOfPrimitive(list, kind) {
@@ -1291,6 +1365,7 @@ function countDataclass(defName, slice, excludes) {
       const sub = countDataclass(field.ref, val);
       set += sub.set; total += sub.total;
     } else if (field.list_of || field.type === 'dict_of' || field.type === 'geo_data' ||
+               field.type === 'str_map' ||
                field.type === 'list-of-text' || field.type === 'list-of-number' || field.type === 'list-of-color') {
       // Not a primitive leaf — skip per spec.
     } else {
@@ -1520,6 +1595,7 @@ function describeFieldType(field) {
   if (field.type === 'dict_of') return `dict<string, ${field.value_ref}>`;
   if (field.type === 'enum') return `enum ${field.enum}`;
   if (field.type === 'geo_data') return 'dict<place, [lat, lon]>';
+  if (field.type === 'str_map') return 'dict<value/id, icon name>';
   if (field.type === 'select') return `select (${(field.options || []).join(' / ')})`;
   if (field.type === 'list-of-text') return 'list of text';
   if (field.type === 'list-of-number') return 'list of number';

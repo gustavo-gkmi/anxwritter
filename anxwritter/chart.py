@@ -57,7 +57,7 @@ from .models import (
     SemanticEntity, SemanticLink, SemanticProperty,
     GradeCollection, StrengthCollection,
     Settings, Font, Frame, Show, TimeZone, CustomProperty,
-    Validator,
+    Validator, IconMapCfg, IconRule,
 )
 from .timing import PhaseTimer
 from .utils import _enum_val
@@ -73,6 +73,7 @@ from .transforms import (
     match_geo_entities,
     compute_geo_positions,
     inject_geo_attributes,
+    apply_icon_map,
     apply_link_categorical,
     apply_link_intensity,
     generate_styling_legend,
@@ -959,6 +960,21 @@ class ANXChart(_ConfigLayeringMixin):
                 DisplayLabel(**kwargs)
             )
 
+    def add_icon_map_rule(self, obj=None, **kwargs) -> None:
+        """Add an :class:`IconRule` to ``extra_cfg.icon_map.rules``.
+
+        Pass an ``IconRule`` instance or keyword args matching its fields
+        (``match``, ``attribute_name``, ``type``, ``mapping``, ``default``,
+        ``default_when_absent``, ``strict_match``). Creates the
+        :class:`IconMapCfg` container on first use. Rules are appended in order;
+        precedence is by tier (id > typed-attribute > untyped-attribute,
+        last-wins within a tier). Validation runs at :meth:`validate` time.
+        """
+        rule = obj if isinstance(obj, IconRule) else IconRule(**kwargs)
+        if self.settings.extra_cfg.icon_map is None:
+            self.settings.extra_cfg.icon_map = IconMapCfg()
+        self.settings.extra_cfg.icon_map.rules.append(rule)
+
     def add_entity_type(self, name_or_obj=None, **kwargs) -> None:
         """Add or update an EntityType. Later calls with the same ``name``
         replace the earlier entry."""
@@ -1140,6 +1156,7 @@ class ANXChart(_ConfigLayeringMixin):
             validate_palettes,
             validate_semantic_types,
             validate_geo_map,
+            validate_icon_map,
             validate_styling,
             validate_display_attribute,
             validate_display_label,
@@ -1252,6 +1269,13 @@ class ANXChart(_ConfigLayeringMixin):
         # Validate geo_map configuration
         errors.extend(validate_geo_map(
             self.settings.extra_cfg.geo_map, self._entities
+        ))
+
+        # Validate icon_map configuration
+        errors.extend(validate_icon_map(
+            self.settings.extra_cfg.icon_map,
+            self._entities,
+            set(et_names.keys()),
         ))
 
         # Validate styling (extra_cfg.styling.links.{intensity,categorical})
@@ -2002,6 +2026,12 @@ class ANXChart(_ConfigLayeringMixin):
         if card_errors:
             raise ANXValidationError(card_errors)
 
+        # ── Icon map: compute per-entity icon overrides (no mutation) ─────
+        _icon_overrides: Dict[str, str] = {}
+        if s.extra_cfg.icon_map is not None:
+            with timer.phase("Icon-map resolve"):
+                _icon_overrides = apply_icon_map(self._entities, s.extra_cfg.icon_map)
+
         # ── Resolve all entities (no user-object mutation) ─────────────
         _t0_entities = time.perf_counter()
         resolved_entities = []
@@ -2013,6 +2043,7 @@ class ANXChart(_ConfigLayeringMixin):
                 entity,
                 extra_cards=_loose_entity_cards.get(entity.id, []),
                 semantic_guid=_entity_semantic_guids.get(entity.id),
+                icon_override=_icon_overrides.get(str(entity.id)),
             )
             if re is None:
                 continue  # dedup — already registered
