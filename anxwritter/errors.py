@@ -78,6 +78,9 @@ class ErrorType(str, Enum):
     # Geo-map errors
     INVALID_GEO_MAP = 'invalid_geo_map'
 
+    # Icon-map errors (extra_cfg.icon_map)
+    ICON_MAP_INVALID = 'icon_map_invalid'
+
     # Custom-icon catalog (1.20.0)
     INVALID_CUSTOM_ICONS_INCLUDE = 'invalid_custom_icons_include'
 

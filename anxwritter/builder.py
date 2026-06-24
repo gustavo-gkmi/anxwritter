@@ -674,7 +674,7 @@ class ANXBuilder:
         return coerce_color(val)
 
     def resolve_entity(self, entity, extra_cards=None,
-                       semantic_guid=None) -> Optional['ResolvedEntity']:
+                       semantic_guid=None, icon_override=None) -> Optional['ResolvedEntity']:
         """Resolve a typed entity object into a ResolvedEntity.
 
         Handles entity dedup, attribute class registration, strength
@@ -687,6 +687,10 @@ class ANXBuilder:
                 with inline cards — avoids mutating the user's entity object.
             semantic_guid: pre-resolved semantic GUID string — avoids
                 monkey-patching the user's entity object.
+            icon_override: icon name from ``extra_cfg.icon_map`` — applied only
+                when the entity has no explicit ``icon`` (explicit wins), then
+                resolved through the same custom-icon / entity-type translation
+                as a per-entity icon.
 
         Side effects: mutates _entity_registry, _att_classes, _strengths,
         _entity_int_ctr.
@@ -721,6 +725,10 @@ class ANXBuilder:
         # Representation style + icon name translation
         representation_style = _entity_style(entity)
         representation_style['strength'] = strength
+        # icon_map override — only when no explicit per-entity icon set
+        # type_icon_name iff entity.icon was set), so explicit always wins.
+        if icon_override is not None and 'type_icon_name' not in representation_style:
+            representation_style['type_icon_name'] = str(icon_override)
         if 'type_icon_name' in representation_style:
             tin = representation_style['type_icon_name']
             if tin in self._custom_entity_icon_names:

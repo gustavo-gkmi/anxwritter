@@ -1,6 +1,6 @@
 window.SCHEMA = {
   "_meta": {
-    "anxwritterVersion": "1.20.0",
+    "anxwritterVersion": "1.21.0",
     "schemaVersion": 1,
     "notes": "Hand-curated. tests/test_ui_schema_sync.py verifies sync with the library."
   },
@@ -182,6 +182,25 @@ window.SCHEMA = {
       ]
     },
 
+    "IconRule": {
+      "dataclass": "IconRule",
+      "fields": [
+        {"name": "match", "type": "select", "options": ["attribute", "id"]},
+        {"name": "attribute_name", "type": "text"},
+        {"name": "type", "type": "text"},
+        {"name": "mapping", "type": "str_map"},
+        {"name": "default", "type": "text"},
+        {"name": "default_when_absent", "type": "text"},
+        {"name": "strict_match", "type": "bool"}
+      ]
+    },
+    "IconMapCfg": {
+      "dataclass": "IconMapCfg",
+      "fields": [
+        {"name": "rules", "list_of": "IconRule"}
+      ]
+    },
+
     "CategoricalStyleCfg": {
       "dataclass": "CategoricalStyleCfg",
       "fields": [
@@ -303,6 +322,7 @@ window.SCHEMA = {
         {"name": "layout_scale", "type": "number"},
         {"name": "link_arc_offset", "type": "number"},
         {"name": "geo_map", "ref": "GeoMapCfg"},
+        {"name": "icon_map", "ref": "IconMapCfg"},
         {"name": "styling", "ref": "StylingCfg"},
         {"name": "display_attribute", "list_of": "DisplayAttribute"},
         {"name": "display_label", "list_of": "DisplayLabel"},

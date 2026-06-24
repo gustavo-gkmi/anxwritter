@@ -239,6 +239,8 @@ def _sample_for_field(field: dict, schema: dict) -> Any:
         return ["blue", "red"]
     if ftype == "geo_data":
         return {"sample_key": [0.0, 0.0]}
+    if ftype == "str_map":
+        return {"sample_key": "sample_icon"}
     if ftype == "any":
         return None  # leave unset — library defaults apply
     return None
@@ -333,6 +335,15 @@ def _apply_overrides(sample: dict) -> dict:
                 inner.pop("name", None)
                 inner.pop("type", None)
                 inner.pop("enforce", None)
+
+    # IconMapCfg rules: the sample generator emits a `type` filter of
+    # "sample_type" (unregistered → invalid) on every attribute rule; drop it
+    # so rules apply untyped. The str_map sample gives a non-empty mapping.
+    icon_map = extra.get("icon_map")
+    if isinstance(icon_map, dict):
+        for rule in (icon_map.get("rules") or []):
+            if isinstance(rule, dict):
+                rule.pop("type", None)
 
     # GeoMapCfg: attribute_name must match an attribute on at least one
     # entity — but the round-trip has no entities, so the geo_map block

@@ -346,6 +346,59 @@ class GeoMapCfg:
 
 
 @dataclass
+class IconRule:
+    """One icon-mapping rule under ``extra_cfg.icon_map.rules``.
+
+    Two ``match`` shapes:
+
+    - ``match='attribute'`` (default): looks up the entity's ``attribute_name``
+      value in ``mapping`` (value → icon name). ``default`` covers a
+      present-but-unrecognised value; ``default_when_absent`` covers an entity
+      that lacks the attribute entirely. Both optional — omitting either means
+      "skip" for that case. An optional ``type`` filter restricts the rule to a
+      single entity type.
+    - ``match='id'``: looks up the entity ``id`` in ``mapping`` (id → icon
+      name). ``default`` / ``default_when_absent`` / ``type`` are not meaningful
+      and are rejected by ``validate()`` (``icon_map_invalid``).
+
+    The mapped value is a bare icon name, resolved exactly like the per-entity
+    ``Icon.icon`` field: a native / pre-installed ANB key, a registered
+    entity-type name (translated to its ``icon_file``), or a registered custom
+    icon name (1.19.0). Icon *values* are not validated — ANB keys aren't
+    enumerable — matching the ``icon`` field.
+
+    Matching is case- and accent-insensitive by default (folds like
+    ``styling.categorical`` / ``geo_map``); set ``strict_match=True`` for exact
+    comparison.
+    """
+    match: Optional[str] = None                  # 'attribute' (default) | 'id'
+    attribute_name: Optional[str] = None         # required when match='attribute'
+    type: Optional[str] = None                   # optional entity-type filter (attribute rules)
+    mapping: Dict[str, str] = field(default_factory=dict)  # value/id → icon name
+    default: Optional[str] = None                # value present but unrecognised → icon (omit = skip)
+    default_when_absent: Optional[str] = None    # attribute absent → icon (omit = skip)
+    strict_match: Optional[bool] = None          # default False (casefold + accent-strip)
+
+
+@dataclass
+class IconMapCfg:
+    """Maps entity attribute values / ids to icons (``extra_cfg.icon_map``).
+
+    A chart-level synthesizer (same family as ``geo_map`` / ``styling`` /
+    ``display_attribute``) that sets each matching entity's icon before icon
+    resolution. Entity-only, applied to representations that carry an icon
+    (Icon, EventFrame, ThemeLine); other representations and links are skipped.
+
+    Precedence (highest wins): explicit per-entity ``icon`` > id rule > typed
+    attribute rule > untyped attribute rule; within a single tier the last
+    matching rule wins. An external rule table is just another ``--config``
+    layer (which can also carry the ``custom_entity_icons`` the rules
+    reference) — there is deliberately no ``data_file`` field.
+    """
+    rules: List[IconRule] = field(default_factory=list)
+
+
+@dataclass
 class CategoricalStyleCfg:
     """One style entry in a categorical styling map.
 
@@ -625,6 +678,7 @@ class ExtraCfg:
     layout_scale: Optional[float] = None           # Uniform spread multiplier across all arrange modes (default 1.0)
     link_arc_offset: Optional[int] = None          # Parallel-link arc offset
     geo_map: Optional[GeoMapCfg] = None            # Geographic positioning
+    icon_map: Optional[IconMapCfg] = None          # Attribute/id → icon mapping
     styling: Optional[StylingCfg] = None           # Data-driven link styling (intensity + categorical)
     display_attribute: List[DisplayAttribute] = field(default_factory=list)  # Template → synthesized text-sibling AC
     display_label: List[DisplayLabel] = field(default_factory=list)  # Template → entity/link label

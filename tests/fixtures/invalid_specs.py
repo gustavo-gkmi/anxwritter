@@ -251,6 +251,27 @@ INVALID_SPECS: List[tuple] = [
         {ErrorType.INVALID_GEO_MAP.value},
     ),
 
+    # ── Invalid icon_map configuration ─────────────────────────────────────
+    (
+        "icon_map_invalid",
+        {
+            "settings": {
+                "extra_cfg": {
+                    "icon_map": {
+                        "rules": [
+                            # attribute rule missing attribute_name
+                            {"match": "attribute", "mapping": {"400": "itau"}},
+                        ]
+                    }
+                }
+            },
+            "entities": {
+                "icons": [{"id": "A", "type": "Person"}]
+            },
+        },
+        {ErrorType.ICON_MAP_INVALID.value},
+    ),
+
     # ── Invalid custom_icons_include value ─────────────────────────────────
     (
         "invalid_custom_icons_include",

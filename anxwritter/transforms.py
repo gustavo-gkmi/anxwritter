@@ -488,6 +488,134 @@ def inject_geo_attributes(
             re.attributes.append(ResolvedAttr('Longitude', lon_ref_id, str(lon)))
 
 
+# ── Icon mapping (attribute value / id → icon) ───────────────────────────────
+
+
+def _icon_rule_tier(rule: Any) -> int:
+    """Precedence tier for an icon rule (higher wins).
+
+    id rule = 3, typed attribute rule = 2, untyped attribute rule = 1.
+    """
+    if (getattr(rule, 'match', None) or 'attribute').lower() == 'id':
+        return 3
+    return 2 if getattr(rule, 'type', None) else 1
+
+
+def _prepare_icon_rule(rule: Any) -> Optional[Dict[str, Any]]:
+    """Pre-normalise one icon rule into a flat dict, or ``None`` to skip it.
+
+    Returns ``None`` for an attribute rule with no ``attribute_name`` (already
+    flagged by ``validate_icon_map``) so the build path stays defensive.
+    """
+    match = (getattr(rule, 'match', None) or 'attribute').lower()
+    mapping = getattr(rule, 'mapping', None) or {}
+    tier = _icon_rule_tier(rule)
+    if match == 'id':
+        # Exact id lookup — ids are identity strings, never folded.
+        return {
+            'match': 'id',
+            'tier': tier,
+            'mapping': {str(k): v for k, v in mapping.items()},
+        }
+    attr_name = getattr(rule, 'attribute_name', None)
+    if not attr_name:
+        return None
+    strict = bool(getattr(rule, 'strict_match', None) or False)
+    fold_accents = not strict
+    fold_case = not strict
+    return {
+        'match': 'attribute',
+        'tier': tier,
+        'attr_norm': fold_key(attr_name, accents=True, case=True),
+        'type': getattr(rule, 'type', None),
+        'mapping': {
+            fold_key(k, accents=fold_accents, case=fold_case): v
+            for k, v in mapping.items()
+        },
+        'default': getattr(rule, 'default', None),
+        'default_when_absent': getattr(rule, 'default_when_absent', None),
+        'fold_accents': fold_accents,
+        'fold_case': fold_case,
+    }
+
+
+def _eval_icon_rule(pr: Dict[str, Any], eid: str, etype: str,
+                    attrs: Dict[str, Any]) -> Optional[str]:
+    """Resolve one prepared rule against one entity → icon name or ``None``.
+
+    ``None`` means the rule does not contribute (no match / no applicable
+    fallback) — the entity is left for lower-precedence rules or the type
+    default.
+    """
+    if pr['match'] == 'id':
+        return pr['mapping'].get(eid)
+
+    # Attribute rule — optional exact type filter first.
+    if pr['type'] is not None and pr['type'] != etype:
+        return None
+
+    # Locate the attribute value by folded name (the name is schema, not data).
+    val = None
+    present = False
+    for k, v in attrs.items():
+        if fold_key(k, accents=True, case=True) == pr['attr_norm']:
+            present = v is not None
+            val = v
+            break
+
+    if not present:
+        return pr['default_when_absent']  # may be None → skip
+    key = fold_key(val, accents=pr['fold_accents'], case=pr['fold_case'])
+    if key in pr['mapping']:
+        return pr['mapping'][key]
+    return pr['default']  # unrecognised value → default or None (skip)
+
+
+def apply_icon_map(entities: List[Any], icon_map: Any) -> Dict[str, str]:
+    """Compute per-entity icon overrides from ``extra_cfg.icon_map`` rules.
+
+    Reads the original entity objects (id / type / attributes); does NOT mutate
+    them. Returns ``{entity_id: icon_name}`` for entities a rule resolves an
+    icon for. Only entities whose representation carries an icon (Icon,
+    EventFrame, ThemeLine — i.e. those exposing an ``icon`` field) are
+    considered.
+
+    Precedence is by tier (id > typed-attribute > untyped-attribute), last-wins
+    within a tier — see :class:`IconMapCfg`. The explicit-per-entity-icon-wins
+    rule is enforced downstream in ``ANXBuilder.resolve_entity`` (the override
+    is applied only when the entity has no explicit ``icon``).
+    """
+    if icon_map is None:
+        return {}
+    rules = getattr(icon_map, 'rules', None) or []
+    prepared = [pr for pr in (_prepare_icon_rule(r) for r in rules) if pr]
+    if not prepared:
+        return {}
+
+    out: Dict[str, str] = {}
+    for entity in entities:
+        if not hasattr(entity, 'icon'):
+            continue  # Box/Circle/TextBlock/Label have no icon field
+        eid = getattr(entity, 'id', None)
+        if not eid:
+            continue
+        eid = str(eid)
+        etype = str(getattr(entity, 'type', '') or '')
+        attrs = getattr(entity, 'attributes', None) or {}
+        best_tier = -1
+        best_icon: Optional[str] = None
+        for pr in prepared:
+            if pr['tier'] < best_tier:
+                continue  # cannot beat a higher tier already chosen
+            icon = _eval_icon_rule(pr, eid, etype, attrs)
+            if icon is not None and pr['tier'] >= best_tier:
+                best_tier = pr['tier']
+                best_icon = icon
+        if best_icon is not None:
+            out[eid] = str(best_icon)
+    return out
+
+
 # ── Multi-attribute display synthesizers (attribute sibling + label) ─────────
 
 _DT_PARSE_FMTS = (
