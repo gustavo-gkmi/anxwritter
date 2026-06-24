@@ -47,7 +47,7 @@ from ._config_layering import (
 from .colors import color_to_colorref
 from .entities import _BaseEntity, Icon, Box, Circle, ThemeLine, EventFrame, TextBlock, Label
 from .enums import DotStyle, Representation
-from .errors import ANXValidationError
+from .errors import ANXValidationError, ErrorType
 from ._i2_interop import LATITUDE_GUID, LONGITUDE_GUID, GRID_REFERENCE_GUID
 from .models import (
     Card, Link, AttributeClass,
@@ -196,6 +196,9 @@ class ANXChart(_ConfigLayeringMixin):
         # Embedded custom icons (1.19.0): bare name -> {emitted, data, datalength}
         self._custom_entity_icons: Dict[str, dict] = {}
         self._custom_attribute_icons: Dict[str, dict] = {}
+        # Custom-icon layering locks (1.20.0): (section, name) -> locked entry.
+        # Set by a lock-mode config layer; a later layer changing it → locked_override.
+        self._custom_icon_locked: Dict[Tuple[str, str], dict] = {}
         self._palettes: List[Palette] = []
         self._datetime_formats: List[DateTimeFormat] = []
         self._semantic_entities: List['SemanticEntity'] = []
@@ -1146,6 +1149,7 @@ class ANXChart(_ConfigLayeringMixin):
             validate_validator_rules,
             validate_validators_config,
             validate_enforce_descriptions,
+            validate_custom_icons_include,
         )
 
         errors: List[Dict[str, Any]] = []
@@ -1310,6 +1314,10 @@ class ANXChart(_ConfigLayeringMixin):
             self._entities, self._links,
             self._validators,
             validator_sources or None,
+        ))
+
+        errors.extend(validate_custom_icons_include(
+            self.settings.extra_cfg.custom_icons_include
         ))
 
         return errors
@@ -1546,24 +1554,159 @@ class ANXChart(_ConfigLayeringMixin):
         """
         self._add_custom_icon(self._custom_attribute_icons, name, image, prefix, printer, 'Attribute')
 
-    def _extract_custom_icons(self, data):
-        """Register ``custom_entity_icons`` / ``custom_attribute_icons`` sections
+    def apply_icon_catalog(self, catalog, *, include=None) -> None:
+        """Merge a baked icon catalog into this chart.
+
+        *catalog* is an :class:`IconCatalog`, a path to an exported catalog/config
+        file, or a config-shaped dict. An :class:`IconCatalog` is merged directly
+        (already baked). A file/dict is treated as a **config layer** — the Pillow
+        gate applies (baked icons only) and a top-level ``cascade.mode`` is
+        honored (``merge`` / ``wipe`` / ``lock`` / ``delete``).
+
+        *include* (``'all'`` / ``'referenced'``), when given, sets
+        ``settings.extra_cfg.custom_icons_include`` for the whole chart.
+        """
+        from .custom_icons import IconCatalog, _load_catalog_doc
+        if include is not None:
+            if include not in ('all', 'referenced'):
+                raise ValueError(
+                    f"include must be 'all' or 'referenced', got {include!r}"
+                )
+            self.settings.extra_cfg.custom_icons_include = include
+
+        if isinstance(catalog, IconCatalog):
+            for name, e in catalog._entity.items():
+                self._custom_entity_icons[str(name)] = dict(e)
+            for name, e in catalog._attribute.items():
+                self._custom_attribute_icons[str(name)] = dict(e)
+            return
+
+        if isinstance(catalog, (str, Path)):
+            data = _load_catalog_doc(catalog)
+        elif isinstance(catalog, dict):
+            data = catalog
+        else:
+            raise TypeError(
+                "catalog must be an IconCatalog, a file path, or a dict"
+            )
+        cleaned, mode = _extract_cascade_meta(data) if data else (data, None)
+        op, wipe, lk = (_CASCADE_MODE_TO_TRIPLE[mode] if mode
+                        else ('merge', False, False))
+        self._extract_custom_icons(cleaned, is_config=True, operation=op,
+                                   wipe_previous=wipe, lock=lk)
+
+    def export_icon_catalog(self, path, *, format='yaml', cascade_mode=None) -> str:
+        """Export this chart's registered custom icons as a standalone catalog
+        file (baked, Pillow-free to consume). Returns the absolute path."""
+        from .custom_icons import IconCatalog
+        cat = IconCatalog()
+        cat._entity = {n: dict(e) for n, e in self._custom_entity_icons.items()}
+        cat._attribute = {n: dict(e) for n, e in self._custom_attribute_icons.items()}
+        return cat.export_catalog(path, format=format, cascade_mode=cascade_mode)
+
+    def _write_custom_icon(self, registry, section, name, entry, lock):
+        """Lock-aware write of one resolved icon entry into *registry*.
+
+        A later layer changing a leaf locked by an earlier ``lock=True`` layer
+        records a ``locked_override`` and the locked value is preserved.
+        """
+        key = (section, name)
+        locked = self._custom_icon_locked.get(key)
+        if locked is not None and locked != entry:
+            self._config_conflicts.append({
+                'type': ErrorType.LOCKED_OVERRIDE.value,
+                'section': section, 'name': name,
+                'message': (
+                    f"cannot change custom icon {section}.{name}: it was locked "
+                    f"by an earlier lock layer."
+                ),
+            })
+            return
+        registry[str(name)] = entry
+        if lock:
+            self._custom_icon_locked[key] = entry
+
+    def _extract_custom_icons(self, data, *, is_config=False, operation='merge',
+                              wipe_previous=False, lock=False):
+        """Apply ``custom_entity_icons`` / ``custom_attribute_icons`` sections
         from a config/data dict and return *data* without them.
 
-        Custom icons are registered eagerly (upsert by name) and don't take part
-        in config layering / lock / delete — so they're handled here, before the
-        layering engine, rather than as a layered section.
+        Custom icons are a baked-blob registry, not a field-merge section, so
+        they get their own lean layering here (mirroring ``--config`` semantics):
+
+        - ``merge`` (default): upsert by name.
+        - ``wipe_previous``: clear the section first.
+        - ``lock``: freeze the names this layer declares (later change →
+          ``locked_override``).
+        - ``operation='delete'``: remove the named entry (no image load).
+
+        **Pillow gate**: a config layer (``is_config=True``) may only carry
+        *baked* icons — a ready BMP (``data:image/bmp`` / BMP bytes) or a compiled
+        ``data``/``datalength`` payload. A source needing conversion (path / PNG /
+        PIL / ``data:image/png``) raises, pointing at :class:`IconCatalog`. The
+        data path and the direct ``add_*`` API still convert via Pillow.
         """
         if not isinstance(data, dict):
             return data
         if 'custom_entity_icons' not in data and 'custom_attribute_icons' not in data:
             return data
+        from . import custom_icons
         data = dict(data)
-        for section, adder in (('custom_entity_icons', self.add_custom_entity_icon),
-                               ('custom_attribute_icons', self.add_custom_attribute_icon)):
-            for entry in (data.pop(section, None) or []):
-                opts = {k: entry[k] for k in ('prefix', 'printer') if k in entry}
-                adder(entry['name'], entry['image'], **opts)
+        for section, registry in (('custom_entity_icons', self._custom_entity_icons),
+                                  ('custom_attribute_icons', self._custom_attribute_icons)):
+            entries = data.pop(section, None)
+            if entries is None:
+                continue
+            if wipe_previous:
+                registry.clear()
+            for entry in (entries or []):
+                name = entry['name']
+                prefix = entry.get('prefix', custom_icons.EMITTED_PREFIX)
+
+                if operation == 'delete':
+                    if (section, str(name)) in self._custom_icon_locked:
+                        self._config_conflicts.append({
+                            'type': ErrorType.LOCKED_OVERRIDE.value,
+                            'section': section, 'name': name,
+                            'message': (
+                                f"cannot delete custom icon {section}.{name}: "
+                                f"locked by an earlier lock layer."
+                            ),
+                        })
+                    else:
+                        registry.pop(str(name), None)
+                    continue
+
+                emitted = f"{prefix}{name}"
+                name_err = custom_icons.validate_icon_name(emitted)
+                if name_err:
+                    raise ValueError(f"custom icon name {emitted!r}: {name_err}")
+
+                if 'data' in entry and 'datalength' in entry:        # compiled payload
+                    resolved = {'emitted': emitted, 'prefix': prefix,
+                                'data': entry['data'], 'datalength': entry['datalength']}
+                elif 'image' in entry:                                # source image
+                    if entry.get('printer'):
+                        raise NotImplementedError(
+                            "printer=True (high-resolution print icons) is planned "
+                            "but not yet shipped"
+                        )
+                    if is_config and not custom_icons.is_baked(entry['image']):
+                        raise ValueError(
+                            f"custom icon {name!r} in a config layer must be a ready "
+                            f"BMP or a baked catalog entry — Pillow conversion is not "
+                            f"allowed in configs. Bake it with IconCatalog(...)."
+                            f"export_catalog() or pass a data:image/bmp URI."
+                        )
+                    bmp = custom_icons.prepare_icon_bmp(entry['image'])
+                    bdata, dlen = custom_icons.custom_image_payload(bmp)
+                    resolved = {'emitted': emitted, 'prefix': prefix,
+                                'data': bdata, 'datalength': dlen}
+                else:
+                    raise ValueError(
+                        f"custom icon entry {name!r} has neither 'data' nor 'image'"
+                    )
+                self._write_custom_icon(registry, section, name, resolved, lock)
         return data
 
     def _resolve_icon_ref(self, value, kind):
@@ -1591,7 +1734,10 @@ class ANXChart(_ConfigLayeringMixin):
 
         for ac in self._attribute_classes:
             if ac.name and ac.icon_file:
-                builder.set_att_class_icon(ac.name, self._resolve_icon_ref(ac.icon_file, 'Attribute'))
+                resolved = self._resolve_icon_ref(ac.icon_file, 'Attribute')
+                builder.set_att_class_icon(ac.name, resolved)
+                if str(ac.icon_file) in self._custom_attribute_icons:
+                    builder._used_custom_images.add(resolved)  # declared by an AC ⇒ referenced
 
         for dtf in self._datetime_formats:
             if dtf.name:
@@ -1618,6 +1764,8 @@ class ANXChart(_ConfigLayeringMixin):
             rep = _REP_MAP.get(et.representation, Representation.ICON) if et.representation else None
             ic_file = self._resolve_icon_ref(et.icon_file, 'Icon')
             builder._entity_type_id(et.name, rep, ic_file, color_int, shade_int, et.semantic_type)
+            if et.icon_file is not None and str(et.icon_file) in self._custom_entity_icons:
+                builder._used_custom_images.add(ic_file)  # declared by a type ⇒ referenced
 
         for lt in self._link_types:
             if not lt.name:
@@ -1697,6 +1845,9 @@ class ANXChart(_ConfigLayeringMixin):
 
         with timer.phase("Initialize builder"):
             builder = ANXBuilder()
+            builder._custom_icons_include = (
+                s.extra_cfg.custom_icons_include or 'referenced'
+            )
             entity_registry: Dict[str, Tuple[str, int]] = {}
 
         # ── Pre-register explicit type / AC / datetime-format definitions ──

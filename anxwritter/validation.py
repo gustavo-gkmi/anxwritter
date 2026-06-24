@@ -2889,3 +2889,17 @@ def validate_enforce_descriptions(
         errors.append(err)
 
     return errors
+
+
+def validate_custom_icons_include(value: Optional[str]) -> List[Dict[str, Any]]:
+    """Validate ``settings.extra_cfg.custom_icons_include`` — must be ``None``
+    (default ``'referenced'``), ``'all'``, or ``'referenced'``."""
+    if value is None or value in ('all', 'referenced'):
+        return []
+    return [{
+        'type': ErrorType.INVALID_CUSTOM_ICONS_INCLUDE.value,
+        'message': (
+            f"custom_icons_include must be 'all' or 'referenced', got {value!r}"
+        ),
+        'location': 'settings.extra_cfg.custom_icons_include',
+    }]

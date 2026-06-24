@@ -545,8 +545,12 @@ class _ConfigLayeringMixin:
                 "operation='delete' cannot be combined with wipe_previous=True"
             )
 
-        # Custom icons (1.19.0) — registered eagerly; not subject to layering.
-        data = self._extract_custom_icons(data)
+        # Custom icons (1.19.0) — registered eagerly. Their own lean layering
+        # (merge/wipe/lock/delete + config Pillow gate) lives in the extractor.
+        data = self._extract_custom_icons(
+            data, is_config=is_config, operation=operation,
+            wipe_previous=wipe_previous, lock=lock,
+        )
 
         if is_config:
             self._apply_config_layer(

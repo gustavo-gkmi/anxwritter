@@ -1,8 +1,9 @@
-"""Embedded custom icons (1.19.0).
+"""Embedded custom icons (1.19.0) + reusable catalogs (1.20.0).
 
 Embed your own images as entity-type, per-entity, and attribute-class icons.
 The image travels inside the ``.anx`` — the recipient needs no install and no
-restart.
+restart. A *catalog* (1.20.0) packages many baked icons in one file you can
+export once (with Pillow) and apply to any chart (no Pillow needed).
 
 Requires Pillow:  pip install anxwritter[icons]
 
@@ -13,7 +14,7 @@ import io
 import math
 import os
 
-from anxwritter import ANXChart, AttributeType
+from anxwritter import ANXChart, AttributeType, IconCatalog
 
 try:
     from PIL import Image, ImageDraw
@@ -65,6 +66,31 @@ def build_chart():
     return chart
 
 
+def build_catalog_demo():
+    """Catalog flow (1.20.0): author once with Pillow, export a baked file,
+    then apply it to a chart with no Pillow on the consume side."""
+    os.makedirs("output", exist_ok=True)
+
+    # 1) Author the catalog (Pillow converts the PNGs to baked BMP blobs).
+    cat = IconCatalog()
+    cat.add_custom_entity_icon("person", _heart_png())
+    cat.add_custom_entity_icon("vip", _crown_png())
+    cat.add_custom_attribute_icon("priority", _crown_png())
+    assert cat.validate() == []                      # blob integrity OK
+    catalog_path = cat.export_catalog("output/icon_catalog.yaml")
+
+    # 2) Consume it — IconCatalog.from_file needs no Pillow; default
+    #    include='referenced' so only icons the chart actually uses are embedded.
+    chart = ANXChart()
+    chart.apply_icon_catalog(catalog_path)           # path, dict, or IconCatalog
+    chart.add_entity_type(name="Person", icon_file="person")
+    chart.add_attribute_class(name="Priority", type=AttributeType.TEXT, icon_file="priority")
+    chart.add_icon(id="Alice", type="Person", attributes={"Priority": "high"})
+    chart.add_icon(id="Bob", type="Person", icon="vip")
+    return chart
+
+
 if __name__ == "__main__":
     os.makedirs("output", exist_ok=True)
     print(f"wrote {build_chart().to_anx('output/custom_icons')}")
+    print(f"wrote {build_catalog_demo().to_anx('output/custom_icons_catalog')}")
