@@ -12,6 +12,7 @@ import time as _time
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from functools import lru_cache
+from itertools import chain as _chain
 from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple
 
 # Register LCX namespace for _fast_serialize tag resolution
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
     # Imports used only for forward-string type annotations on resolve/emit
     # methods. Real runtime imports happen lazily inside the method bodies
     # to avoid the resolved.py ↔ builder.py import cycle.
-    from .resolved import ResolvedCard, ResolvedEntity, ResolvedLink
+    from .resolved import ResolvedAttr, ResolvedCard, ResolvedEntity, ResolvedLink
 
 
 # ── Internal attribute tuple ─────────────────────────────────────────────────
@@ -36,6 +37,27 @@ class _AttrTuple(NamedTuple):
     class_name: str
     value: Any
     attr_type: AttributeType
+
+
+class _LinkPlan(NamedTuple):
+    """The ID-bearing result of registering a link (the `_next_id()`-calling
+    half of link resolution), split out so the fused resolve→emit path can assign
+    IDs in a cheap pre-pass and build the heavy ``ResolvedLink`` lazily later.
+
+    ``resolved_attrs`` is populated for the non-fused path (so it isn't reparsed)
+    and left ``None`` in the fused pre-pass (the attrs are re-resolved in the lazy
+    build pass — the attribute classes are already registered, so it costs no new
+    IDs and holds nothing between passes).
+    """
+    from_int_id: int
+    to_int_id: int
+    from_ci_id: str
+    to_ci_id: str
+    link_type: str
+    strength: str
+    conn_id: Any
+    ci_id: str
+    resolved_attrs: Any  # Optional[List[ResolvedAttr]]
 
 
 # ── <Chart> attribute mapping ────────────────────────────────────────────────
@@ -522,6 +544,11 @@ class ANXBuilder:
 
         # Resolved items (compute-then-emit architecture)
         self._resolved_items: List = []  # List[ResolvedEntity | ResolvedLink]
+        # Fused resolve→emit (set by chart.py when streaming a fusable chart):
+        # _raw_edges feeds layout without resolved links; _lazy_link_iter is a
+        # zero-arg factory yielding ResolvedLinks one at a time during emission.
+        self._raw_edges: Optional[List[Tuple[str, str]]] = None
+        self._lazy_link_iter = None
 
         # Build timer (set during build() for external access)
         self._build_timer: Optional[PhaseTimer] = None
@@ -795,25 +822,29 @@ class ANXBuilder:
             x=0, y=0,
         )
 
-    def resolve_link(self, link: Link, extra_cards=None,
-                     semantic_guid=None) -> 'ResolvedLink':
-        """Resolve a typed Link object into a ResolvedLink.
+    def _resolve_link_attrs(self, link) -> 'List[ResolvedAttr]':
+        """Parse a link's attributes and register their attribute classes,
+        returning ``ResolvedAttr`` tuples. Idempotent w.r.t. IDs — re-calling for
+        an already-registered class returns its existing ref id (no new
+        ``_next_id``), so the fused build pass can re-run it harmlessly."""
+        from .resolved import ResolvedAttr
+        out: List[ResolvedAttr] = []
+        for name, value, type_str in _parse_attrs(link.attributes or {}):
+            att_type = _ATT_TYPE.get(type_str, 'AttText')
+            ref_id = self._att_class_id(name, att_type)
+            out.append(ResolvedAttr(name, ref_id, value))
+        return out
 
-        Resolves from/to entities, arrow enum, line color, connection style,
-        attribute classes, datetime, cards, and font colors.
+    def _register_link(self, link: Link, *, keep_attrs: bool = True) -> _LinkPlan:
+        """Registration half of link resolution — every ``_next_id()`` call, in
+        the canonical per-link order (link-type → strength → connection →
+        attribute classes → ci_id). Returns the assigned IDs as a ``_LinkPlan``.
+        No heavy ``ResolvedLink`` is built.
 
-        Args:
-            extra_cards: additional Card objects (e.g. loose cards) to merge
-                with inline cards — avoids mutating the user's link object.
-            semantic_guid: pre-resolved semantic GUID string — avoids
-                monkey-patching the user's link object.
-
-        Side effects: mutates _link_types, _att_classes, _strengths,
-        _pair_style, _style_conn, _has_conn_fields.
-        Raises ValueError if from_id or to_id not found.
+        This is the *only* place link IDs are minted; both the non-fused path and
+        the fused pre-pass go through it, so they share one ID assignment and stay
+        byte-identical. Raises ValueError if from_id or to_id not found.
         """
-        from .resolved import ResolvedLink, ResolvedAttr
-
         from_info = self._lookup_entity(str(link.from_id))
         to_info   = self._lookup_entity(str(link.to_id))
         if from_info is None:
@@ -848,16 +879,50 @@ class ANXBuilder:
                 self._style_conn[style] = self._next_id()
             conn_id = self._style_conn[style]
 
-        # Attributes → ResolvedAttr(class_name, ac_ref_id, value_str)
-        raw_attrs = _parse_attrs(link.attributes or {})
-        resolved_attrs: List[ResolvedAttr] = []
-        for name, value, type_str in raw_attrs:
-            att_type = _ATT_TYPE.get(type_str, 'AttText')
-            ref_id = self._att_class_id(name, att_type)
-            resolved_attrs.append(ResolvedAttr(name, ref_id, value))
+        # Attributes register their classes here (in order), before ci_id.
+        resolved_attrs = self._resolve_link_attrs(link)
+        ci_id = self._next_id()
+
+        return _LinkPlan(
+            from_int_id=from_int_id, to_int_id=to_int_id,
+            from_ci_id=from_ci_id, to_ci_id=to_ci_id,
+            link_type=link_type, strength=strength,
+            conn_id=conn_id, ci_id=ci_id,
+            resolved_attrs=resolved_attrs if keep_attrs else None,
+        )
+
+    def resolve_link(self, link: Link, extra_cards=None,
+                     semantic_guid=None) -> 'ResolvedLink':
+        """Resolve a typed Link object into a ResolvedLink (register then build).
+
+        Args:
+            extra_cards: additional Card objects (e.g. loose cards) to merge
+                with inline cards — avoids mutating the user's link object.
+            semantic_guid: pre-resolved semantic GUID string — avoids
+                monkey-patching the user's link object.
+
+        Side effects: mutates _link_types, _att_classes, _strengths,
+        _pair_style, _style_conn, _has_conn_fields.
+        Raises ValueError if from_id or to_id not found.
+        """
+        plan = self._register_link(link, keep_attrs=True)
+        return self._build_resolved_link(link, plan, extra_cards, semantic_guid)
+
+    def _build_resolved_link(self, link: Link, plan: _LinkPlan,
+                             extra_cards=None, semantic_guid=None) -> 'ResolvedLink':
+        """Build half of link resolution — the heavy ``ResolvedLink`` from a
+        ``_LinkPlan``'s pre-assigned IDs. Mints no IDs. The fused path calls this
+        lazily during emission and discards the result; the non-fused path calls
+        it immediately after ``_register_link``."""
+        from .resolved import ResolvedLink
+
+        resolved_attrs = plan.resolved_attrs
+        if resolved_attrs is None:
+            # Fused pre-pass didn't keep them — re-resolve (classes already
+            # registered, so this returns existing ref ids, no new _next_id).
+            resolved_attrs = self._resolve_link_attrs(link)
 
         arrow = _resolve_enum(link.arrow, _ARROW_MAP) if link.arrow else 'ArrowNone'
-        ci_id = self._next_id()
 
         # Datetime
         date_set, time_set, dt_str = self._format_datetime(link.date, link.time)
@@ -867,7 +932,7 @@ class ANXBuilder:
         resolved_cards = [self._resolve_card(c) for c in all_cards]
 
         return ResolvedLink(
-            ci_id=ci_id,
+            ci_id=plan.ci_id,
             label=str(link.label or ''),
             description=str(link.description or ''),
             date_set=date_set,
@@ -882,7 +947,7 @@ class ANXBuilder:
             grade_three=link.grade_three,
             attributes=resolved_attrs,
             cards=resolved_cards,
-            strength=strength,
+            strength=plan.strength,
             background=link.background,
             show_datetime_description=link.show_datetime_description,
             sub_text_width=link.sub_text_width,
@@ -904,16 +969,16 @@ class ANXBuilder:
             show_source_type=link.show.source_type,
             show_pin=link.show.pin,
             timezone=link.timezone,
-            from_int_id=from_int_id,
-            to_int_id=to_int_id,
-            from_ci_id=from_ci_id,
-            to_ci_id=to_ci_id,
-            link_type=link_type,
+            from_int_id=plan.from_int_id,
+            to_int_id=plan.to_int_id,
+            from_ci_id=plan.from_ci_id,
+            to_ci_id=plan.to_ci_id,
+            link_type=plan.link_type,
             arrow=arrow,
             line_width=link.line_width if link.line_width is not None else 1,
             line_color=color_to_colorref(link.line_color) if link.line_color is not None else 0,
             offset=link.offset if link.offset is not None else 0,
-            conn_id=conn_id,
+            conn_id=plan.conn_id,
             semantic_guid=semantic_guid,
         )
 
@@ -1180,11 +1245,91 @@ class ANXBuilder:
         parts.append(f'{i0}</ChartItem>\n')
         return ''.join(parts)
 
+    def _emit_entity_str(self, re: 'ResolvedEntity', d: int, ind: tuple) -> Optional[str]:
+        """Serialize a simple Icon entity straight to bytes-identical XML, or None
+        to fall back to the ET path. Covers the common ``add_icon`` shape; anything
+        with a non-Icon representation, a per-entity icon override / frame /
+        enlargement / text offset, cards, timezone, semantic GUID, or any CIStyle
+        trigger falls back. Mirrors ``_make_entity_chart_item`` + the Icon branch of
+        ``_add_visual_representation`` — the byte-parity test guards the match."""
+        if re.representation != Representation.ICON.value:
+            return None
+        if re.cards or re.timezone is not None or re.semantic_guid:
+            return None
+        for f in self._CISTYLE_TRIGGERS:
+            if getattr(re, f) is not None:
+                return None
+        style = re.representation_style or {}
+        # The Icon branch only reads 'shade_color' from style ('strength' is not
+        # emitted on IconStyle). Any other key (icon override, frame, enlargement,
+        # text offset) needs the full builder.
+        for k in style:
+            if k not in ('strength', 'shade_color'):
+                return None
+
+        ci_attribs = self._chart_item_attribs(
+            re.ci_id, re.label, re.description, re.date_set, re.time_set,
+            re.datetime_str, re.ordered, re.source_ref, re.source_type,
+            re.grade_one, re.grade_two, re.grade_three, re.datetime_description,
+        )
+        if re.x or re.y:
+            ci_attribs['XPosition'] = str(re.x)
+
+        end_attribs = {'X': str(re.x), 'Y': str(re.y), 'Z': '0'}
+        entity_attribs = {
+            'EntityId': str(re.entity_int_id),
+            'Identity': re.identity,
+            'LabelIsIdentity': 'true' if re.label == re.identity else 'false',
+        }
+        icon_style_attribs: Dict[str, str] = {'Type': re.entity_type}
+        et_id = self._entity_types.get(re.entity_type)
+        if et_id:
+            icon_style_attribs['EntityTypeReference'] = et_id
+        shade = style.get('shade_color')
+        if shade:
+            icon_style_attribs['IconShadingColour'] = str(int(shade))
+
+        i0 = ind[d] if d < len(ind) else ind[1] * d
+        i1 = ind[d + 1] if d + 1 < len(ind) else ind[1] * (d + 1)
+        i2 = ind[d + 2] if d + 2 < len(ind) else ind[1] * (d + 2)
+        i3 = ind[d + 3] if d + 3 < len(ind) else ind[1] * (d + 3)
+        i4 = ind[d + 4] if d + 4 < len(ind) else ind[1] * (d + 4)
+
+        parts = [
+            f'{i0}<ChartItem{_fmt_attrs(ci_attribs)}>\n',
+            f'{i1}<End{_fmt_attrs(end_attribs)}>\n',
+            f'{i2}<Entity{_fmt_attrs(entity_attribs)}>\n',
+            f'{i3}<Icon>\n',
+            f'{i4}<IconStyle{_fmt_attrs(icon_style_attribs)}/>\n',
+            f'{i3}</Icon>\n',
+            f'{i2}</Entity>\n',
+            f'{i1}</End>\n',
+        ]
+        if re.attributes:
+            parts.append(f'{i1}<AttributeCollection>\n')
+            for name, _ref_id, value in re.attributes:
+                if value is None:
+                    continue
+                ac_id = self._att_classes[name][0]
+                parts.append(
+                    f'{i2}<Attribute AttributeClass="{_esc(str(name))}" '
+                    f'AttributeClassReference="{_esc(str(ac_id))}" '
+                    f'Value="{_esc(str(value))}"/>\n'
+                )
+            parts.append(f'{i1}</AttributeCollection>\n')
+        parts.append(f'{i0}</ChartItem>\n')
+        return ''.join(parts)
+
     def _fast_emit(self, item: Any, d: int, ind: tuple) -> Optional[str]:
         """Dispatch the direct-string fast path; None → use the ET fallback."""
-        from .resolved import ResolvedLink
+        from .resolved import ResolvedEntity, ResolvedLink
         if isinstance(item, ResolvedLink):
             return self._emit_link_str(item, d, ind)
+        if isinstance(item, ResolvedEntity):
+            # Apply the layout position (as _emit_one does) before emitting. Safe
+            # on fallback too — _emit_one re-applies it idempotently.
+            item.x, item.y = self._positions.get(item.identity, (0, 0))
+            return self._emit_entity_str(item, d, ind)
         return None
 
     # ── XML element builders ──────────────────────────────────────────────────
@@ -2483,13 +2628,25 @@ class ANXBuilder:
         if __repo_url__:
             comment += f' — {__repo_url__}'
         yield f'<!-- {comment} -->\n'
-        yield from _walk_stream(root, cic, self._resolved_items, self._emit_one,
+        # Fused mode (set by chart.py): entities are in _resolved_items; links are
+        # built lazily and chained on so they resolve→emit→discard one at a time.
+        items = self._resolved_items
+        if self._lazy_link_iter is not None:
+            items = _chain(self._resolved_items, self._lazy_link_iter())
+        yield from _walk_stream(root, cic, items, self._emit_one,
                                 ind, 0, self._fast_emit)
 
     # ── Layout ───────────────────────────────────────────────────────────────
 
     def _layout_edges(self) -> List[Tuple[str, str]]:
-        """Entity-identity edge list from resolved links (for layout)."""
+        """Entity-identity edge list for layout.
+
+        Fused mode supplies edges directly (``_raw_edges``, from raw links) because
+        resolved links aren't materialized; otherwise the edges are read off the
+        resolved links in ``_resolved_items``.
+        """
+        if self._raw_edges is not None:
+            return self._raw_edges
         int_to_key = {
             int_id: k for k, (_ci, int_id) in self._entity_registry.items()
         }
@@ -2781,13 +2938,19 @@ def _walk_stream(el: ET.Element, cic: ET.Element, items, emit_one, ind: tuple,
         open_tag = f'{indent}<{tag}'
 
     if el is cic:
-        if not items:
+        # ``items`` may be a list or a lazy iterator (fused mode chains a link
+        # generator after the entities), so emptiness is detected by peeking the
+        # first element rather than truthiness (an iterator is always truthy).
+        item_iter = iter(items)
+        try:
+            first = next(item_iter)
+        except StopIteration:
             # Empty collection → self-closing, matching _walk exactly.
             yield f'{open_tag}/>\n'
             return
         yield f'{open_tag}>\n'
         item_buf: list = []
-        for item in items:
+        for item in _chain((first,), item_iter):
             if fast_emit is not None:
                 s = fast_emit(item, depth + 1, ind)
                 if s is not None:

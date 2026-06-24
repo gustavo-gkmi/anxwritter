@@ -8,6 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
 > changes ship in minor releases with notes here, as below.
 
+## [1.24.0] - 2026-06-24
+
+Streaming performance. **Lower peak memory and faster serialization on the
+streaming path** (`to_anx` default, `iter_xml`, `iter_anx_bytes`). Output bytes
+are unchanged for valid input — `to_xml` and `to_anx` of a chart are still
+byte-identical, and the golden-digest tests pin this — so this is a drop-in
+upgrade.
+
+### Changed
+
+- **Fused resolve→emit on the streaming path** — links are now resolved,
+  emitted, and discarded one at a time instead of all being materialized before
+  emission, so the resolved link set no longer sits in memory. Peak memory on the
+  streaming path drops by roughly the link share of the chart: ~40% on a balanced
+  chart, ~50%+ on a link-heavy one (e.g. an 8k-entity / 64k-link chart streamed at
+  ~37 MB vs ~78 MB). The non-streaming `to_xml` path is unchanged. Fusion is
+  applied automatically when nothing needs the whole link set at once; charts
+  using link **styling** (`extra_cfg.styling.links`) or a **display synthesizer
+  that targets links** fall back to the previous materializing path (same output,
+  same memory as before). Determinism and exact output are unchanged.
+- **Direct-string serialization extended to simple Icon entities** — the common
+  `add_icon` shape is written straight to XML, skipping the intermediate
+  `ElementTree` node built per entity (the 1.22.0 release did this for simple
+  links). Entities carrying a per-entity icon override, frame, enlargement, text
+  offset, cards, timezone, semantic GUID, or any `CIStyle` override fall back to
+  the element path unchanged, as do non-Icon representations (box, circle,
+  text block, label, event frame, theme line). Streaming serialization of
+  entity-heavy charts is ~15–25% faster. The non-streaming `to_xml` path is
+  unchanged.
+
 ## [1.23.0] - 2026-06-24
 
 Force-directed layout performance. **The `forceatlas2` and `fr` layouts are

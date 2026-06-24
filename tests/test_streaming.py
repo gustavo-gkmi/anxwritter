@@ -248,3 +248,157 @@ def test_no_mixed_content_emitted() -> None:
             assert not (has_children and has_text), (
                 f"{name}: mixed content in <{el.tag}> breaks strip_indent assumptions"
             )
+
+
+# ── Fused resolve→emit (idea #3) ──────────────────────────────────────────────
+# Links resolve→emit→discard one at a time on the streaming path when the chart
+# is fusable (no link styling, no display synthesizer targeting links), so the
+# link set never materializes. Output stays byte-identical to the eager path.
+
+def _fusion_chart(*, styling=False, n=40, links=120):
+    from anxwritter import Card, GradeCollection, StylingCfg
+    c = ANXChart(settings={"extra_cfg": {
+        "arrange": "grid", "link_match_entity_color": True, "link_arc_offset": 15,
+    }})
+    c.grades_one = GradeCollection(items=["A", "B", "C"])
+    for i in range(n):
+        c.add_icon(id=f"E{i}", type="Person", color="Blue", attributes={"k": i})
+    for j in range(links):
+        a, b = j % n, (j + 1 + (j % (n - 1))) % n
+        kw = dict(from_id=f"E{a}", to_id=f"E{b}", type="Call", attributes={"dur": float(j)})
+        if j % 7 == 0:
+            kw["grade_one"] = "B"
+        if j % 5 == 0:
+            kw["date"], kw["time"] = "2024-03-04", "10:00:00"
+        if j % 11 == 0:
+            kw["cards"] = [Card(summary="s", date="2024-01-01", time="09:00:00")]
+        if j % 13 == 0:
+            kw["multiplicity"] = "single"
+        c.add_link(**kw)
+    if styling:
+        c.settings.extra_cfg.styling = StylingCfg(
+            links={"intensity": {"attribute": "dur", "width": {"range": [1, 5]}}}
+        )
+    return c
+
+
+@pytest.mark.parametrize("compact", [True, False])
+def test_fused_stream_equals_eager_bytes(compact: bool) -> None:
+    """Fused streaming output is byte-identical to the eager (non-stream) path,
+    across the per-link features that run lazily (match-color, offset, grades +
+    defaults, dates, cards, connections)."""
+    eager = _fusion_chart().to_xml(compact=compact)
+    fused = "".join(_fusion_chart().iter_xml(compact=compact))
+    assert fused == eager
+
+
+def test_fusion_gate_engages_and_falls_back() -> None:
+    """The gate fuses a fusable streaming chart and falls back otherwise."""
+    b, *_ = _fusion_chart()._assemble_build(stream=True)
+    assert b._lazy_link_iter is not None, "fusable chart should fuse"
+
+    b2, *_ = _fusion_chart(styling=True)._assemble_build(stream=True)
+    assert b2._lazy_link_iter is None, "link styling must disable fusion"
+
+    b3, *_ = _fusion_chart()._assemble_build(stream=False)
+    assert b3._lazy_link_iter is None, "non-stream path never fuses"
+
+
+def test_fused_styling_chart_still_byte_parity() -> None:
+    """A non-fusable (styling) chart still streams byte-identically (via fallback)."""
+    eager = _fusion_chart(styling=True).to_xml(compact=True)
+    fused = "".join(_fusion_chart(styling=True).iter_xml(compact=True))
+    assert fused == eager
+
+
+@pytest.mark.perf
+def test_fused_lowers_peak_memory_on_link_heavy() -> None:
+    """Fusion drops streaming peak well below the non-fused streaming floor on a
+    link-heavy chart (links never materialize). Measured ~0.5×; threshold 0.75."""
+    import tracemalloc
+
+    def big() -> ANXChart:
+        c = ANXChart(settings={"extra_cfg": {"arrange": "grid"}})
+        n = 4000
+        for i in range(n):
+            c.add_icon(id=f"E{i}", type="Person", attributes={"idx": i, "name": f"P{i}"})
+        for j in range(20000):  # 5× links — link-heavy
+            a, b = j % n, (j + 1 + (j % (n - 1))) % n
+            c.add_link(from_id=f"E{a}", to_id=f"E{b}", type="Call", attributes={"dur": float(j)})
+        return c
+
+    def drain(chart) -> None:
+        for _ in chart.iter_xml(compact=True):
+            pass
+
+    # Non-fused: force the gate off so only fusion differs.
+    c_off = big()
+    c_off._display_targets_links = lambda: True
+    tracemalloc.start()
+    drain(c_off)
+    _, peak_off = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    c_on = big()
+    tracemalloc.start()
+    drain(c_on)
+    _, peak_on = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    assert peak_on < 0.75 * peak_off, (
+        f"fused peak {peak_on/1e6:.1f}MB not < 0.75 * non-fused {peak_off/1e6:.1f}MB"
+    )
+
+
+# ── Entity direct-string fast path (extends #2 to simple Icon entities) ───────
+
+def test_entity_fast_path_engages_and_falls_back() -> None:
+    """The simple-Icon fast path returns a string for a plain Icon and None
+    (→ ET fallback) for other representations / icon overrides / cards."""
+    from anxwritter import ANXChart, Box, Card, Frame
+    from anxwritter.builder import ANXBuilder
+    from anxwritter.resolved import ResolvedEntity
+
+    b = ANXBuilder()
+    # Resolve a simple icon and a box through the real path.
+    from anxwritter import Icon
+    re_icon = b.resolve_entity(Icon(id="A", type="Person", color="Blue"))
+    re_box = b.resolve_entity(Box(id="B", type="Loc", width=120))
+    re_override = b.resolve_entity(Icon(id="C", type="Person", icon="witness"))
+    re_card = b.resolve_entity(Icon(id="D", type="Person",
+                                    cards=[Card(summary="s", date="2024-01-01", time="09:00:00")]))
+    ind = tuple("  " * i for i in range(20))
+    assert b._emit_entity_str(re_icon, 2, ind) is not None, "plain Icon should use fast path"
+    assert b._emit_entity_str(re_box, 2, ind) is None, "Box must fall back"
+    assert b._emit_entity_str(re_override, 2, ind) is None, "icon override must fall back"
+    assert b._emit_entity_str(re_card, 2, ind) is None, "cards must fall back"
+
+
+@pytest.mark.parametrize("compact", [True, False])
+def test_entity_fast_path_all_reps_byte_parity(compact: bool) -> None:
+    """Streaming (fast Icons + ET fallback for every other shape) stays byte-equal
+    to the eager path across all representation types and per-entity features."""
+    from anxwritter import ANXChart, Card, TimeZone, Font, Frame
+
+    def build():
+        c = ANXChart(settings={"extra_cfg": {"arrange": "grid", "entity_auto_color": True}})
+        c.add_icon(id="i1", type="Person", color="Blue", attributes={"k": 1})  # fast
+        c.add_icon(id="i2", type="Ghost")                                       # fast
+        c.add_icon(id="i3", type="Person", icon="witness")                      # fallback
+        c.add_icon(id="i4", type="Person", frame=Frame(visible=True))           # fallback
+        c.add_icon(id="i5", type="Person", label_font=Font(bold=True))          # fallback
+        c.add_icon(id="i6", type="Person",
+                   cards=[Card(summary="s", date="2024-01-01", time="09:00:00")])  # fallback
+        c.add_icon(id="i7", type="Person", timezone=TimeZone(id=1, name="UTC"),
+                   date="2024-01-01", time="09:00:00")                          # fallback
+        c.add_box(id="b1", type="Loc", width=120)
+        c.add_circle(id="c1", type="Ev", diameter=80)
+        c.add_text_block(id="t1", type="Note", label="hi")
+        c.add_label(id="l1", type="Lbl", label="cap")
+        c.add_event_frame(id="ef1", type="Ev")
+        c.add_theme_line(id="tl1", type="Theme")
+        for j in range(8):
+            c.add_link(from_id="i1", to_id="i2", type="Call", attributes={"d": j})
+        return c
+
+    assert "".join(build().iter_xml(compact=compact)) == build().to_xml(compact=compact)
