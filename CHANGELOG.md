@@ -8,6 +8,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
 > changes ship in minor releases with notes here, as below.
 
+## [1.22.0] - 2026-06-24
+
+Performance and one correctness fix. **Output bytes are unchanged for valid
+input** — the streaming byte-parity and golden-digest tests pin this — so this
+release is a drop-in upgrade.
+
+### Changed
+
+- **Resolved-item dataclasses are now `slots=True`** (`ResolvedCard`,
+  `ResolvedChartItem`, `ResolvedEntity`, `ResolvedLink`). The resolved-item set
+  is the peak-memory floor of the streaming serializer, so dropping the
+  per-instance `__dict__` cuts that floor by roughly half (e.g. ~116 MB → ~55 MB
+  for a 50k-item chart) and speeds `iter_xml` ~20%.
+- **Validation date/time fast-path** — `validate()` now checks canonical
+  `YYYY-MM-DD` / `HH:MM:SS` values via the `datetime.date` / `datetime.time`
+  constructors instead of `datetime.strptime` (which was ~24% of `validate()`'s
+  time on date-heavy charts). Non-canonical forms still fall through to the
+  existing `strptime` parsing, so the set of accepted/rejected values is
+  unchanged. `validate()` is ~50% faster, which every emit path benefits from
+  (`to_anx` / `to_xml` / `iter_xml` all validate up front).
+- **Direct-string serialization for simple links** — in the streaming path the
+  common link shape is written straight to XML, skipping the intermediate
+  `ElementTree` node built per item. Links carrying cards, a timezone, a
+  per-instance semantic GUID, a connection style, or any `CIStyle` override fall
+  back to the element path unchanged. Streaming serialization is ~16% faster
+  (about a third faster than 1.21.0 at 20k items). The non-streaming `to_xml`
+  path is unchanged.
+
+  Net effect vs 1.21.0 on a large chart: `iter_xml` ~30% faster at roughly half
+  the peak memory; `validate()` ~50% faster.
+
+### Fixed
+
+- **XML 1.0 forbidden control characters are now stripped** during
+  serialization. Code points `U+0000`–`U+001F` (except TAB, LF, CR) are illegal
+  in XML 1.0 and cannot be represented even as numeric character references, so a
+  `label`, `description`, or attribute value containing one previously produced a
+  document that ANB (and `xml.etree.ElementTree`) reject as not well-formed. Such
+  characters are now removed from the output. Input without them is unaffected
+  (byte-identical).
+
 ## [1.21.0] - 2026-06-24
 
 ### Added

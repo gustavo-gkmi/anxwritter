@@ -1106,6 +1106,87 @@ class ANXBuilder:
             return self._build_entity_ci(item)
         return self._build_link_ci(item)
 
+    # ── Direct-string fast path (streaming only) ─────────────────────────────
+    # Resolved links of the common shape are serialized straight to their XML
+    # string, skipping the per-item ET.Element subtree that _build_link_ci would
+    # build only for _walk to immediately stringify and discard. Anything with a
+    # CIStyle, cards, timezone, semantic GUID, or connection style falls back to
+    # the ET path (returns None) — so the byte-identity surface is the simple
+    # link only, and the iter_build(compact=False)==build() parity test guards it.
+
+    # Fields whose presence forces a <CIStyle> (and thus the ET fallback). Names
+    # are ResolvedLink attributes; mirrors exactly the inputs _add_ci_style checks.
+    _CISTYLE_TRIGGERS = (
+        'background', 'show_datetime_description', 'sub_text_width',
+        'use_sub_text_width', 'datetime_format',
+        'label_color', 'label_bg_color', 'label_face', 'label_size',
+        'label_bold', 'label_italic', 'label_strikeout', 'label_underline',
+        'show_description', 'show_grades', 'show_label', 'show_date',
+        'show_source_ref', 'show_source_type', 'show_pin',
+    )
+
+    def _emit_link_str(self, rl: 'ResolvedLink', d: int, ind: tuple) -> Optional[str]:
+        """Serialize a simple ResolvedLink to bytes-identical XML, or None to
+        fall back to the ET path for anything exotic."""
+        if rl.cards or rl.timezone is not None or rl.semantic_guid or rl.conn_id:
+            return None
+        for f in self._CISTYLE_TRIGGERS:
+            if getattr(rl, f) is not None:
+                return None
+
+        ci_attribs = self._chart_item_attribs(
+            rl.ci_id, rl.label, rl.description, rl.date_set, rl.time_set,
+            rl.datetime_str, rl.ordered, rl.source_ref, rl.source_type,
+            rl.grade_one, rl.grade_two, rl.grade_three, rl.datetime_description,
+        )
+        link_attrs: Dict[str, str] = {
+            'End1Id': str(rl.from_int_id), 'End2Id': str(rl.to_int_id),
+        }
+        if rl.offset:
+            link_attrs['Offset'] = str(rl.offset)
+        ls_attrs: Dict[str, str] = {'Strength': rl.strength}
+        if rl.arrow and rl.arrow != 'ArrowNone':
+            ls_attrs['ArrowStyle'] = rl.arrow
+        if rl.line_width and rl.line_width != 1:
+            ls_attrs['LineWidth'] = str(rl.line_width)
+        if rl.line_color:
+            ls_attrs['LineColour'] = str(rl.line_color)
+        if rl.link_type:
+            ls_attrs['Type'] = rl.link_type
+            ls_attrs['LinkTypeReference'] = self._link_types[rl.link_type]
+
+        i0 = ind[d] if d < len(ind) else ind[1] * d
+        i1 = ind[d + 1] if d + 1 < len(ind) else ind[1] * (d + 1)
+        i2 = ind[d + 2] if d + 2 < len(ind) else ind[1] * (d + 2)
+
+        parts = [
+            f'{i0}<ChartItem{_fmt_attrs(ci_attribs)}>\n',
+            f'{i1}<Link{_fmt_attrs(link_attrs)}>\n',
+            f'{i2}<LinkStyle{_fmt_attrs(ls_attrs)}/>\n',
+            f'{i1}</Link>\n',
+        ]
+        if rl.attributes:
+            parts.append(f'{i1}<AttributeCollection>\n')
+            for name, _ref_id, value in rl.attributes:
+                if value is None:
+                    continue
+                ac_id = self._att_classes[name][0]
+                parts.append(
+                    f'{i2}<Attribute AttributeClass="{_esc(str(name))}" '
+                    f'AttributeClassReference="{_esc(str(ac_id))}" '
+                    f'Value="{_esc(str(value))}"/>\n'
+                )
+            parts.append(f'{i1}</AttributeCollection>\n')
+        parts.append(f'{i0}</ChartItem>\n')
+        return ''.join(parts)
+
+    def _fast_emit(self, item: Any, d: int, ind: tuple) -> Optional[str]:
+        """Dispatch the direct-string fast path; None → use the ET fallback."""
+        from .resolved import ResolvedLink
+        if isinstance(item, ResolvedLink):
+            return self._emit_link_str(item, d, ind)
+        return None
+
     # ── XML element builders ──────────────────────────────────────────────────
 
     @staticmethod
@@ -2402,7 +2483,8 @@ class ANXBuilder:
         if __repo_url__:
             comment += f' — {__repo_url__}'
         yield f'<!-- {comment} -->\n'
-        yield from _walk_stream(root, cic, self._resolved_items, self._emit_one, ind, 0)
+        yield from _walk_stream(root, cic, self._resolved_items, self._emit_one,
+                                ind, 0, self._fast_emit)
 
     # ── Layout ───────────────────────────────────────────────────────────────
 
@@ -2566,11 +2648,21 @@ def _init_ns_map() -> None:
         _NS_MAP[uri] = prefix
     _TAG_CACHE.clear()  # namespace map changed — invalidate resolved tag cache
 
+# XML 1.0 forbidden control characters: U+0000–U+001F except TAB/LF/CR.
+# They are illegal in XML 1.0 and cannot even be represented as numeric
+# character references, so a label/description/attribute carrying one used to
+# produce a document that ANB (and ET.fromstring) rejects as not well-formed.
+# We strip them during serialization (map to None) — a no-op for any valid
+# input (every other codepoint passes through untouched, so output stays
+# byte-identical for control-char-free data).
+_XML_FORBIDDEN = [c for c in range(0x20) if c not in (0x09, 0x0A, 0x0D)]
+
 _ESC_TABLE = str.maketrans({
     '&': '&amp;',
     '<': '&lt;',
     '>': '&gt;',
     '"': '&quot;',
+    **{c: None for c in _XML_FORBIDDEN},
 })
 
 # Pre-built indent strings for depths 0–19 (avoids '  ' * depth on every _walk call).
@@ -2583,6 +2675,15 @@ _INDENT_NONE = ('',) * 20
 
 def _esc(s: str) -> str:
     return s.translate(_ESC_TABLE)
+
+def _fmt_attrs(d: Dict[str, str]) -> str:
+    """Format an attribute dict exactly as ``_walk`` does (no namespaced keys).
+
+    Identical byte output to the ``_walk`` attribute genexpr for the plain
+    (non-namespaced) keys used by ChartItem subtrees — the direct-string fast
+    path relies on this equivalence for byte-parity.
+    """
+    return ''.join(f' {k}="{_esc(str(v))}"' for k, v in d.items())
 
 def _resolve_tag(tag: str) -> str:
     """Convert {uri}local to prefix:local using registered namespaces."""
@@ -2654,13 +2755,18 @@ def _walk(el: ET.Element, parts: list[str], depth: int, ind: tuple = _INDENT) ->
     parts.append(f'{indent}</{tag}>\n')
 
 
-def _walk_stream(el: ET.Element, cic: ET.Element, items, emit_one, ind: tuple, depth: int):
+def _walk_stream(el: ET.Element, cic: ET.Element, items, emit_one, ind: tuple,
+                 depth: int, fast_emit=None):
     """Generator mirror of ``_walk`` that streams ``<ChartItemCollection>`` children.
 
     Byte-identical to ``_walk`` for every element EXCEPT ``cic``: when reached, its
     children are built one-at-a-time from ``items`` via ``emit_one`` and serialized
     then discarded (the streaming memory win). Any drift from ``_walk`` is caught by
     the pretty byte-parity test (``iter_build(compact=False) == build()``).
+
+    ``fast_emit(item, depth, ind)`` is an optional direct-string fast path: when it
+    returns a string the per-item ET.Element + ``_walk`` is skipped entirely; when
+    it returns None the item falls back to ``emit_one`` + ``_walk``.
     """
     indent = ind[depth] if depth < len(ind) else ind[1] * depth
     tag = _resolve_tag(el.tag)
@@ -2682,6 +2788,11 @@ def _walk_stream(el: ET.Element, cic: ET.Element, items, emit_one, ind: tuple, d
         yield f'{open_tag}>\n'
         item_buf: list = []
         for item in items:
+            if fast_emit is not None:
+                s = fast_emit(item, depth + 1, ind)
+                if s is not None:
+                    yield s
+                    continue
             ci_el = emit_one(item)
             item_buf.clear()
             _walk(ci_el, item_buf, depth + 1, ind)
@@ -2708,6 +2819,6 @@ def _walk_stream(el: ET.Element, cic: ET.Element, items, emit_one, ind: tuple, d
         yield f'{open_tag}>\n'
 
     for child in el:
-        yield from _walk_stream(child, cic, items, emit_one, ind, depth + 1)
+        yield from _walk_stream(child, cic, items, emit_one, ind, depth + 1, fast_emit)
 
     yield f'{indent}</{tag}>\n'

@@ -1376,3 +1376,31 @@ class TestRadialLayout:
         c.add_link(from_id='pinned', to_id='free', type='X')
         pos = self._positions(c)
         assert pos['pinned'] == (999, 888)
+
+
+class TestControlCharStripping:
+    """XML 1.0 forbidden control chars (U+0000-U+001F except TAB/LF/CR) must be
+    stripped so the output is always well-formed (they cannot be represented as
+    numeric refs in XML 1.0)."""
+
+    def test_forbidden_controls_stripped_in_label_desc_attr(self):
+        c = ANXChart()
+        c.add_icon(id='A', type='Person', label='bad\x1fchar',
+                   description='d\x00e\x08f', attributes={'note': 'x\x0by'})
+        c.add_icon(id='B', type='Person')
+        c.add_link(from_id='A', to_id='B', type='Call', label='l\x1bk')
+        # Must parse as well-formed XML (raised before the fix).
+        root = ET.fromstring(c.to_xml().encode('utf-16'))
+        assert root is not None
+        xml = c.to_xml()
+        assert 'badchar' in xml and 'def' in xml and 'lk' in xml
+        # No raw control byte survives.
+        for ch in ('\x00', '\x08', '\x0b', '\x1b', '\x1f'):
+            assert ch not in xml
+
+    def test_allowed_whitespace_preserved(self):
+        c = ANXChart()
+        c.add_icon(id='A', type='Person', description='tab\tnew\nline')
+        c.add_icon(id='B', type='Person')
+        xml = c.to_xml()
+        assert '\t' in xml  # TAB is legal XML 1.0, must survive
