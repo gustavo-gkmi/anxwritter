@@ -24,7 +24,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
-from ._common import degrees_from_edges, edge_index_array
+from ._common import degrees_from_edges, edge_index_array, repulsion_forces
 
 
 def apply_forceatlas2(
@@ -97,18 +97,16 @@ def apply_forceatlas2(
     mass = deg + 1.0                  # (n,) — paper's "mass" is degree + 1
 
     eps = 1e-9
+    eps_sq = eps * eps
     base_speed = 0.1
 
     for it in range(iterations):
         # ── Repulsion (all pairs, mass-weighted) ─────────────────────
-        delta = pos[:, None, :] - pos[None, :, :]
-        dist = np.sqrt((delta * delta).sum(-1))
-        np.fill_diagonal(dist, eps)
-        m_outer = mass[:, None] * mass[None, :]
-        rep_mag = scaling_ratio * m_outer / dist
-        np.fill_diagonal(rep_mag, 0.0)
-        unit = delta / dist[..., None]
-        forces = (unit * rep_mag[..., None]).sum(axis=1)
+        # Computed by the shared split-coordinate / Gram helper (no (n, n, 2)
+        # temporaries; row-tiled above ~2k nodes to cap memory). The force on i
+        # from j is (x_i − x_j) · kr·m_i·m_j/dist², so weight=mass and
+        # strength=scaling_ratio (kr). FA2 force model is unchanged.
+        forces = repulsion_forces(pos, mass, scaling_ratio, eps_sq)
 
         # ── Attraction (per edge) ────────────────────────────────────
         if edge_arr.size:
@@ -142,7 +140,15 @@ def apply_forceatlas2(
         # Heavier nodes move slower, matching the paper's traction
         # concept loosely.
         step = base_speed * (1.0 - it / max(iterations, 1))
-        pos += forces * (step / mass[:, None])
+        delta_pos = forces * (step / mass[:, None])
+        pos += delta_pos
+
+        # Convergence early-stop: positions are emitted as round(pos*scale), so
+        # once no node moves as much as half an output pixel, further iterations
+        # can't change the result. The decaying step guarantees this triggers
+        # near the end and saves the tail on graphs that settle early.
+        if np.abs(delta_pos).max() * scale < 0.5:
+            break
 
     cx, cy = center
     out: Dict[str, Tuple[int, int]] = {}

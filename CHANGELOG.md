@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
 > changes ship in minor releases with notes here, as below.
 
+## [1.23.0] - 2026-06-24
+
+Force-directed layout performance. **The `forceatlas2` and `fr` layouts are
+~5× faster and use ~5× less memory**, and very large graphs that previously
+exhausted memory now complete.
+
+### Changed
+
+- **`forceatlas2` / `fr` repulsion rewritten** for speed and memory. The
+  all-pairs repulsion is now computed in split-coordinate form
+  (`xᵢ·Σⱼcoefᵢⱼ − Σⱼcoefᵢⱼ·xⱼ`) with pairwise distances from the Gram identity,
+  which removes the per-iteration `(n, n, 2)` temporary arrays that dominated the
+  old cost. Above ~2000 nodes the coefficient matrix is built in memory-capped
+  row blocks, so peak memory is `O(block·n)` instead of `O(n²)`. A convergence
+  early-stop ends the simulation once no node would move by as much as half an
+  output pixel. Measured: ForceAtlas2 on 2000 nodes ~45 s / ~330 MB → ~10 s /
+  ~65 MB; an 8000-node graph that needed ~1.5 GB now peaks ~0.5 GB. Clustering
+  quality and determinism (same input → same output) are unchanged.
+
+  **Behaviour note:** because the repulsion sum is reordered, the exact node
+  **coordinates produced by `forceatlas2` / `fr` differ from 1.22.0** (the
+  layouts are equivalent in quality; only the specific pixel positions move).
+  Charts using these layout modes will lay out slightly differently on rebuild.
+  The geometric modes (`grid`, `radial`, `circle`, `random`) and all other
+  output are unaffected.
+
 ## [1.22.0] - 2026-06-24
 
 Performance and one correctness fix. **Output bytes are unchanged for valid
