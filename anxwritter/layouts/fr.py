@@ -21,7 +21,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
-from ._common import edge_index_array
+from ._common import edge_index_array, repulsion_forces
 
 
 def apply_fr(
@@ -76,17 +76,14 @@ def apply_fr(
     k_sq = k * k
     t_init = scale / 10.0
     eps = 1e-9
+    eps_sq = eps * eps
 
     for it in range(iterations):
-        # Repulsion (all pairs)
-        delta = pos[:, None, :] - pos[None, :, :]   # (n, n, 2)
-        dist_sq = (delta * delta).sum(-1)
-        dist = np.sqrt(dist_sq)
-        np.fill_diagonal(dist, eps)
-        rep_mag = k_sq / dist
-        np.fill_diagonal(rep_mag, 0.0)
-        unit = delta / dist[..., None]
-        disp = (unit * rep_mag[..., None]).sum(axis=1)   # (n, 2)
+        # Repulsion (all pairs): k²/dist along the unit vector. Computed by the
+        # shared split-coordinate / Gram helper (no (n, n, 2) temporaries; row-
+        # tiled above ~2k nodes to cap memory). FR has no node mass, so
+        # weight=None (uniform) and strength=k².
+        disp = repulsion_forces(pos, None, k_sq, eps_sq)
 
         # Attraction (per edge)
         if edge_arr.size:
@@ -107,6 +104,13 @@ def apply_fr(
         t = t_init * (1.0 - it / max(iterations, 1))
         clipped = (disp / disp_mag_safe) * np.minimum(disp_mag, t)
         pos += clipped
+
+        # Convergence early-stop: once no node moves as much as half a pixel,
+        # further iterations can't change the integer-rounded output, so stop.
+        # The decaying temperature guarantees this triggers near the end; on
+        # graphs that settle early it saves the tail iterations.
+        if np.abs(clipped).max() < 0.5:
+            break
 
     cx, cy = center
     out: Dict[str, Tuple[int, int]] = {}
