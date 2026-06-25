@@ -54,15 +54,44 @@ def _example_builders() -> Dict[str, Callable[[], ANXChart]]:
     return builders
 
 
+# Fields whose presence makes <Summary> emit (so an auto CreatedDate appears).
+_SUMMARY_TEXT_FIELDS = (
+    "title", "subject", "author", "keywords", "category", "comments",
+    "template", "revision", "edit_time", "last_print", "last_save",
+)
+
+
+def _pin_created(chart: ANXChart) -> ANXChart:
+    """Pin the summary's CreatedDate so a chart built twice is byte-stable.
+
+    ``_emit_summary`` defaults an unset ``created`` to ``datetime.now()``, so two
+    independent builds of a summarised chart (as several tests below do) can differ
+    by a second — a wall-clock flake, not a serializer bug. We pin it only when the
+    chart already emits a <Summary> (some other field set), so summary-less charts
+    are untouched. Both compared builds get the same pinned value, so the structural
+    comparison the tests care about is unaffected.
+    """
+    s = getattr(chart.settings, "summary", None)
+    if s is None or s.created is not None:
+        return chart
+    active = any(getattr(s, f) is not None for f in _SUMMARY_TEXT_FIELDS) or bool(
+        s.custom_properties
+    )
+    if active:
+        s.created = "2000-01-01T00:00:00"
+    return chart
+
+
 def _all_builders() -> Dict[str, Callable[[], ANXChart]]:
     """name -> zero-arg builder that returns a FRESH chart (so each call is
-    independent, avoiding any cross-build state)."""
-    builders: Dict[str, Callable[[], ANXChart]] = {
+    independent, avoiding any cross-build state). Charts are clock-pinned so
+    repeated independent builds are byte-stable (see ``_pin_created``)."""
+    raw: Dict[str, Callable[[], ANXChart]] = {
         f"spec:{name}": (lambda s=spec: build_via_from_dict(s))
         for name, spec in ALL_SPECS.items()
     }
-    builders.update(_example_builders())
-    return builders
+    raw.update(_example_builders())
+    return {name: (lambda b=b: _pin_created(b())) for name, b in raw.items()}
 
 
 _BUILDERS = _all_builders()

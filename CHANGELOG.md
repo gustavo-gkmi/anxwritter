@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
 > changes ship in minor releases with notes here, as below.
 
+## [1.24.1] - 2026-06-25
+
+Maintenance — test and example tidy-up. **No library code changed**; the
+published package behaves byte-for-byte identically to 1.24.0.
+
+### Changed
+
+- `examples/investigation_chart.py` no longer imports symbols it doesn't use
+  (the example builds via the convenience methods, so the `Icon` / `Link` /
+  `AttributeClass` / `EntityType` / `LinkType` / `LegendItem` / `Show` class
+  imports were dead). The repository is now `ruff`-clean across `anxwritter/`,
+  `tests/`, and `examples/`.
+
+### Internal (tests only)
+
+- De-flaked the streaming byte-parity tests: a summarised chart built twice for
+  comparison could disagree on the auto `CreatedDate` (defaulted to
+  `datetime.now()`) when the two builds straddled a one-second boundary — a
+  wall-clock race in the test, not a serializer bug. The tests now pin the date.
+- Added a bit-identicality regression test for the block-tiled force-directed
+  repulsion path (the FR/FA2 large-graph memory-tiling branch added in 1.23.0),
+  which the default suite didn't previously exercise (`_common.py` coverage
+  79% → 98%).
+
 ## [1.24.0] - 2026-06-24
 
 Streaming performance. **Lower peak memory and faster serialization on the

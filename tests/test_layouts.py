@@ -455,3 +455,40 @@ def test_layout_scale_1k_nodes(mode):
     c.to_xml()
     elapsed = time.perf_counter() - t0
     assert elapsed < 30.0, f"{mode} on 1k took {elapsed:.1f}s"
+
+
+# ── Block-tiled repulsion (Tier 2 memory-wall fix) ────────────────────────────
+# Above tile_threshold the coefficient matrix is built in row blocks to cap peak
+# memory. The per-row arithmetic is identical to the single-shot path, so the
+# result must be bit-identical -- this is the guard that keeps it so.
+
+@pytest.mark.parametrize("weighted", [False, True], ids=["fr_uniform", "fa2_mass"])
+def test_repulsion_tiling_bit_identical(weighted: bool) -> None:
+    import numpy as np
+    from anxwritter.layouts._common import repulsion_forces
+
+    rng = np.random.default_rng(0)
+    n = 3000  # > default tile_threshold (2048)
+    pos = rng.uniform(-1.0, 1.0, size=(n, 2))
+    weight = rng.integers(1, 8, size=n).astype(float) if weighted else None
+
+    single = repulsion_forces(pos, weight, 2.0, 1e-18, tile_threshold=10**9)
+    tiled = repulsion_forces(pos, weight, 2.0, 1e-18, tile_threshold=2048)
+
+    assert tiled.shape == (n, 2)
+    assert np.array_equal(single, tiled), (
+        f"tiled repulsion diverged from single-shot (max abs diff "
+        f"{np.abs(single - tiled).max():.3e})"
+    )
+
+
+def test_repulsion_tiling_small_n_uses_single_shot() -> None:
+    """Below the threshold the single-shot path runs and matches a forced tile."""
+    import numpy as np
+    from anxwritter.layouts._common import repulsion_forces
+
+    rng = np.random.default_rng(1)
+    pos = rng.uniform(-1.0, 1.0, size=(50, 2))
+    a = repulsion_forces(pos, None, 1.0, 1e-18)                       # single-shot
+    b = repulsion_forces(pos, None, 1.0, 1e-18, tile_threshold=16)    # forced tiled
+    assert np.array_equal(a, b)
