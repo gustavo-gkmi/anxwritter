@@ -18,14 +18,13 @@ from pathlib import Path
 
 from anxwritter import (
     ANXChart,
-    Icon, Link, Card,
-    AttributeClass, AttributeType,
-    EntityType, LinkType,
+    Card,
+    AttributeType,
     Strength, DotStyle,
-    LegendItem, LegendItemType,
+    LegendItemType,
     GradeCollection, StrengthCollection,
     Settings, ChartCfg, ViewCfg, GridCfg, LegendCfg, SummaryCfg, ExtraCfg,
-    Font, Show,
+    Font,
 )
 
 
