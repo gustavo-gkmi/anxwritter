@@ -709,6 +709,26 @@ INVALID_SPECS: List[tuple] = [
         },
         {ErrorType.PATTERN_MISSING_DESCRIPTION.value},
     ),
+
+    # ── Unregistered datetime_format reference ──────────────────────────────
+    (
+        "unregistered_datetime_format",
+        {
+            "entities": {
+                "icons": [
+                    {"id": "A", "type": "Person", "datetime_format": "Nope"}
+                ]
+            },
+        },
+        {ErrorType.UNREGISTERED_DATETIME_FORMAT.value},
+    ),
+
+    # NOTE: invalid_value (DateTimeFormat name/format length), palette_unknown_ref
+    # and palette_invalid_class are emitted from the datetime_formats / palettes
+    # config sections, which the convenience/generic_add equivalence builders do
+    # not construct (same reason palette_type_mismatch is allowlisted in
+    # test_error_completeness.py). They are covered directly in
+    # tests/test_datetime_format.py and tests/test_audit_gaps.py.
 ]
 
 

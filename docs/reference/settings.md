@@ -320,10 +320,10 @@ The write is **atomic** — content goes to a temp file in the destination direc
 ### `to_xml()`
 
 ```python
-xml_str = chart.to_xml(*, compact: bool = False) -> str
+xml_str = chart.to_xml(*, compact: bool = True) -> str
 ```
 
-Returns the ANX XML as a string without writing a file. Also validates internally and raises `ANXValidationError` on errors. Default `compact=False` returns the pretty, indented layout — the human-readable inspection form, unchanged across releases. Pass `compact=True` for the unindented form.
+Returns the ANX XML as a string without writing a file. Also validates internally and raises `ANXValidationError` on errors. Default `compact=True` returns the unindented layout (newlines kept) — the same form ANB imports and what `to_anx` writes, matching the `iter_xml` / `iter_anx_bytes` defaults. Pass `compact=False` for the pretty, indented inspection form.
 
 ### `iter_xml(*, compact=True)` / `iter_anx_bytes(*, compact=True)`
 
@@ -337,9 +337,9 @@ for chunk in chart.iter_anx_bytes(compact=True):  # Iterator[bytes] — UTF-16 L
 Stream the chart without materializing the whole document — the `<ChartItem>` elements are serialized and discarded one at a time, so peak memory is roughly the resolved-item set rather than the full element tree plus output string (measured **~0.36× the peak of `to_xml()`** and **~20% faster** on large charts). Ideal for writing straight to a file or an HTTP response.
 
 - Both validate **up front** (before yielding any chunk) and raise `ANXValidationError` if the chart is invalid — same contract as `to_anx()`/`to_xml()`.
-- `compact=True` (default) drops indentation, keeping newlines, for smaller output; `compact=False` yields the **exact bytes** of the pretty `to_xml()`.
+- `compact=True` (default) drops indentation, keeping newlines, for smaller output; `compact=False` yields the **exact bytes** of `to_xml(compact=False)` (the pretty inspection form).
 - `iter_anx_bytes` emits the UTF-16 LE BOM once on the first chunk; concatenated output equals what `to_anx()` writes to disk.
-- `to_xml()` with its default `compact=False` is the pretty, indented inspection form, unchanged across releases.
+- `to_xml()`, `to_anx()`, `iter_xml()`, and `iter_anx_bytes()` all default to `compact=True`; pass `compact=False` anywhere for the pretty, indented form.
 
 ### `validate()`
 

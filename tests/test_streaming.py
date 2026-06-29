@@ -1,10 +1,11 @@
 """Streaming / compact serialization tests.
 
 Covers the two-path serializer:
-- stream-off: ``to_xml()`` → pretty (indented), unchanged, golden-digest pinned.
-- stream-on:  compact (no indent, newlines kept), per-item emit-and-discard.
+- pretty: ``to_xml(compact=False)`` → indented, the human-inspection form.
+- compact: the default everywhere (``to_xml`` / ``to_anx`` / ``iter_xml`` /
+  ``iter_anx_bytes``) — no indent, newlines kept, per-item emit-and-discard.
 
-Every check is an exact **byte** comparison anchored to the pretty golden output
+Every check is an exact **byte** comparison anchored to the pretty serialization
 (no semantic-tolerance against ANB). ``compact`` and ``pretty`` differ only by
 leading indentation, which makes ``strip_indent(pretty) == compact`` exact.
 """
@@ -132,7 +133,7 @@ def test_stream_pretty_equals_to_xml(name: str) -> None:
     (per-item emit-and-discard, manual ChartItemCollection bracketing) reproduces the
     exact pretty golden bytes. This is the strongest correctness anchor: it ties the
     stream path directly to the ANB-accepted output, indentation included."""
-    assert "".join(_BUILDERS[name]().iter_xml(compact=False)) == _BUILDERS[name]().to_xml()
+    assert "".join(_BUILDERS[name]().iter_xml(compact=False)) == _BUILDERS[name]().to_xml(compact=False)
 
 
 @pytest.mark.parametrize("name", sorted(_BUILDERS))
@@ -140,13 +141,13 @@ def test_stream_compact_equals_strip_indent(name: str) -> None:
     """``''.join(iter_xml(compact=True)) == strip_indent(to_xml())`` — the compact
     stream equals golden-minus-indentation, byte for byte."""
     compact = "".join(_BUILDERS[name]().iter_xml(compact=True))
-    assert compact == strip_indent(_BUILDERS[name]().to_xml())
+    assert compact == strip_indent(_BUILDERS[name]().to_xml(compact=False))
 
 
 def test_stream_empty_chart() -> None:
     """Empty chart: no items → self-closing <ChartItemCollection/>, identical to
     the non-stream path (regression guard for the streamed-collection special case)."""
-    pretty = ANXChart().to_xml()
+    pretty = ANXChart().to_xml(compact=False)
     assert "".join(ANXChart().iter_xml(compact=False)) == pretty
     assert "<ChartItemCollection/>" in pretty
 
@@ -154,7 +155,7 @@ def test_stream_empty_chart() -> None:
 def test_stream_entities_only_no_links() -> None:
     """Items present but no links (a header-light / footer-light shape)."""
     spec = ALL_SPECS["ENTITIES_ONLY"]
-    assert "".join(build_via_from_dict(spec).iter_xml(compact=False)) == build_via_from_dict(spec).to_xml()
+    assert "".join(build_via_from_dict(spec).iter_xml(compact=False)) == build_via_from_dict(spec).to_xml(compact=False)
 
 
 def test_iter_xml_yields_multiple_chunks() -> None:
@@ -182,7 +183,7 @@ def test_iter_anx_bytes_matches_to_xml_utf16(name: str) -> None:
     — BOM once + UTF-16 LE, the bytes ANB expects on disk."""
     spec = ALL_SPECS[name]
     streamed = b"".join(build_via_from_dict(spec).iter_anx_bytes(compact=False))
-    direct = build_via_from_dict(spec).to_xml().encode("utf-16")
+    direct = build_via_from_dict(spec).to_xml(compact=False).encode("utf-16")
     assert streamed == direct
     assert streamed[:2] == b"\xff\xfe"  # single leading BOM
 
@@ -269,7 +270,7 @@ def test_no_mixed_content_emitted() -> None:
     import xml.etree.ElementTree as ET
 
     for name in sorted(_BUILDERS):
-        xml = _BUILDERS[name]().to_xml()
+        xml = _BUILDERS[name]().to_xml(compact=False)
         root = ET.fromstring(xml)
         for el in root.iter():
             has_children = len(el) > 0

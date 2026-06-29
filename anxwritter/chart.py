@@ -1414,13 +1414,15 @@ class ANXChart(_ConfigLayeringMixin):
                       elapsed=time.perf_counter() - _t0_write)
         return abspath
 
-    def to_xml(self, *, compact: bool = False) -> str:
+    def to_xml(self, *, compact: bool = True) -> str:
         """Return the ANX XML as a string without writing a file.
 
         Args:
-            compact: When ``True``, drop indentation (newlines kept). Default
-                ``False`` returns the pretty, indented layout — the human-readable
-                form for inspection, unchanged across releases.
+            compact: When ``True`` (default) the output has no indentation
+                (newlines kept) — smaller and the form ANB imports, matching the
+                ``to_anx`` / ``iter_xml`` / ``iter_anx_bytes`` defaults. Pass
+                ``False`` for the pretty, indented layout used for human
+                inspection.
 
         Raises:
             ANXValidationError: If any rows had validation errors.
@@ -2343,9 +2345,10 @@ class ANXChart(_ConfigLayeringMixin):
         """Build the ANX XML (non-stream), collecting validation errors without
         raising.
 
-        ``compact`` drops indentation (newlines kept) — used by the streaming
-        parity tests. Default ``False`` preserves the pretty output that
-        ``to_xml()``/``to_anx()`` return and the golden digest pins.
+        ``compact`` drops indentation (newlines kept). ``to_xml`` / ``to_anx`` /
+        ``iter_xml`` / ``iter_anx_bytes`` all default to ``compact=True``; the
+        ``False`` default here is just the pretty inspection form, reached by
+        passing ``compact=False`` to those entry points.
 
         Returns:
             (xml_string, errors) — errors is empty when all data is valid.

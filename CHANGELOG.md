@@ -8,6 +8,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
 > changes ship in minor releases with notes here, as below.
 
+## [1.24.2] - 2026-06-29
+
+Bug fix — reconcile validation error codes with the `ErrorType` enum — plus a
+`to_xml()` default flip to compact, aligning it with the other serialization
+entry points.
+
+### Changed
+
+- **`to_xml()` now defaults to `compact=True`** (was `compact=False`), matching
+  `to_anx()`, `iter_xml()`, and `iter_anx_bytes()`, which already default to
+  compact. All four entry points now produce the unindented form (newlines kept)
+  by default — the same form ANB imports and what `to_anx` writes to disk. Pass
+  `compact=False` for the pretty, indented inspection form. This **changes the
+  default string returned by `to_xml()`** (equivalent content — ANB imports
+  compact and pretty identically); callers that relied on the indented layout
+  should pass `compact=False`. `to_anx()` on-disk bytes are unchanged (already
+  compact since 1.18.0).
+
+### Fixed
+
+- Four validation codes were emitted as raw string literals that bypassed the
+  `ErrorType` enum — `invalid_value`, `palette_unknown_ref`,
+  `palette_invalid_class`, and `unregistered_datetime_format`. The enum bills
+  itself as the central registry of every code `validate()` produces, so a
+  consumer filtering on `ErrorType.X.value` silently missed these. They are now
+  real members: `ErrorType.INVALID_VALUE`, `ErrorType.PALETTE_UNKNOWN_REF`,
+  `ErrorType.PALETTE_INVALID_CLASS`, `ErrorType.UNREGISTERED_DATETIME_FORMAT`,
+  emitted via `.value`. The emitted strings are unchanged.
+
+### Removed
+
+- `ErrorType.INVALID_DATETIME_FORMAT` (`'invalid_datetime_format'`) — a dead
+  member that never matched any emitted code. The validator emits
+  `'unregistered_datetime_format'`, now exposed as
+  `ErrorType.UNREGISTERED_DATETIME_FORMAT`. Anyone referencing the old member
+  was filtering on a value that could never appear; switch to
+  `ErrorType.UNREGISTERED_DATETIME_FORMAT`.
+
+### Internal (tests only)
+
+- `tests/test_error_completeness.py` gains an **emission→enum** check: it scans
+  `validation.py` for raw `'type': '...'` literals and fails if any code lacks a
+  matching `ErrorType` member, so a raw-string code can't silently reappear. The
+  pre-existing enum→emission and dead-member checks are unchanged.
+
 ## [1.24.1] - 2026-06-25
 
 Maintenance — test and example tidy-up. **No library code changed**; the

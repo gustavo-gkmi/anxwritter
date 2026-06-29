@@ -27,6 +27,7 @@ class ErrorType(str, Enum):
     UNKNOWN_COLOR = 'unknown_color'
     INVALID_DATE = 'invalid_date'
     INVALID_TIME = 'invalid_time'
+    INVALID_VALUE = 'invalid_value'
     TYPE_CONFLICT = 'type_conflict'
     INVALID_ARROW = 'invalid_arrow'
     SELF_LOOP = 'self_loop'
@@ -60,12 +61,14 @@ class ErrorType(str, Enum):
 
     # Palette errors
     PALETTE_TYPE_MISMATCH = 'palette_type_mismatch'
+    PALETTE_UNKNOWN_REF = 'palette_unknown_ref'
+    PALETTE_INVALID_CLASS = 'palette_invalid_class'
 
     # Representation errors
     UNSUPPORTED_REPRESENTATION = 'unsupported_representation'
 
     # Datetime format errors
-    INVALID_DATETIME_FORMAT = 'invalid_datetime_format'
+    UNREGISTERED_DATETIME_FORMAT = 'unregistered_datetime_format'
 
     # Semantic type errors
     INVALID_SEMANTIC_TYPE = 'invalid_semantic_type'

@@ -292,7 +292,7 @@ def _check_chart_item_common(item, *, loc, strength_names, dtf_names,
 
     if item.datetime_format and item.datetime_format not in dtf_names:
         errors.append({
-            'type': 'unregistered_datetime_format',
+            'type': ErrorType.UNREGISTERED_DATETIME_FORMAT.value,
             'message': f"datetime_format '{item.datetime_format}' is not registered "
                        f"in the DateTimeFormatCollection. ANB 9 only accepts registered "
                        f"format names - use add_datetime_format() to register it first.",
@@ -793,7 +793,7 @@ def validate_datetime_formats(
             })
         elif len(dtf.name) > 250:
             errors.append({
-                'type': 'invalid_value',
+                'type': ErrorType.INVALID_VALUE.value,
                 'message': "DateTimeFormat name exceeds 250 characters",
                 'location': loc,
             })
@@ -808,7 +808,7 @@ def validate_datetime_formats(
             dtf_names[dtf.name] = loc
         if dtf.format and len(dtf.format) > 259:
             errors.append({
-                'type': 'invalid_value',
+                'type': ErrorType.INVALID_VALUE.value,
                 'message': "DateTimeFormat format string exceeds 259 characters",
                 'location': loc,
             })
@@ -1043,27 +1043,27 @@ def validate_palettes(
         for et_name in pal.entity_types:
             if et_name not in et_names:
                 errors.append({
-                    'type': 'palette_unknown_ref',
+                    'type': ErrorType.PALETTE_UNKNOWN_REF.value,
                     'message': f"Palette '{pal.name}' references unknown entity type '{et_name}'",
                     'location': loc,
                 })
         for lt_name in pal.link_types:
             if lt_name not in lt_names:
                 errors.append({
-                    'type': 'palette_unknown_ref',
+                    'type': ErrorType.PALETTE_UNKNOWN_REF.value,
                     'message': f"Palette '{pal.name}' references unknown link type '{lt_name}'",
                     'location': loc,
                 })
         for ac_name in pal.attribute_classes:
             if ac_name not in ac_names:
                 errors.append({
-                    'type': 'palette_unknown_ref',
+                    'type': ErrorType.PALETTE_UNKNOWN_REF.value,
                     'message': f"Palette '{pal.name}' references unknown attribute class '{ac_name}'",
                     'location': loc,
                 })
             elif ac_name in ac_not_user:
                 errors.append({
-                    'type': 'palette_invalid_class',
+                    'type': ErrorType.PALETTE_INVALID_CLASS.value,
                     'message': (
                         f"Palette '{pal.name}' references attribute class '{ac_name}' "
                         f"which has is_user=False - ANB rejects palette entries "
@@ -1073,7 +1073,7 @@ def validate_palettes(
                 })
             elif ac_name in ac_no_add:
                 errors.append({
-                    'type': 'palette_invalid_class',
+                    'type': ErrorType.PALETTE_INVALID_CLASS.value,
                     'message': (
                         f"Palette '{pal.name}' references attribute class '{ac_name}' "
                         f"which has user_can_add=False - ANB rejects palette entries "
@@ -1091,7 +1091,7 @@ def validate_palettes(
                 })
             elif ae.name in ac_not_user:
                 errors.append({
-                    'type': 'palette_invalid_class',
+                    'type': ErrorType.PALETTE_INVALID_CLASS.value,
                     'message': (
                         f"Palette '{pal.name}' attribute entry '{ae.name}' "
                         f"has is_user=False - ANB rejects palette entries "
@@ -1101,7 +1101,7 @@ def validate_palettes(
                 })
             elif ae.name in ac_no_add:
                 errors.append({
-                    'type': 'palette_invalid_class',
+                    'type': ErrorType.PALETTE_INVALID_CLASS.value,
                     'message': (
                         f"Palette '{pal.name}' attribute entry '{ae.name}' "
                         f"has user_can_add=False - ANB rejects palette entries "
