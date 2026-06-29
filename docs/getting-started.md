@@ -128,10 +128,10 @@ for chunk in chart.iter_xml():
     ...
 ```
 
-`to_xml()` returns the **pretty** (indented) string by default — the
-human-readable inspection form; pass `compact=True` for the unindented form.
-All of these validate the chart first and raise `ANXValidationError` if it is
-invalid.
+`to_xml()` returns the **compact** (unindented, newlines kept) string by
+default — the same form ANB imports and what `to_anx` writes to disk; pass
+`compact=False` for the pretty, indented inspection form. All of these validate
+the chart first and raise `ANXValidationError` if it is invalid.
 
 ---
 

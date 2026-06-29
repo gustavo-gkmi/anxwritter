@@ -1,6 +1,6 @@
 """Validation error type completeness.
 
-Guards three properties of the ErrorType / validation surface:
+Guards four properties of the ErrorType / validation surface:
 
 1. Every error type expected by an entry in invalid_specs.py is a real
    ErrorType member — catches typos.
@@ -9,6 +9,11 @@ Guards three properties of the ErrorType / validation surface:
 3. The set of "dead" ErrorType members (defined but never emitted) equals
    the documented known-dead set. Either promoting or removing a dead
    member flips this test, forcing an explicit decision.
+4. Every error code emitted as a raw ``'type': '...'`` string literal in
+   validation.py maps to a real ErrorType member — catches codes that
+   bypass the enum entirely (the enum→emission scan in #1–#3 only reads
+   ``ErrorType.X`` references, so a raw string literal would otherwise slip
+   through undetected).
 """
 
 from __future__ import annotations
@@ -29,7 +34,6 @@ from tests.fixtures.invalid_specs import INVALID_SPECS
 # drift.
 KNOWN_DEAD_ERROR_TYPES = {
     ErrorType.CONFIG_CONFLICT,
-    ErrorType.INVALID_DATETIME_FORMAT,
     # Emitted from chart.py (_apply_config), not validation.py — the regex
     # scan below only reads validation.py, so these read as "dead" here.
     ErrorType.LOCKED_OVERRIDE,
@@ -63,6 +67,21 @@ def _emitted_error_types() -> set:
 
 # Cache at module scope so tests share the parse.
 EMITTED_ERROR_TYPES = _emitted_error_types()
+
+
+def _raw_emitted_type_strings() -> set:
+    """Parse anxwritter/validation.py for error codes emitted as raw string
+    literals — i.e. ``'type': '<code>'`` rather than ``'type': ErrorType.X.value``.
+
+    Returns the set of literal code strings. Every one of these must be a
+    real ErrorType *value*; otherwise the code bypasses the central registry
+    and a structured-error consumer filtering on ``ErrorType.X.value`` would
+    silently miss it.
+    """
+    text = _validation_source()
+    # Match    'type': 'some_code'    (single or double quoted code).
+    pattern = re.compile(r"""['"]type['"]\s*:\s*['"]([a-z_]+)['"]""")
+    return set(pattern.findall(text))
 
 
 class TestInvalidSpecsErrorTypesAreReal:
@@ -114,6 +133,13 @@ class TestEmittedErrorTypesHaveCoverage:
             "invalid_paste_behaviour",
             "invalid_semantic_type",
             "invalid_grade_default",
+            # Emitted from the datetime_formats / palettes config sections,
+            # which the convenience/generic_add equivalence builders don't
+            # construct. Covered directly in tests/test_datetime_format.py and
+            # tests/test_audit_gaps.py.
+            "invalid_value",
+            "palette_unknown_ref",
+            "palette_invalid_class",
         }
 
         uncovered_unallowed = uncovered - ALLOWLIST
@@ -158,3 +184,29 @@ class TestDeadErrorTypes:
             f"Only {len(EMITTED_ERROR_TYPES)} emitted error types parsed "
             f"from validation.py — regex may be broken."
         )
+
+
+class TestRawTypeStringsAreEnumMembers:
+    """Every raw ``'type': '...'`` string literal in validation.py must map
+    to a real ErrorType value — the emission→enum direction."""
+
+    def test_no_raw_code_bypasses_the_enum(self):
+        valid_values = {m.value for m in ErrorType}
+        raw_codes = _raw_emitted_type_strings()
+        orphans = raw_codes - valid_values
+        assert not orphans, (
+            f"validation.py emits error code(s) as raw string literals with no "
+            f"matching ErrorType member: {sorted(orphans)}.\n"
+            f"Add them to ErrorType in anxwritter/errors.py and emit via "
+            f"ErrorType.X.value so the central registry stays authoritative."
+        )
+
+    def test_regex_catches_a_raw_literal(self):
+        """Sanity: the parser regex actually matches a raw ``'type': '...'``
+        literal. The desired steady state is ZERO raw codes in validation.py,
+        so we can't assert a non-empty parse there — instead verify the regex
+        against a synthetic sample, so a broken regex can't make
+        test_no_raw_code_bypasses_the_enum pass vacuously."""
+        pattern = re.compile(r"""['"]type['"]\s*:\s*['"]([a-z_]+)['"]""")
+        sample = "errors.append({'type': 'some_raw_code', 'message': 'x'})"
+        assert pattern.findall(sample) == ["some_raw_code"]
