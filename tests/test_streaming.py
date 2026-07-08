@@ -178,14 +178,31 @@ def test_iter_xml_validates_up_front() -> None:
 # ── Phase 4: byte streaming + memory ───────────────────────────────────────────
 
 @pytest.mark.parametrize("name", sorted(ALL_SPECS))
-def test_iter_anx_bytes_matches_to_xml_utf16(name: str) -> None:
-    """``b''.join(iter_anx_bytes(compact=False))`` equals ``to_xml().encode('utf-16')``
-    — BOM once + UTF-16 LE, the bytes ANB expects on disk."""
+def test_iter_anx_bytes_matches_to_anx(name: str, tmp_path) -> None:
+    """``b''.join(iter_anx_bytes(compact=False))`` equals the bytes ``to_anx``
+    writes — BOM once + UTF-16 LE, the bytes ANB expects on disk. (No longer
+    compared against ``to_xml().encode('utf-16')``: ``to_xml`` now declares utf-8,
+    so encoding it as utf-16 would carry the wrong declaration — the whole point of
+    the byte-form / str-form split.)"""
     spec = ALL_SPECS[name]
     streamed = b"".join(build_via_from_dict(spec).iter_anx_bytes(compact=False))
-    direct = build_via_from_dict(spec).to_xml(compact=False).encode("utf-16")
-    assert streamed == direct
+    written = Path(build_via_from_dict(spec).to_anx(
+        str(tmp_path / f"{name}.anx"), stream=False, compact=False)).read_bytes()
+    assert streamed == written
     assert streamed[:2] == b"\xff\xfe"  # single leading BOM
+
+
+def test_declaration_encoding_matches_form() -> None:
+    """The XML declaration matches the bytes each form actually hands back: the
+    ``str`` API (``to_xml`` / ``iter_xml``) declares utf-8; the ``.anx`` byte
+    writer (``iter_anx_bytes`` / ``to_anx``) declares utf-16."""
+    chart = build_via_from_dict(ALL_SPECS["FULL"])
+    assert chart.to_xml().startswith("<?xml version='1.0' encoding='utf-8'?>")
+    assert "".join(chart.iter_xml()).startswith(
+        "<?xml version='1.0' encoding='utf-8'?>")
+    anx = b"".join(chart.iter_anx_bytes())
+    assert anx.decode("utf-16").startswith(
+        "<?xml version='1.0' encoding='utf-16'?>")
 
 
 def test_to_anx_stream_matches_plain(tmp_path) -> None:

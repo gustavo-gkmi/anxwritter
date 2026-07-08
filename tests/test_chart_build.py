@@ -1389,8 +1389,9 @@ class TestControlCharStripping:
                    description='d\x00e\x08f', attributes={'note': 'x\x0by'})
         c.add_icon(id='B', type='Person')
         c.add_link(from_id='A', to_id='B', type='Call', label='l\x1bk')
-        # Must parse as well-formed XML (raised before the fix).
-        root = ET.fromstring(c.to_xml().encode('utf-16'))
+        # Must parse as well-formed XML (raised before the fix). to_xml() declares
+        # utf-8, so encode to utf-8 for the bytes-parse path.
+        root = ET.fromstring(c.to_xml().encode('utf-8'))
         assert root is not None
         xml = c.to_xml()
         assert 'badchar' in xml and 'def' in xml and 'lk' in xml

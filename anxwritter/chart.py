@@ -1397,10 +1397,12 @@ class ANXChart(_ConfigLayeringMixin):
         try:
             with os.fdopen(fd, 'wb') as fh:
                 if stream:
-                    for chunk in self._encode_utf16_stream(self._iter_xml(compact=compact)):
+                    chunks = self._iter_xml(compact=compact, xml_encoding='utf-16')
+                    for chunk in self._encode_utf16_stream(chunks):
                         fh.write(chunk)
                 else:
-                    xml_content, _build_errors = self._build_xml(compact=compact)
+                    xml_content, _build_errors = self._build_xml(
+                        compact=compact, xml_encoding='utf-16')
                     fh.write(xml_content.encode('utf-16'))
             os.replace(tmp_path, abspath)
         except BaseException:
@@ -1417,6 +1419,13 @@ class ANXChart(_ConfigLayeringMixin):
     def to_xml(self, *, compact: bool = True) -> str:
         """Return the ANX XML as a string without writing a file.
 
+        The declaration is ``encoding='utf-8'`` — it matches the returned Python
+        ``str`` (which carries no encoding of its own until *you* encode it). If
+        you need ``.anx`` bytes for ANB, use :meth:`to_anx` or
+        :meth:`iter_anx_bytes` (UTF-16 LE + BOM, ``encoding='utf-16'``) rather
+        than ``to_xml().encode('utf-16')`` — the latter now produces a utf-16 byte
+        stream whose declaration wrongly says utf-8.
+
         Args:
             compact: When ``True`` (default) the output has no indentation
                 (newlines kept) — smaller and the form ANB imports, matching the
@@ -1430,7 +1439,8 @@ class ANXChart(_ConfigLayeringMixin):
         validation_errors = self.validate()
         if validation_errors:
             raise ANXValidationError(validation_errors)
-        xml_content, _build_errors = self._build_xml(compact=compact)
+        xml_content, _build_errors = self._build_xml(compact=compact,
+                                                     xml_encoding='utf-8')
         return xml_content
 
     def iter_xml(self, *, compact: bool = True) -> Iterator[str]:
@@ -1451,15 +1461,16 @@ class ANXChart(_ConfigLayeringMixin):
         validation_errors = self.validate()
         if validation_errors:
             raise ANXValidationError(validation_errors)
-        return self._iter_xml(compact=compact)
+        return self._iter_xml(compact=compact, xml_encoding='utf-8')
 
     @staticmethod
     def _encode_utf16_stream(chunks: Iterator[str]) -> Iterator[bytes]:
         """Encode str chunks to UTF-16 LE bytes, emitting the BOM exactly once.
 
         The first chunk is prefixed with the LE BOM (``FF FE``); the rest are plain
-        ``utf-16-le`` (no per-chunk BOM). Concatenated, the bytes match
-        ``to_xml().encode('utf-16')`` on a little-endian host (what ANB expects).
+        ``utf-16-le`` (no per-chunk BOM). Callers pass chunks built with the
+        ``utf-16`` declaration (``_iter_xml(xml_encoding='utf-16')``), so the
+        concatenated bytes match what :meth:`to_anx` writes (what ANB expects).
         """
         first = True
         for chunk in chunks:
@@ -1473,11 +1484,16 @@ class ANXChart(_ConfigLayeringMixin):
         """Yield the ``.anx`` as UTF-16 LE bytes (BOM first) without materializing
         the whole document — stream straight into an HTTP response or a file.
 
-        Validates up front (see ``iter_xml``). Concatenated output is identical to
-        the bytes ``to_anx()`` writes.
+        Validates up front, before any byte is produced. Concatenated output is
+        identical to the bytes ``to_anx()`` writes (``encoding='utf-16'``
+        declaration — unlike ``iter_xml``, which is the utf-8-declared ``str``
+        form).
         """
-        # iter_xml() validates eagerly here, before any byte is produced.
-        return self._encode_utf16_stream(self.iter_xml(compact=compact))
+        validation_errors = self.validate()
+        if validation_errors:
+            raise ANXValidationError(validation_errors)
+        return self._encode_utf16_stream(
+            self._iter_xml(compact=compact, xml_encoding='utf-16'))
 
     def _resolve_semantic_types(self, builder: 'ANXBuilder',
                                att_class_config: Dict[str, Dict[str, Any]],
@@ -2341,7 +2357,8 @@ class ANXChart(_ConfigLayeringMixin):
         )
         return builder, s, build_kwargs, errors, timer
 
-    def _build_xml(self, compact: bool = False) -> Tuple[str, List[str]]:
+    def _build_xml(self, compact: bool = False,
+                   xml_encoding: str = 'utf-16') -> Tuple[str, List[str]]:
         """Build the ANX XML (non-stream), collecting validation errors without
         raising.
 
@@ -2350,20 +2367,32 @@ class ANXChart(_ConfigLayeringMixin):
         ``False`` default here is just the pretty inspection form, reached by
         passing ``compact=False`` to those entry points.
 
+        ``xml_encoding`` sets only the ``<?xml … encoding=…?>`` declaration text.
+        The ``str``-returning ``to_xml`` passes ``'utf-8'`` (matching the returned
+        ``str``); the ``.anx`` byte writer passes ``'utf-16'`` (matching the
+        UTF-16 LE bytes it then encodes).
+
         Returns:
             (xml_string, errors) — errors is empty when all data is valid.
         """
         builder, s, build_kwargs, errors, timer = self._assemble_build()
         with timer.phase("builder.build()"):
-            xml_str = builder.build(s, compact=compact, **build_kwargs)
+            xml_str = builder.build(s, compact=compact, xml_encoding=xml_encoding,
+                                    **build_kwargs)
         timer.summary(
             extra=f"Entities: {len(self._entities)}, Links: {len(self._links)}",
             sub_timings=[("builder.build()", builder._build_timer)],
         )
         return xml_str, errors
 
-    def _iter_xml(self, compact: bool = True) -> Iterator[str]:
+    def _iter_xml(self, compact: bool = True,
+                  xml_encoding: str = 'utf-16') -> Iterator[str]:
         """Stream the ANX XML in chunks. Validation is the caller's responsibility
-        (``iter_xml`` validates up front)."""
+        (``iter_xml`` validates up front).
+
+        ``xml_encoding`` sets only the declaration text: ``'utf-8'`` for the
+        ``str``-returning ``iter_xml``, ``'utf-16'`` for the ``.anx`` byte stream.
+        """
         builder, s, build_kwargs, _errors, _timer = self._assemble_build(stream=True)
-        yield from builder.iter_build(s, compact=compact, **build_kwargs)
+        yield from builder.iter_build(s, compact=compact, xml_encoding=xml_encoding,
+                                      **build_kwargs)

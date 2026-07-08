@@ -2387,6 +2387,7 @@ class ANXBuilder:
         layout_center: tuple = (0, 0),
         compact: bool = False,
         stream_items: bool = False,
+        xml_encoding: str = 'utf-16',
     ) -> str:
         """Assemble the complete ANX XML and return a pretty-printed string.
 
@@ -2603,10 +2604,12 @@ class ANXBuilder:
             return ''
 
         with _timer.phase("XML serialization"):
-            result = self._pretty_print(root, _INDENT_NONE if compact else _INDENT)
+            result = self._pretty_print(root, _INDENT_NONE if compact else _INDENT,
+                                        xml_encoding)
         return result
 
-    def iter_build(self, *args: Any, compact: bool = True, **kwargs: Any):
+    def iter_build(self, *args: Any, compact: bool = True,
+                   xml_encoding: str = 'utf-16', **kwargs: Any):
         """Streaming counterpart of ``build()``: yield the ANX XML in chunks.
 
         Assembles the tree with an empty ``<ChartItemCollection>`` (``stream_items
@@ -2617,13 +2620,22 @@ class ANXBuilder:
         """
         ind = _INDENT_NONE if compact else _INDENT
         self.build(*args, stream_items=True, **kwargs)
-        yield from self._iter_serialize(self._stream_root, self._stream_cic, ind)
+        yield from self._iter_serialize(self._stream_root, self._stream_cic, ind,
+                                        xml_encoding)
 
-    def _iter_serialize(self, root: ET.Element, cic: ET.Element, ind: tuple):
-        """Yield declaration + comment + a streamed walk of ``root``."""
+    def _iter_serialize(self, root: ET.Element, cic: ET.Element, ind: tuple,
+                        xml_encoding: str = 'utf-16'):
+        """Yield declaration + comment + a streamed walk of ``root``.
+
+        ``xml_encoding`` sets only the string inside the ``<?xml … encoding=…?>``
+        declaration — it does not transcode anything. The ``str``-returning entry
+        points (``to_xml`` / ``iter_xml``) pass ``'utf-8'`` so the declaration
+        matches the Python ``str`` handed back; the ``.anx`` byte writer keeps
+        ``'utf-16'`` to match its UTF-16 LE bytes on disk.
+        """
         _init_ns_map()
         from anxwritter import __version__, __repo_url__
-        yield "<?xml version='1.0' encoding='utf-16'?>\n"
+        yield f"<?xml version='1.0' encoding='{xml_encoding}'?>\n"
         comment = f'Built with anxwritter {__version__}'
         if __repo_url__:
             comment += f' — {__repo_url__}'
@@ -2783,9 +2795,10 @@ class ANXBuilder:
     # ── Pretty print ─────────────────────────────────────────────────────────
 
     @staticmethod
-    def _pretty_print(root: ET.Element, ind: Optional[tuple] = None) -> str:
+    def _pretty_print(root: ET.Element, ind: Optional[tuple] = None,
+                      xml_encoding: str = 'utf-16') -> str:
         # _INDENT is module-level (defined after this class) → resolve at call time.
-        return _fast_serialize(root, ind if ind is not None else _INDENT)
+        return _fast_serialize(root, ind if ind is not None else _INDENT, xml_encoding)
 
 
 # ── Fast XML serializer ──────────────────────────────────────────────────────
@@ -2856,16 +2869,20 @@ def _resolve_tag(tag: str) -> str:
     _TAG_CACHE[tag] = resolved
     return resolved
 
-def _fast_serialize(root: ET.Element, ind: tuple = _INDENT) -> str:
-    """Serialize an ElementTree to a UTF-16 XML string.
+def _fast_serialize(root: ET.Element, ind: tuple = _INDENT,
+                    xml_encoding: str = 'utf-16') -> str:
+    """Serialize an ElementTree to an XML string.
 
     ``ind`` is the indent table (``_INDENT`` pretty, ``_INDENT_NONE`` compact).
     Newlines are emitted regardless of ``ind``; only leading indentation varies.
+    ``xml_encoding`` sets only the ``<?xml … encoding=…?>`` declaration text (no
+    transcoding): ``'utf-8'`` for the ``str``-returning API, ``'utf-16'`` for the
+    ``.anx`` byte writer.
     """
     _init_ns_map()
     parts: list[str] = []
     from anxwritter import __version__, __repo_url__
-    parts.append('<?xml version=\'1.0\' encoding=\'utf-16\'?>\n')
+    parts.append(f"<?xml version='1.0' encoding='{xml_encoding}'?>\n")
     comment = f'Built with anxwritter {__version__}'
     if __repo_url__:
         comment += f' \u2014 {__repo_url__}'
