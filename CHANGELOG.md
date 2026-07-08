@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0-stability note:** versions `< 2.0.0` are not API-stable — breaking
 > changes ship in minor releases with notes here, as below.
 
+## [1.25.0] - 2026-07-08
+
+Make the `<?xml … encoding=…?>` declaration match the bytes each output form
+actually hands back — the string API declares `utf-8`, the `.anx` byte writer
+declares `utf-16`.
+
+### Changed
+
+- **`to_xml()` and `iter_xml()` now declare `encoding='utf-8'`** (was
+  `'utf-16'`). Both return a Python `str`, which carries no encoding of its own
+  until the caller encodes it; the declaration now matches what a `str` becomes
+  when written as text (utf-8), rather than advertising an encoding the string
+  isn't in. **Breaking for `to_xml().encode('utf-16')`**: that now produces
+  utf-16 bytes whose embedded declaration wrongly says utf-8. Callers who want
+  ANB-ready `.anx` bytes should use `to_anx()` (writes the file) or
+  `iter_anx_bytes()` (yields UTF-16 LE + BOM) — both keep the correct
+  `encoding='utf-16'` declaration. The `.anx` on-disk bytes are **unchanged**.
+- Consumers that string-rewrote the declaration from utf-16 to utf-8 on the
+  `to_xml()` output (e.g. an HTTP server returning XML as a utf-8 body) can now
+  drop that fix-up — the declaration is already utf-8.
+
+### Internal
+
+- The declaration string is threaded through the serializers via a new
+  `xml_encoding` parameter (declaration text only — it does not transcode):
+  `ANXChart._build_xml` / `_iter_xml`, `ANXBuilder.build` / `iter_build` /
+  `_iter_serialize` / `_pretty_print`, and `builder._fast_serialize`. String
+  entry points pass `'utf-8'`; the `.anx` byte paths pass `'utf-16'`.
+
 ## [1.24.2] - 2026-06-29
 
 Bug fix — reconcile validation error codes with the `ErrorType` enum — plus a
